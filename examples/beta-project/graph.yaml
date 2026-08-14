@@ -1,0 +1,89 @@
+apiVersion: dagrail.io/v1alpha1
+kind: Graph
+metadata:
+  name: beta-multi-harness-project
+  labels:
+    example: beta
+spec:
+  roles:
+    - id: architect
+      capabilities: [node.run]
+    - id: codex-worker
+      capabilities: [node.run]
+    - id: claude-worker
+      capabilities: [node.run]
+    - id: copilot-worker
+      capabilities: [node.run]
+    - id: reviewer
+      capabilities: [node.review]
+    - id: release
+      capabilities: [effect.apply]
+  nodes:
+    - id: architecture
+      kind: decision
+      role: architect
+      title: Freeze the implementation boundary
+      retryBudget: 2
+      outcomes:
+        - {id: approved, class: success}
+        - {id: revise, class: retryable}
+    - id: core
+      kind: task
+      role: codex-worker
+      title: Implement the control kernel slice
+      outcomes:
+        - {id: done, class: success}
+        - {id: failed, class: failure}
+    - id: cli
+      kind: task
+      role: claude-worker
+      title: Implement the CLI slice
+      outcomes:
+        - {id: done, class: success}
+        - {id: failed, class: failure}
+    - id: docs
+      kind: task
+      role: copilot-worker
+      title: Implement the documentation slice
+      outcomes:
+        - {id: done, class: success}
+        - {id: failed, class: failure}
+    - id: integrated
+      kind: join
+      title: Join parallel implementation slices
+      outcomes:
+        - {id: joined, class: success}
+    - id: review
+      kind: review
+      role: reviewer
+      title: Review the actual integrated artifact
+      retryBudget: 2
+      outcomes:
+        - {id: approve, class: success}
+        - {id: return, class: retryable}
+    - id: publish
+      kind: effect
+      role: release
+      title: Publish through an explicitly confirmed manual effect
+      inputs:
+        adapter: manual
+        request:
+          operation: publish-beta-candidate
+      outcomes:
+        - {id: published, class: success}
+        - {id: failed, class: failure}
+    - id: complete
+      kind: milestone
+      title: Beta project complete
+      outcomes:
+        - {id: complete, class: success}
+  edges:
+    - {id: architecture-core, from: architecture, to: core, when: {outcome: approved}}
+    - {id: architecture-cli, from: architecture, to: cli, when: {outcome: approved}}
+    - {id: architecture-docs, from: architecture, to: docs, when: {outcome: approved}}
+    - {id: core-integrated, from: core, to: integrated, when: {outcome: done}}
+    - {id: cli-integrated, from: cli, to: integrated, when: {outcome: done}}
+    - {id: docs-integrated, from: docs, to: integrated, when: {outcome: done}}
+    - {id: integrated-review, from: integrated, to: review, when: {outcome: joined}}
+    - {id: review-publish, from: review, to: publish, when: {outcome: approve}}
+    - {id: publish-complete, from: publish, to: complete, when: {outcome: published}}

@@ -2,6 +2,8 @@ package mcpserver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/CongBao/dagrail/internal/service"
 	"github.com/CongBao/dagrail/internal/version"
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/gowebpki/jcs"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -44,6 +47,23 @@ type ReconcileInput struct {
 	IdempotencyKey string         `json:"idempotency_key"`
 }
 type PreWaitInput struct{}
+
+type ToolContract struct {
+	Name              string `json:"name"`
+	InputSchemaSHA256 string `json:"inputSchemaSha256"`
+	ReadOnly          bool   `json:"readOnly"`
+}
+
+func ToolContracts() []ToolContract {
+	return []ToolContract{
+		toolContract("dag_context", schemaFor[ContextInput](), true),
+		toolContract("dag_inspect", schemaFor[InspectInput](), true),
+		toolContract("dag_apply", schemaFor[ApplyInput](), false),
+		toolContract("dag_graph_change", graphChangeSchema(), false),
+		toolContract("dag_reconcile", schemaFor[ReconcileInput](), false),
+		toolContract("dag_pre_wait", schemaFor[PreWaitInput](), true),
+	}
+}
 
 func Run(ctx context.Context, svc *service.Service) error {
 	return New(svc).Run(ctx, &mcp.StdioTransport{})
@@ -117,4 +137,17 @@ func graphChangeSchema() *jsonschema.Schema {
 	schema := schemaFor[GraphChangeInput]()
 	schema.Properties["mode"].Enum = []any{"preview", "apply"}
 	return schema
+}
+
+func toolContract(name string, schema *jsonschema.Schema, readOnly bool) ToolContract {
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		panic(err)
+	}
+	canonical, err := jcs.Transform(raw)
+	if err != nil {
+		panic(err)
+	}
+	digest := sha256.Sum256(append([]byte("dagrail-mcp-input-schema-v1\x00"), canonical...))
+	return ToolContract{Name: name, InputSchemaSHA256: "sha256:" + hex.EncodeToString(digest[:]), ReadOnly: readOnly}
 }

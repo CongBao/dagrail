@@ -107,6 +107,10 @@ func Init(root, name string) (*Service, error) {
 }
 
 func (s *Service) ImportGraph(path, idempotencyKey, actorRole string) (domain.CommandResult, error) {
+	return s.ImportGraphWithProvenance(path, idempotencyKey, actorRole, nil)
+}
+
+func (s *Service) ImportGraphWithProvenance(path, idempotencyKey, actorRole string, source any) (domain.CommandResult, error) {
 	if idempotencyKey == "" {
 		return domain.CommandResult{}, fmt.Errorf("idempotency key is required")
 	}
@@ -121,7 +125,19 @@ func (s *Service) ImportGraph(path, idempotencyKey, actorRole string) (domain.Co
 	if err != nil {
 		return domain.CommandResult{}, err
 	}
-	return s.importGraphDefinition(graph, idempotencyKey, actorRole, nil)
+	if source != nil {
+		raw, err := json.Marshal(source)
+		if err != nil {
+			return domain.CommandResult{}, err
+		}
+		if err := domain.ValidateAuthorityJSON(raw); err != nil {
+			return domain.CommandResult{}, fmt.Errorf("graph provenance: %w", err)
+		}
+		if err := domain.RejectSensitiveFields(raw); err != nil {
+			return domain.CommandResult{}, fmt.Errorf("graph provenance: %w", err)
+		}
+	}
+	return s.importGraphDefinition(graph, idempotencyKey, actorRole, source)
 }
 
 func (s *Service) importGraphDefinition(graph domain.GraphDefinition, idempotencyKey, actorRole string, source any) (domain.CommandResult, error) {
@@ -544,6 +560,8 @@ func graphRevision(graph domain.GraphDefinition) (string, error) {
 	sum := sha256.Sum256(append([]byte("dagrail-graph-v1\x00"), canonical...))
 	return hex.EncodeToString(sum[:]), nil
 }
+
+func GraphRevision(graph domain.GraphDefinition) (string, error) { return graphRevision(graph) }
 
 func providerFingerprint(graph *domain.GraphDefinition) string {
 	providers := []domain.ProviderRef{}

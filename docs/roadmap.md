@@ -69,3 +69,35 @@ DAGrail advances through evidence-backed milestones. A version is complete only 
   the project, its registry, or its live DAG;
 - an independent cold review of v0.11 implementation and qualification evidence before
   the milestone is declared complete.
+
+## v0.12.0 — Security and trust hardening
+
+- a versioned threat model, trust-boundary tests, permission audits, and dependency
+  vulnerability/license gates;
+- journal/export verification ergonomics, security-safe diagnostics, and hostile-input
+  limits across every public file and protocol boundary;
+- explicit local-user capability semantics without implying multi-tenant isolation.
+
+## v0.13.0 — Installation and host operability
+
+- release-artifact installation, upgrade, rollback, uninstall, and offline verification
+  across the six supported OS/architecture targets;
+- fresh-host Codex, Claude Code, and Copilot plugin conformance fixtures with capability
+  reports and actionable fallback diagnostics;
+- support bundles that disclose their exact, secret-free contents before export.
+
+## v0.14.0 — Lifecycle and disaster-recovery maturity
+
+- stable project portability, compatibility rehearsal, and journal recovery runbooks;
+- graph evolution and long-running lifecycle qualification across supported upgrade
+  paths, including rollback boundaries and unsupported-future fail-closed behavior;
+- operator-facing health and capacity evidence suitable for release qualification.
+
+## v0.15.0 — Pre-1.0 release candidate
+
+- public API/schema documentation, tutorials, examples, governance, support, and release
+  policy complete enough for an external adopter;
+- deterministic release-candidate gates for tests, race, fuzz smoke, static analysis,
+  licenses, vulnerabilities, reproducibility, SBOM, provenance, installers, and docs;
+- a documented evidence matrix separating implementation qualification from the real
+  production adoption evidence that remains intentionally outstanding before 1.0.

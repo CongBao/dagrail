@@ -2,6 +2,26 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.10.0 — 2026-08-14
+
+### Added
+
+- a machine-readable beta compatibility contract covering Graph, CLI, provider SDK,
+  journal, projection, MCP schema hashes, context budgets, and command inventory;
+- an observe-only assessment and isolated-shadow workflow that binds source authority
+  digests to a Graph Revision without writing to the source project;
+- a public multi-harness sample and executable end-to-end qualification covering
+  replacement sessions, manual effect ambiguity, idempotent retry, reconciliation,
+  deterministic Nodes, bounded context, restart, and projection loss;
+- public schemas, beta operations guidance, migration guidance, and compatibility ADRs.
+
+### Security
+
+- portable observation provenance excludes absolute workstation paths; private source
+  locators use owner-only shadow storage;
+- observation rejects symlink escape and bounds graph, authority-file, aggregate-byte,
+  and file-count inputs.
+
 ## 0.9.0 — 2026-08-14
 
 ### Added

@@ -53,6 +53,13 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Qualification matrix**: executable evidence covering commit-window crashes,
   writer contention, corruption, long journals, fuzz inputs, and bounded large-graph
   contexts without turning fault injection into a user-facing runtime capability.
+- **Compatibility contract**: machine-readable inventory of the exact public API
+  versions, journal window, MCP input hashes, context budgets, and commands exposed by
+  one DAGrail binary.
+- **Observation snapshot**: portable, digest-bound record of a caller-selected source
+  authority set and imported Graph Revision; it contains no absolute source locator.
+- **Shadow project**: isolated DAGrail state used to qualify an existing DAG without
+  writing to, controlling, or migrating the source project.
 
 ## Invariants
 
@@ -70,6 +77,11 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
     verification; rollback never trusts a mutable path without its receipt digest.
 11. Context truncation always returns an inspectable bounded summary; a large ready
     frontier cannot force a caller to exceed its declared byte budget.
+12. Observe-only work writes only to a separately resolved shadow root; portable
+    provenance contains relative paths and digests, while private local locators remain
+    outside the journal.
+13. Beta API drift is explicit: additive fields stay in-version, while incompatible
+    semantics select a new API version and migration path.
 
 ## Bounded contexts
 
@@ -81,6 +93,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Operational surface**: payload-free status/history, verified journal backup,
   runtime upgrade/rollback, optional portable-file signatures, and a local read-only
   UI derived from authority.
+- **Migration observation**: bounded source digests, private locators, isolated shadow
+  import, and repeatable drift verification without lifecycle control.
 
 ## Current non-goals
 

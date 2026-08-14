@@ -56,3 +56,10 @@ Detached Ed25519 signatures are optional and cover the SHA-256 digest of exact f
 bytes with a DAGrail domain separator. Private keys must be protected separately and
 public keys must be distributed through a trusted channel. Export signatures neither
 encrypt data nor identify individual journal actors.
+
+Observe-only migration opens caller-selected authority as regular files and rejects
+absolute or escaping entries, duplicate paths, symlink escape, and oversized inputs.
+The shadow root must resolve outside the source project. Portable journal provenance
+contains only relative paths, sizes, and digests; absolute source and graph locators are
+kept in an owner-only private shadow file. This prevents ordinary path disclosure, not
+metadata inference from user-selected relative names or file sizes.

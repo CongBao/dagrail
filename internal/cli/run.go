@@ -11,10 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CongBao/dagrail/internal/contract"
 	"github.com/CongBao/dagrail/internal/harness"
 	"github.com/CongBao/dagrail/internal/hook"
 	"github.com/CongBao/dagrail/internal/install"
 	"github.com/CongBao/dagrail/internal/mcpserver"
+	"github.com/CongBao/dagrail/internal/observe"
 	internalproviders "github.com/CongBao/dagrail/internal/providers"
 	"github.com/CongBao/dagrail/internal/service"
 	"github.com/CongBao/dagrail/internal/signing"
@@ -46,6 +48,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runAction(args[1:], stdout, stderr)
 	case "context":
 		return runContext(args[1:], stdout, stderr)
+	case "contract":
+		return writeJSON(stdout, contract.Current())
 	case "inspect":
 		return runInspect(args[1:], stdout, stderr)
 	case "pre-wait":
@@ -54,6 +58,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runReconcile(args[1:], stdout, stderr)
 	case "mcp":
 		return runMCP(args[1:], stderr)
+	case "observe":
+		return runObserve(args[1:], stdout, stderr)
 	case "ui":
 		return runUI(args[1:], stdout, stderr)
 	case "hook":
@@ -80,6 +86,55 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return writeJSON(stdout, map[string]string{"version": version.Version, "commit": version.Commit, "date": version.Date})
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
+	}
+}
+
+type repeatedFlag []string
+
+func (value *repeatedFlag) String() string { return strings.Join(*value, ",") }
+func (value *repeatedFlag) Set(item string) error {
+	if strings.TrimSpace(item) == "" {
+		return fmt.Errorf("flag value cannot be empty")
+	}
+	*value = append(*value, item)
+	return nil
+}
+
+func runObserve(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: dagrail observe <assess|create-shadow|verify-shadow>")
+	}
+	flags := flag.NewFlagSet("observe "+args[0], flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	sourceRoot := flags.String("source-root", "", "existing source project root (read-only)")
+	graphPath := flags.String("graph", "", "converted DAGrail Graph Definition")
+	shadowRoot := flags.String("shadow-root", "", "separate DAGrail shadow project root")
+	var authorities repeatedFlag
+	flags.Var(&authorities, "authority", "source-relative authority file (repeatable)")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	switch args[0] {
+	case "assess":
+		report, err := observe.Assess(*sourceRoot, *graphPath, authorities)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, report)
+	case "create-shadow":
+		report, err := observe.CreateShadow(*sourceRoot, *graphPath, *shadowRoot, authorities)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, report)
+	case "verify-shadow":
+		report, err := observe.VerifyShadow(*shadowRoot)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, report)
+	default:
+		return fmt.Errorf("unknown observe command %q", args[0])
 	}
 }
 

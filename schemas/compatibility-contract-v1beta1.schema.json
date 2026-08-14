@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/compatibility-contract-v1beta1.schema.json",
+  "title": "DAGrail Compatibility Contract v1beta1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "version", "stability", "graph", "cli", "providerSdk", "journal", "projectionSchema", "mcpTools", "contextBudgets", "topLevelCommands", "compatibilityPromises"],
+  "properties": {
+    "apiVersion": {"const": "dagrail.io/v1beta1"},
+    "kind": {"const": "CompatibilityContract"},
+    "version": {"type": "string", "minLength": 1},
+    "stability": {"const": "beta"},
+    "graph": {"$ref": "#/$defs/surface"},
+    "cli": {"$ref": "#/$defs/surface"},
+    "providerSdk": {"$ref": "#/$defs/surface"},
+    "journal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["readableSegmentSchemas", "writeSegmentSchema", "writeEventSchema"],
+      "properties": {
+        "readableSegmentSchemas": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 1}, "uniqueItems": true},
+        "writeSegmentSchema": {"type": "integer", "minimum": 1},
+        "writeEventSchema": {"type": "integer", "minimum": 1}
+      }
+    },
+    "projectionSchema": {"type": "integer", "minimum": 1},
+    "mcpTools": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "inputSchemaSha256", "readOnly"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "inputSchemaSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "readOnly": {"type": "boolean"}
+        }
+      }
+    },
+    "contextBudgets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["view", "bytes"],
+        "properties": {"view": {"type": "string", "minLength": 1}, "bytes": {"type": "integer", "minimum": 1}}
+      }
+    },
+    "topLevelCommands": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "compatibilityPromises": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  },
+  "$defs": {
+    "surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "stability"],
+      "properties": {"apiVersion": {"type": "string", "minLength": 1}, "stability": {"type": "string", "minLength": 1}}
+    }
+  }
+}

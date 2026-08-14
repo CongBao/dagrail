@@ -33,6 +33,7 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 - replaceable sessions through stable roles, leases, attempts, and checkpoints;
 - revision-bound allowed actions instead of hand-written lifecycle envelopes;
 - bounded role-specific context through CLI or six high-level MCP tools;
+- a machine-readable beta compatibility contract and digest-bound observe-only shadows;
 - immutable execution packages and deterministic evidence-reuse decisions;
 - bounded compile-in providers with schema and stability contracts;
 - recoverable external effects with explicit `unknown` and `reconcile` states;
@@ -44,7 +45,7 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 
 ## Status
 
-`v0.9.0` is a qualified technical alpha: local-first and single-user, with one native Go
+`v0.10.0` is a beta candidate: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
 stdio MCP. Its operational surface adds explainable dependency blockers, incident
 circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
@@ -55,7 +56,9 @@ separate; every missing or unprovable capability retains an explicit manual fall
 The Provider Runtime executes schema-bound extensions without giving them controller
 storage handles. Reproducible release inputs, per-target SPDX SBOMs and build
 provenance, digest-verified runtime upgrade/rollback, and optional detached signatures
-form the distribution-security baseline.
+form the distribution-security baseline. `dagrail contract` exposes the exact beta
+surfaces implemented by a binary, while `dagrail observe` can qualify an existing DAG
+through a separate, digest-bound shadow without modifying the source project.
 
 The reliability suite kills writer subprocesses on both sides of the journal rename
 commit point, contends independent writers, corrupts disposable and authoritative
@@ -79,6 +82,7 @@ dagrail init --root . --name example
 dagrail graph validate --file examples/development-dag.yaml
 dagrail graph import --root . --file examples/development-dag.yaml \
   --idempotency-key import-v1
+dagrail contract
 dagrail frontier --root . --format json
 dagrail role bind --root . --role developer --harness codex \
   --session SESSION_ID --idempotency-key bind-SESSION_ID
@@ -159,6 +163,12 @@ Create and verify a portable journal backup with `dagrail backup create` and
 See [`docs/operations.md`](docs/operations.md) for status, history, incident, backup, and
 read-only UI workflows.
 
+For a larger executable walkthrough, see
+[`examples/beta-project`](examples/beta-project) and the
+[`beta operations guide`](docs/beta-operations.md). Existing DAGs can be assessed with
+the strictly separate [`observe-only workflow`](docs/observe.md); it validates byte
+identity and Graph structure, not semantic migration.
+
 Portable exports can optionally be signed and verified over their exact bytes with
 `dagrail signature keygen|sign|verify`. Signatures are detached, never required for
 local runtime operation, and establish trust only when the public key is distributed
@@ -182,7 +192,8 @@ cross-region availability are outside the alpha boundary.
 
 See `CONTEXT.md` for the domain vocabulary, `docs/adr/` for architectural decisions,
 [`docs/roadmap.md`](docs/roadmap.md) for planned milestones, and
-[`CHANGELOG.md`](CHANGELOG.md) for released changes.
+[`CHANGELOG.md`](CHANGELOG.md) for released changes. Public beta guarantees and explicit
+non-guarantees are in [`COMPATIBILITY.md`](COMPATIBILITY.md).
 
 ## License
 

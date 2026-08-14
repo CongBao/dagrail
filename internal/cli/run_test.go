@@ -474,3 +474,51 @@ func TestSignatureCLIProducesPortableDetachedVerification(t *testing.T) {
 		t.Fatalf("verify: %v %s", err, output)
 	}
 }
+
+func TestContractCLIReportsTheClosedMCPBetaSurface(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if err := cli.Run([]string{"contract"}, strings.NewReader(""), &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"apiVersion":"dagrail.io/v1beta1"`) || !strings.Contains(out.String(), `"name":"dag_pre_wait"`) || !strings.Contains(out.String(), `"providerSdk":{"apiVersion":"dagrail.io/provider/v1alpha1"`) {
+		t.Fatalf("unexpected compatibility contract: %s", out.String())
+	}
+}
+
+func TestObserveCLIRecordsOnlyAnIsolatedShadow(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, "runtime-data"))
+	source := filepath.Join(root, "existing-project")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "requirements.md"), []byte("requirement\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	graphPath := filepath.Join(root, "converted.json")
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"shadow"},"spec":{"roles":[{"id":"dev","capabilities":["node.run"]}],"nodes":[{"id":"A","kind":"task","role":"dev","title":"A","outcomes":[{"id":"ok","class":"success"}]}],"edges":[]}}`
+	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shadow := filepath.Join(root, "shadow")
+	run := func(args ...string) (string, error) {
+		var out, errOut bytes.Buffer
+		err := cli.Run(args, strings.NewReader(""), &out, &errOut)
+		return out.String(), err
+	}
+	assessed, err := run("observe", "assess", "--source-root", source, "--graph", graphPath, "--authority", "requirements.md")
+	if err != nil || !strings.Contains(assessed, `"kind":"ObservationSnapshot"`) {
+		t.Fatalf("assess: %v %s", err, assessed)
+	}
+	created, err := run("observe", "create-shadow", "--source-root", source, "--graph", graphPath, "--shadow-root", shadow, "--authority", "requirements.md")
+	if err != nil || !strings.Contains(created, `"status":"created"`) {
+		t.Fatalf("create shadow: %v %s", err, created)
+	}
+	verified, err := run("observe", "verify-shadow", "--shadow-root", shadow)
+	if err != nil || !strings.Contains(verified, `"valid":true`) {
+		t.Fatalf("verify shadow: %v %s", err, verified)
+	}
+	if _, err := os.Stat(filepath.Join(source, ".dagrail")); !os.IsNotExist(err) {
+		t.Fatalf("observe CLI wrote into source: %v", err)
+	}
+}

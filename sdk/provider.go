@@ -10,6 +10,10 @@ import (
 	"github.com/gowebpki/jcs"
 )
 
+// APIVersion identifies the compile-in provider interface family. Until DAGrail 1.0,
+// compatibility guarantees are scoped by COMPATIBILITY.md.
+const APIVersion = "dagrail.io/provider/v1alpha1"
+
 type Stability string
 
 const (
