@@ -9,7 +9,8 @@ All notable changes to DAGrail are documented here. The project follows Semantic
 - backward-compatible mixed-version journal reading;
 - explicit event schema versions and deterministic in-memory upcasting;
 - journal compatibility reporting;
-- SQLite projection schema migrations and segment-schema provenance;
+- serialized SQLite projection schema migrations, transient-lock safety, and
+  segment-schema provenance;
 - immutable compatibility fixtures and fail-closed future-version tests.
 
 ## 0.1.0 — 2026-08-14

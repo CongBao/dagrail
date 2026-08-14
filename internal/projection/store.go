@@ -8,11 +8,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/CongBao/dagrail/internal/domain"
 	"github.com/CongBao/dagrail/internal/journal"
-	_ "modernc.org/sqlite"
+	"github.com/gofrs/flock"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 type Store struct{ path string }
@@ -21,14 +24,26 @@ var ErrFutureSchema = errors.New("projection schema was created by a newer DAGra
 
 const CurrentSchemaVersion = 2
 
+var projectionOpenLocks sync.Map
+
 func Open(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, err
 	}
+	lockPath := filepath.Join(dataDir, "projection.lock")
+	processLock, _ := projectionOpenLocks.LoadOrStore(lockPath, &sync.Mutex{})
+	processLock.(*sync.Mutex).Lock()
+	defer processLock.(*sync.Mutex).Unlock()
+	fileLock := flock.New(lockPath)
+	if err := fileLock.Lock(); err != nil {
+		return nil, err
+	}
+	defer func() { _ = fileLock.Unlock() }()
+
 	store := &Store{path: filepath.Join(dataDir, "projection.sqlite")}
 	if err := store.initialize(); err == nil {
 		return store, nil
-	} else if errors.Is(err, ErrFutureSchema) {
+	} else if errors.Is(err, ErrFutureSchema) || isTransientSQLiteError(err) {
 		return nil, err
 	}
 	backup := store.path + ".corrupt-" + time.Now().UTC().Format("20060102T150405.000000000Z")
@@ -43,23 +58,32 @@ func Open(dataDir string) (*Store, error) {
 	return store, nil
 }
 
+func isTransientSQLiteError(err error) bool {
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	primaryCode := sqliteErr.Code() & 0xff
+	return primaryCode == sqlite3.SQLITE_BUSY || primaryCode == sqlite3.SQLITE_LOCKED
+}
+
 func (s *Store) initialize() error {
 	db, err := sql.Open("sqlite", s.path)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
-		return err
-	}
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		return err
-	}
 	connection, err := db.Conn(context.Background())
 	if err != nil {
 		return err
 	}
 	defer connection.Close()
+	if _, err := connection.ExecContext(context.Background(), "PRAGMA busy_timeout=5000"); err != nil {
+		return err
+	}
+	if _, err := connection.ExecContext(context.Background(), "PRAGMA journal_mode=WAL"); err != nil {
+		return err
+	}
 	if _, err := connection.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
 		return err
 	}
