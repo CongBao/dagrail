@@ -54,6 +54,13 @@ func TestUserCanInitializeImportGraphAndReadFrontier(t *testing.T) {
 	if !strings.Contains(out, `"ready":["A"]`) {
 		t.Fatalf("expected only A ready, got %s", out)
 	}
+	compatibility, err := run("journal", "compatibility", "--root", root)
+	if err != nil {
+		t.Fatalf("journal compatibility: %v", err)
+	}
+	if !strings.Contains(compatibility, `"currentWriteSegmentSchema":2`) || !strings.Contains(compatibility, `"projectionSchemaVersion":2`) {
+		t.Fatalf("compatibility report lacks current schemas: %s", compatibility)
+	}
 }
 
 func TestWorkerCanBindStartCheckpointFinishAndUnlockDependentNode(t *testing.T) {

@@ -185,7 +185,11 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 	}
 	state := domain.NewState(s.Project.Config.ProjectID)
 	for _, segment := range segments {
-		for _, event := range segment.Events {
+		for _, storedEvent := range segment.Events {
+			event, err := journal.UpcastEvent(segment.SchemaVersion, storedEvent)
+			if err != nil {
+				return domain.State{}, nil, fmt.Errorf("upcast journal event at sequence %d: %w", segment.Sequence, err)
+			}
 			switch event.Type {
 			case "graph.imported":
 				var payload struct {

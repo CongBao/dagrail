@@ -1,6 +1,7 @@
 package projection
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,8 @@ import (
 type Store struct{ path string }
 
 var ErrFutureSchema = errors.New("projection schema was created by a newer DAGrail version")
+
+const CurrentSchemaVersion = 2
 
 func Open(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
@@ -49,21 +52,49 @@ func (s *Store) initialize() error {
 	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
 		return err
 	}
-	var schemaVersion int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&schemaVersion); err != nil {
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		return err
 	}
-	if schemaVersion > 1 {
+	connection, err := db.Conn(context.Background())
+	if err != nil {
+		return err
+	}
+	defer connection.Close()
+	if _, err := connection.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
+		}
+	}()
+	var schemaVersion int
+	if err := connection.QueryRowContext(context.Background(), "PRAGMA user_version").Scan(&schemaVersion); err != nil {
+		return err
+	}
+	if schemaVersion > CurrentSchemaVersion {
 		return fmt.Errorf("%w: version %d", ErrFutureSchema, schemaVersion)
 	}
-	if _, err := db.Exec(schema); err != nil {
-		return fmt.Errorf("initialize projection: %w", err)
+	if schemaVersion == 0 {
+		if _, err := connection.ExecContext(context.Background(), schemaV1); err != nil {
+			return fmt.Errorf("initialize projection schema v1: %w", err)
+		}
+		schemaVersion = 1
 	}
+	if schemaVersion == 1 {
+		if _, err := connection.ExecContext(context.Background(), migrateV1ToV2); err != nil {
+			return fmt.Errorf("migrate projection schema v1 to v2: %w", err)
+		}
+	}
+	if _, err := connection.ExecContext(context.Background(), "COMMIT"); err != nil {
+		return fmt.Errorf("commit projection schema migration: %w", err)
+	}
+	committed = true
 	return nil
 }
 
-const schema = `
-PRAGMA journal_mode=WAL;
+const schemaV1 = `
 CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS applied_segments (sequence INTEGER PRIMARY KEY, hash TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS graph_revisions (revision TEXT PRIMARY KEY, graph_json BLOB NOT NULL, sequence INTEGER NOT NULL);
@@ -80,6 +111,24 @@ CREATE TABLE IF NOT EXISTS resources (resource_id TEXT PRIMARY KEY, lease_json B
 CREATE TABLE IF NOT EXISTS evidence_index (digest TEXT PRIMARY KEY, metadata_json BLOB NOT NULL);
 PRAGMA user_version=1;
 `
+
+const migrateV1ToV2 = `
+ALTER TABLE applied_segments ADD COLUMN segment_schema INTEGER NOT NULL DEFAULT 1;
+PRAGMA user_version=2;
+`
+
+func (s *Store) SchemaVersion() (int, error) {
+	db, err := sql.Open("sqlite", s.path)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	var version int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return 0, err
+	}
+	return version, nil
+}
 
 func (s *Store) Sync(state domain.State, segments []journal.Segment) error {
 	db, err := sql.Open("sqlite", s.path)
@@ -180,7 +229,7 @@ func (s *Store) Sync(state domain.State, segments []journal.Segment) error {
 		return err
 	}
 	for _, segment := range segments {
-		if _, err := tx.Exec("INSERT INTO applied_segments(sequence,hash) VALUES(?,?)", segment.Sequence, segment.SegmentHash); err != nil {
+		if _, err := tx.Exec("INSERT INTO applied_segments(sequence,hash,segment_schema) VALUES(?,?,?)", segment.Sequence, segment.SegmentHash, segment.SchemaVersion); err != nil {
 			return err
 		}
 	}

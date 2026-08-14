@@ -21,6 +21,12 @@ import (
 
 const hashDomain = "dagrail-journal-v1\x00"
 
+const (
+	LegacySegmentSchemaVersion  = 1
+	CurrentSegmentSchemaVersion = 2
+	CurrentEventSchemaVersion   = 1
+)
+
 type Command struct {
 	ID             string `json:"id"`
 	Kind           string `json:"kind"`
@@ -29,8 +35,22 @@ type Command struct {
 }
 
 type Event struct {
-	Type    string          `json:"type"`
-	Payload json.RawMessage `json:"payload"`
+	Type          string          `json:"type"`
+	SchemaVersion int             `json:"schemaVersion,omitempty"`
+	Payload       json.RawMessage `json:"payload"`
+}
+
+type CompatibilityReport struct {
+	Compatible              bool        `json:"compatible"`
+	SegmentCount            int         `json:"segmentCount"`
+	EventCount              int         `json:"eventCount"`
+	LegacySegmentCount      int         `json:"legacySegmentCount"`
+	UpcastedEventCount      int         `json:"upcastedEventCount"`
+	ReadableSegmentSchemas  []int       `json:"readableSegmentSchemas"`
+	CurrentWriteSchema      int         `json:"currentWriteSegmentSchema"`
+	CurrentWriteEventSchema int         `json:"currentWriteEventSchema"`
+	SegmentSchemas          map[int]int `json:"segmentSchemas"`
+	EventSchemas            map[int]int `json:"eventSchemas"`
 }
 
 type Segment struct {
@@ -62,6 +82,15 @@ type Store struct {
 }
 
 var processLocks sync.Map
+
+type eventUpcaster func(Event) (Event, error)
+
+var eventUpcasters = map[int]eventUpcaster{
+	0: func(stored Event) (Event, error) {
+		stored.SchemaVersion = 1
+		return stored, nil
+	},
+}
 
 func Open(dataDir, projectID string) (*Store, error) {
 	dir := filepath.Join(dataDir, "journal")
@@ -111,6 +140,10 @@ func (s *Store) AppendOnce(command Command, events []Event, now time.Time, expec
 				return nil
 			}
 		}
+		preparedEvents, err := prepareEvents(events)
+		if err != nil {
+			return err
+		}
 		previous := ""
 		sequence := uint64(1)
 		if len(segments) > 0 {
@@ -120,7 +153,7 @@ func (s *Store) AppendOnce(command Command, events []Event, now time.Time, expec
 		if expectedHead != nil && previous != *expectedHead {
 			return fmt.Errorf("journal head changed; refresh context before retrying")
 		}
-		unsigned := unsignedSegment{SchemaVersion: 1, Sequence: sequence, ProjectID: s.projectID, PreviousHash: previous, Command: command, Events: events, CommittedAt: now.UTC().Format(time.RFC3339Nano)}
+		unsigned := unsignedSegment{SchemaVersion: CurrentSegmentSchemaVersion, Sequence: sequence, ProjectID: s.projectID, PreviousHash: previous, Command: command, Events: preparedEvents, CommittedAt: now.UTC().Format(time.RFC3339Nano)}
 		hash, err := computeHash(unsigned)
 		if err != nil {
 			return err
@@ -175,6 +208,40 @@ func (s *Store) ReadAll() ([]Segment, error) {
 	return result, err
 }
 
+func (s *Store) Compatibility() (CompatibilityReport, error) {
+	segments, err := s.ReadAll()
+	if err != nil {
+		return CompatibilityReport{}, err
+	}
+	report := CompatibilityReport{
+		Compatible:              true,
+		SegmentCount:            len(segments),
+		ReadableSegmentSchemas:  []int{LegacySegmentSchemaVersion, CurrentSegmentSchemaVersion},
+		CurrentWriteSchema:      CurrentSegmentSchemaVersion,
+		CurrentWriteEventSchema: CurrentEventSchemaVersion,
+		SegmentSchemas:          map[int]int{},
+		EventSchemas:            map[int]int{},
+	}
+	for _, segment := range segments {
+		report.SegmentSchemas[segment.SchemaVersion]++
+		if segment.SchemaVersion == LegacySegmentSchemaVersion {
+			report.LegacySegmentCount++
+		}
+		for _, stored := range segment.Events {
+			normalized, err := UpcastEvent(segment.SchemaVersion, stored)
+			if err != nil {
+				return CompatibilityReport{}, err
+			}
+			report.EventCount++
+			report.EventSchemas[normalized.SchemaVersion]++
+			if stored.SchemaVersion != normalized.SchemaVersion {
+				report.UpcastedEventCount++
+			}
+		}
+	}
+	return report, nil
+}
+
 func (s *Store) readAllUnlocked() ([]Segment, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
@@ -207,7 +274,7 @@ func (s *Store) readAllUnlocked() ([]Segment, error) {
 		if err != nil || !bytes.Equal(data, canonical) {
 			return nil, fmt.Errorf("journal segment %s is not canonical RFC 8785 JSON", name)
 		}
-		if segment.Sequence != uint64(index+1) || segment.ProjectID != s.projectID || segment.PreviousHash != previous || segment.SchemaVersion != 1 {
+		if segment.Sequence != uint64(index+1) || segment.ProjectID != s.projectID || segment.PreviousHash != previous {
 			return nil, fmt.Errorf("journal chain mismatch at %s", name)
 		}
 		unsigned := unsignedSegment{SchemaVersion: segment.SchemaVersion, Sequence: segment.Sequence, ProjectID: segment.ProjectID, PreviousHash: segment.PreviousHash, Command: segment.Command, Events: segment.Events, CommittedAt: segment.CommittedAt}
@@ -218,10 +285,96 @@ func (s *Store) readAllUnlocked() ([]Segment, error) {
 		if hash != segment.SegmentHash || name != fmt.Sprintf("%012d-%s.json", segment.Sequence, hash) {
 			return nil, fmt.Errorf("journal hash mismatch at %s", name)
 		}
+		if err := validateStoredEvents(segment.SchemaVersion, segment.Events); err != nil {
+			return nil, fmt.Errorf("journal compatibility error at %s: %w", name, err)
+		}
 		previous = hash
 		segments = append(segments, segment)
 	}
 	return segments, nil
+}
+
+func prepareEvents(events []Event) ([]Event, error) {
+	if len(events) == 0 {
+		return nil, errors.New("journal segment must contain at least one event")
+	}
+	prepared := make([]Event, len(events))
+	for index, event := range events {
+		if event.SchemaVersion == 0 {
+			event.SchemaVersion = CurrentEventSchemaVersion
+		}
+		if event.SchemaVersion != CurrentEventSchemaVersion {
+			return nil, fmt.Errorf("event %d uses unsupported schema version %d", index, event.SchemaVersion)
+		}
+		if err := validateEvent(event); err != nil {
+			return nil, fmt.Errorf("event %d: %w", index, err)
+		}
+		event.Payload = append(json.RawMessage(nil), event.Payload...)
+		prepared[index] = event
+	}
+	return prepared, nil
+}
+
+func validateStoredEvents(segmentSchema int, events []Event) error {
+	if segmentSchema < LegacySegmentSchemaVersion || segmentSchema > CurrentSegmentSchemaVersion {
+		return fmt.Errorf("unsupported segment schema version %d", segmentSchema)
+	}
+	if len(events) == 0 {
+		return errors.New("journal segment must contain at least one event")
+	}
+	for index, event := range events {
+		switch segmentSchema {
+		case LegacySegmentSchemaVersion:
+			if event.SchemaVersion != 0 {
+				return fmt.Errorf("legacy event %d unexpectedly declares schema version %d", index, event.SchemaVersion)
+			}
+		case CurrentSegmentSchemaVersion:
+			if event.SchemaVersion != CurrentEventSchemaVersion {
+				return fmt.Errorf("event %d uses unsupported schema version %d", index, event.SchemaVersion)
+			}
+		}
+		if err := validateEvent(event); err != nil {
+			return fmt.Errorf("event %d: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func validateEvent(event Event) error {
+	if strings.TrimSpace(event.Type) == "" {
+		return errors.New("event type is required")
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(event.Payload, &payload); err != nil || payload == nil {
+		return errors.New("event payload must be a JSON object")
+	}
+	return nil
+}
+
+// UpcastEvent normalizes a verified stored event for the reducer. It never
+// mutates journal bytes and deliberately preserves the payload tree unchanged.
+func UpcastEvent(segmentSchema int, stored Event) (Event, error) {
+	if err := validateStoredEvents(segmentSchema, []Event{stored}); err != nil {
+		return Event{}, err
+	}
+	normalized := stored
+	for normalized.SchemaVersion < CurrentEventSchemaVersion {
+		upcast, ok := eventUpcasters[normalized.SchemaVersion]
+		if !ok {
+			return Event{}, fmt.Errorf("no upcaster from event schema version %d", normalized.SchemaVersion)
+		}
+		previousVersion := normalized.SchemaVersion
+		var err error
+		normalized, err = upcast(normalized)
+		if err != nil {
+			return Event{}, fmt.Errorf("upcast event schema version %d: %w", previousVersion, err)
+		}
+		if normalized.SchemaVersion != previousVersion+1 {
+			return Event{}, fmt.Errorf("upcaster from event schema version %d returned version %d", previousVersion, normalized.SchemaVersion)
+		}
+	}
+	normalized.Payload = append(json.RawMessage(nil), stored.Payload...)
+	return normalized, nil
 }
 
 func computeHash(value unsignedSegment) (string, error) {

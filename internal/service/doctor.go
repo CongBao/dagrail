@@ -42,7 +42,12 @@ func (s *Service) Doctor() DoctorReport {
 	if err := s.Projection.Integrity(); err != nil {
 		add("sqlite-projection", "fail", err.Error())
 	} else {
-		add("sqlite-projection", "pass", "integrity_check=ok")
+		version, versionErr := s.Projection.SchemaVersion()
+		if versionErr != nil {
+			add("sqlite-projection", "fail", versionErr.Error())
+		} else {
+			add("sqlite-projection", "pass", fmt.Sprintf("integrity_check=ok schema=%d", version))
+		}
 	}
 	if executable, err := os.Executable(); err != nil || !filepath.IsAbs(executable) {
 		add("runtime-path", "fail", "runtime path is not an absolute executable path")

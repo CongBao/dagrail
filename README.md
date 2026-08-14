@@ -32,8 +32,10 @@ adapters remain the executors.
 
 ## Status
 
-`v0.1.0-alpha` is local-first and single-user. It uses one native Go executable,
-an immutable journal as authority, rebuildable SQLite projections, and stdio MCP.
+`v0.2.0` is a technical alpha: local-first and single-user, with one native Go
+executable, an immutable journal as authority, rebuildable SQLite projections, and
+stdio MCP. It can verify and replay mixed v1/v2 journals without rewriting legacy
+segments, and migrates disposable projections independently.
 
 ## Build
 
@@ -93,6 +95,7 @@ Useful recovery commands:
 
 ```bash
 dagrail journal verify
+dagrail journal compatibility
 dagrail journal export --output journal.ndjson
 dagrail journal replay
 dagrail projection rebuild
@@ -102,12 +105,15 @@ dagrail doctor
 ## Extensions and security boundary
 
 The public `sdk` package defines compile-in providers. Providers return decisions,
-proposals, or receipts and do not receive journal or SQLite handles. v0.1 does not load
+proposals, or receipts and do not receive journal or SQLite handles. DAGrail does not load
 `.so`, WASM, Rego, or CEL modules.
 
-v0.1 separates cooperative roles but does not claim malicious-user isolation. Journal hashing is tamper-evident, not signed. Remote stores, encryption, identity signatures, multi-tenancy, and cross-region availability are outside the alpha boundary.
+DAGrail separates cooperative roles but does not claim malicious-user isolation. Journal hashing is tamper-evident, not signed. Remote stores, encryption, identity signatures, multi-tenancy, and cross-region availability are outside the alpha boundary.
 
-See `CONTEXT.md` for the domain vocabulary and `docs/adr/` for architectural decisions.
+See `CONTEXT.md` for the domain vocabulary, `docs/adr/` for architectural decisions,
+[`docs/roadmap.md`](docs/roadmap.md) for planned milestones, and
+[`CHANGELOG.md`](CHANGELOG.md) for released changes. A local, browser-opened,
+strictly read-only DAG UI is planned for the operational-control milestone.
 
 ## License
 

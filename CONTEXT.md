@@ -18,6 +18,10 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Checkpoint**: a bounded recovery summary and digest-only evidence references owned by an Attempt.
 - **Allowed action**: a signed opaque ref binding project, journal head, graph revision, Role lease, Node, Attempt, provider schemas, and expiry.
 - **Journal segment**: the atomic command commit containing one or more immutable events.
+- **Stored event**: the exact versioned event bytes committed inside a Journal segment and covered by its hash.
+- **Normalized event**: the current in-memory representation produced from a verified Stored event.
+- **Upcast**: a deterministic, side-effect-free conversion from a verified older event version to the current Normalized event; it never rewrites history.
+- **Compatibility window**: the closed set of historical segment and event versions a DAGrail release promises to read.
 - **Projection**: disposable SQLite or human-facing data rebuilt from journal segments.
 - **Effect**: an external side effect managed as a saga, never represented as an ACID transaction.
 - **Receipt**: typed observation of transport, session creation, visible delivery, acceptance, and completion. These states are not interchangeable.
@@ -46,6 +50,6 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Harness integration**: capability probe, plugin manifest, hooks, launch/resume envelope.
 - **Read model**: SQLite projection, context envelope, cursor delta, inspect ref, dashboard-ready queries.
 
-## Non-goals for v0.1
+## Current non-goals
 
 Requirement management, autonomous scheduling, container orchestration, background polling, remote multi-tenant service, hostile-user authorization, signed identity, and geographically distributed availability.

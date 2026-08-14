@@ -13,4 +13,8 @@ CGO_ENABLED=0 go build -trimpath ./cmd/dagrail
 
 Changes to graph, journal, provider, MCP, or receipt contracts require a compatibility test and an ADR when they are difficult to reverse. Never add a second authority beside the journal. New provider implementations must be deterministic or explicitly return an external receipt; they cannot receive storage handles.
 
+Journal readers must verify the exact stored bytes and hash chain before applying an
+in-memory upcast. Historical segments and fixtures are immutable. Projection schema
+changes require a forward migration test and a rebuild-from-journal test.
+
 Keep control-plane transactions short. Add focused tests first, converge locally, then run the full race and cross-build gates once.

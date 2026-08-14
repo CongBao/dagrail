@@ -172,7 +172,7 @@ func runMCP(args []string, stderr io.Writer) error {
 		return err
 	}
 	if !*stdio {
-		return fmt.Errorf("v0.1 supports only --stdio")
+		return fmt.Errorf("this release supports only --stdio")
 	}
 	s, err := service.Open(*root)
 	if err != nil {
@@ -492,7 +492,7 @@ func runFrontier(args []string, stdout, stderr io.Writer) error {
 
 func runJournal(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: dagrail journal <verify|export|replay>")
+		return fmt.Errorf("usage: dagrail journal <verify|compatibility|export|replay>")
 	}
 	flags := flag.NewFlagSet("journal "+args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -511,7 +511,17 @@ func runJournal(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(stdout, map[string]any{"valid": true, "segments": len(segments)})
+		compatibility, err := s.Compatibility()
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, map[string]any{"valid": true, "segments": len(segments), "compatibility": compatibility})
+	case "compatibility":
+		compatibility, err := s.Compatibility()
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, compatibility)
 	case "export":
 		data, err := s.ExportJournal()
 		if err != nil {
