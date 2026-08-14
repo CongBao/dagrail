@@ -165,7 +165,12 @@ func prospectiveTree(repository, base, candidate, strategy string) (string, erro
 		return "", err
 	}
 	defer os.RemoveAll(hooksDir)
-	if _, err := gitRun(temporary, "-c", "core.hooksPath="+hooksDir, "merge", "--no-commit", "--no-ff", candidate); err != nil {
+	if _, err := gitRun(temporary,
+		"-c", "core.hooksPath="+hooksDir,
+		"-c", "user.name=DAGrail",
+		"-c", "user.email=dagrail@invalid",
+		"merge", "--no-commit", "--no-ff", candidate,
+	); err != nil {
 		return "", fmt.Errorf("prospective merge has conflicts: %w", err)
 	}
 	tree, err := gitOne(temporary, "write-tree")

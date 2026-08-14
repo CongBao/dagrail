@@ -15,6 +15,8 @@ import (
 func TestGitMergeEffectCreatesOneAuditableMergeAndReconcilesWithoutRepeating(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("DAGRAIL_HOME", t.TempDir())
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "missing-global-config"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	git(t, root, "init", "-b", "main")
 	git(t, root, "config", "user.name", "Test")
 	git(t, root, "config", "user.email", "test@example.invalid")

@@ -18,7 +18,11 @@ func TestHookInjectsOnlyBoundedStatePointerAndNeverEchoesPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := "SECRET-PROMPT-CONTENT I think we are done and should wait"
-	output, active, err := hook.Run("codex", "session-start", root, strings.NewReader(`{"cwd":"`+root+`"}`))
+	sessionPayload, err := json.Marshal(map[string]string{"cwd": root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, active, err := hook.Run("codex", "session-start", root, bytes.NewReader(sessionPayload))
 	if err != nil || !active {
 		t.Fatalf("session hook: active=%v err=%v", active, err)
 	}
