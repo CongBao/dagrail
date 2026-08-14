@@ -39,10 +39,12 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 - an immutable RFC 8785 journal with disposable SQLite projections;
 - explainable readiness, owned incidents, bounded history, verified backups, and a
   browser-opened read-only DAG UI.
+- executable crash/ambiguity, cross-process contention, corruption, fuzz, and
+  large-graph qualification suites.
 
 ## Status
 
-`v0.8.0` is a technical alpha: local-first and single-user, with one native Go
+`v0.9.0` is a qualified technical alpha: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
 stdio MCP. Its operational surface adds explainable dependency blockers, incident
 circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
@@ -54,6 +56,12 @@ The Provider Runtime executes schema-bound extensions without giving them contro
 storage handles. Reproducible release inputs, per-target SPDX SBOMs and build
 provenance, digest-verified runtime upgrade/rollback, and optional detached signatures
 form the distribution-security baseline.
+
+The reliability suite kills writer subprocesses on both sides of the journal rename
+commit point, contends independent writers, corrupts disposable and authoritative
+stores, fuzzes graph/patch/journal/receipt inputs, and holds context output to fixed
+budgets on a 2,048-node frontier. See
+[`docs/qualification.md`](docs/qualification.md) for the executable matrix and limits.
 
 ## Build
 

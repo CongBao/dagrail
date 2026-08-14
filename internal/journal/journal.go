@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -79,6 +80,7 @@ type Store struct {
 	projectID string
 	lock      *flock.Flock
 	mu        *sync.Mutex
+	fault     func(string) error
 }
 
 var processLocks sync.Map
@@ -110,6 +112,13 @@ func (s *Store) WithLock(fn func() error) error {
 	}
 	defer func() { _ = s.lock.Unlock() }()
 	return fn()
+}
+
+func (s *Store) injectFault(point string) error {
+	if s.fault == nil {
+		return nil
+	}
+	return s.fault(point)
 }
 
 func (s *Store) Append(command Command, events []Event, now time.Time) (Segment, error) {
@@ -168,6 +177,9 @@ func (s *Store) AppendOnce(command Command, events []Event, now time.Time, expec
 			return err
 		}
 		name := fmt.Sprintf("%012d-%s.json", sequence, hash)
+		if err := s.injectFault("before-temp-create"); err != nil {
+			return err
+		}
 		tmp, err := os.CreateTemp(s.dir, ".segment-*.tmp")
 		if err != nil {
 			return err
@@ -178,7 +190,15 @@ func (s *Store) AppendOnce(command Command, events []Event, now time.Time, expec
 			_ = tmp.Close()
 			return err
 		}
+		if err := s.injectFault("before-temp-write"); err != nil {
+			_ = tmp.Close()
+			return err
+		}
 		if _, err := tmp.Write(canonical); err != nil {
+			_ = tmp.Close()
+			return err
+		}
+		if err := s.injectFault("before-temp-sync"); err != nil {
 			_ = tmp.Close()
 			return err
 		}
@@ -189,13 +209,21 @@ func (s *Store) AppendOnce(command Command, events []Event, now time.Time, expec
 		if err := tmp.Close(); err != nil {
 			return err
 		}
+		if err := s.injectFault("before-rename"); err != nil {
+			return err
+		}
 		if err := os.Rename(tmpName, filepath.Join(s.dir, name)); err != nil {
 			return err
 		}
 		created = true
-		if dir, err := os.Open(s.dir); err == nil {
-			_ = dir.Sync()
-			_ = dir.Close()
+		if err := s.injectFault("after-rename"); err != nil {
+			return err
+		}
+		if err := s.injectFault("before-directory-sync"); err != nil {
+			return err
+		}
+		if err := syncDirectory(s.dir); err != nil {
+			return err
 		}
 		return nil
 	})
@@ -286,9 +314,8 @@ func (s *Store) RestoreSegments(segments []Segment) error {
 				_ = os.Remove(tmpName)
 				return err
 			}
-			if dir, err := os.Open(s.dir); err == nil {
-				_ = dir.Sync()
-				_ = dir.Close()
+			if err := syncDirectory(s.dir); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -485,4 +512,15 @@ func computeHash(value unsignedSegment) (string, error) {
 	_, _ = h.Write(previous)
 	_, _ = h.Write(canonical)
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func syncDirectory(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	return errors.Join(dir.Sync(), dir.Close())
 }

@@ -2,6 +2,29 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.9.0 — 2026-08-14
+
+### Added
+
+- deterministic journal fault points and subprocess crash tests on both sides of the
+  atomic rename commit boundary;
+- cross-process single-writer/idempotency contention, journal corruption, disposable
+  projection recovery, and 256-segment longevity matrices;
+- bounded fuzz targets for Graph Definitions, GraphPatch inputs, journal segments, and
+  native harness receipts, with per-push GitHub smoke jobs;
+- a 2,048-node scale fixture covering validation, projection materialization, full
+  frontier inspection, and all role-specific context budgets;
+- an executable reliability qualification guide and architecture decision record.
+
+### Changed
+
+- oversized ready frontiers now degrade to a count, a deterministic bounded prefix,
+  and a valid `frontier` inspect ref instead of failing the context request;
+- graph and patch files are restricted to regular inputs of at most 8 MiB, and closed
+  predicate AST nesting is capped at 64 levels;
+- POSIX journal directory synchronization errors are no longer silently discarded
+  after segment rename.
+
 ## 0.8.0 — 2026-08-14
 
 ### Added

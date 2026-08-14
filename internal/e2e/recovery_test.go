@@ -83,6 +83,48 @@ func TestJournalIsAuthoritativeIdempotentAndTamperEvident(t *testing.T) {
 	}
 }
 
+func TestCorruptSQLiteProjectionIsQuarantinedAndRebuiltFromJournal(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := service.Init(root, "projection recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graphPath := filepath.Join(root, "graph.json")
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"projection recovery"},"spec":{"roles":[{"id":"dev","capabilities":["node.run"]}],"nodes":[{"id":"A","kind":"task","role":"dev","title":"A","outcomes":[{"id":"ok","class":"success"}]}],"edges":[]}}`
+	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "import", "dev"); err != nil {
+		t.Fatal(err)
+	}
+	projectionPath := filepath.Join(svc.Project.DataDir, "projection.sqlite")
+	if err := os.WriteFile(projectionPath, []byte("not a sqlite database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := service.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := recovered.State()
+	if err != nil || state.GraphRevision == "" || len(state.Nodes) != 1 || state.Nodes["A"].Status != "planned" {
+		t.Fatalf("projection recovery lost journal state: %#v %v", state, err)
+	}
+	entries, err := os.ReadDir(svc.Project.DataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quarantined := false
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "projection.sqlite.corrupt-") {
+			quarantined = true
+		}
+	}
+	if !quarantined {
+		t.Fatal("corrupt SQLite projection was not preserved for diagnosis")
+	}
+}
+
 func TestDeterministicJoinSettlesWithoutExecutor(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))

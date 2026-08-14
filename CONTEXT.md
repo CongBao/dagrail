@@ -50,6 +50,9 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
   one digest-addressed rollback executable to exact versions and SHA-256 digests.
 - **Detached signature**: optional Ed25519 envelope over an exact portable file digest;
   it is independent of journal hashing and does not establish actor identity.
+- **Qualification matrix**: executable evidence covering commit-window crashes,
+  writer contention, corruption, long journals, fuzz inputs, and bounded large-graph
+  contexts without turning fault injection into a user-facing runtime capability.
 
 ## Invariants
 
@@ -65,6 +68,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
    verified across the process boundary in which DAGrail will use it.
 10. Runtime publication is accepted only after exact digest and fresh-process version
     verification; rollback never trusts a mutable path without its receipt digest.
+11. Context truncation always returns an inspectable bounded summary; a large ready
+    frontier cannot force a caller to exceed its declared byte budget.
 
 ## Bounded contexts
 

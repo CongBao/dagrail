@@ -190,6 +190,9 @@ func (s *Service) Inspect(ref string) (any, error) {
 	if ref == "project" {
 		return map[string]any{"project": s.Project.Config, "state": map[string]any{"graphRevision": state.GraphRevision, "headSequence": state.HeadSequence, "headHash": state.HeadHash}}, nil
 	}
+	if ref == "frontier" {
+		return domain.ComputeFrontier(state), nil
+	}
 	prefix, id, ok := strings.Cut(ref, ":")
 	if !ok || id == "" {
 		return nil, fmt.Errorf("inspect ref must be project or kind:id")

@@ -83,3 +83,23 @@ jobs:
               -C "$package" -cf - LICENSE README.md dagrail | gzip -n > "/tmp/dagrail-$suffix.tar.gz"
           done
           cmp /tmp/dagrail-a.tar.gz /tmp/dagrail-b.tar.gz
+
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {package: ./internal/domain, fuzz: FuzzValidateGraphJSON}
+          - {package: ./internal/journal, fuzz: FuzzValidateSegments}
+          - {package: ./internal/service, fuzz: FuzzDecodeGraphDefinition}
+          - {package: ./internal/service, fuzz: FuzzDecodeGraphPatch}
+          - {package: ./internal/harness, fuzz: FuzzNativeReceiptConformance}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.x'
+          cache: true
+      - name: Run bounded fuzz target
+        run: go test ${{ matrix.package }} -run '^$' -fuzz '^${{ matrix.fuzz }}$' -fuzztime=5s

@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -208,10 +207,14 @@ func ValidateGraphFile(path string) (domain.GraphDefinition, error) {
 }
 
 func decodeGraphPatch(path string) (GraphPatch, string, error) {
-	data, err := os.ReadFile(path)
+	data, err := readDefinitionFile(path)
 	if err != nil {
 		return GraphPatch{}, "", err
 	}
+	return decodeGraphPatchBytes(data)
+}
+
+func decodeGraphPatchBytes(data []byte) (GraphPatch, string, error) {
 	var patch GraphPatch
 	if err := json.Unmarshal(data, &patch); err != nil || patch.APIVersion == "" {
 		var value any

@@ -13,6 +13,10 @@ credential-like keys, common token prefixes, bearer values, URI userinfo, and se
 query parameters, but callers must still pass references or digests instead of secret
 material.
 
+Graph Definition and GraphPatch inputs must be regular files no larger than 8 MiB.
+Predicate ASTs may nest at most 64 levels. These limits bound parser and recursive
+validation exposure; they do not substitute for reviewing graph provenance.
+
 Compile-in providers are trusted code, not a sandbox. The Provider Runtime validates
 JSON Schema, deadlines, panics, output size, and secret-like fields, but Go code that
 ignores cancellation may continue in a detached goroutine. Providers receive no DAGrail

@@ -137,18 +137,45 @@ func (s *Service) ContextSince(view, roleID, nodeID string, budget int, cursor u
 	if len(raw) <= budget {
 		return raw, nil
 	}
-	minimal := map[string]any{"graphRevision": state.GraphRevision, "frontier": map[string]any{"ready": frontier.Ready}}
+	essentialRefs := []string{"frontier"}
+	minimal := map[string]any{"graphRevision": state.GraphRevision}
 	if nodeID != "" {
 		minimal["nodeRef"] = "node:" + nodeID
 		minimal["runtime"] = state.Nodes[nodeID]
+		essentialRefs = append(essentialRefs, "node:"+nodeID)
 	}
+	sort.Strings(essentialRefs)
 	envelope.Data = minimal
-	raw, err = json.Marshal(envelope)
+	envelope.InspectRefs = essentialRefs
+	marshalWithReady := func(count int) ([]byte, error) {
+		minimal["frontier"] = map[string]any{
+			"ready":          frontier.Ready[:count],
+			"readyCount":     len(frontier.Ready),
+			"readyTruncated": count < len(frontier.Ready),
+		}
+		return json.Marshal(envelope)
+	}
+	empty, err := marshalWithReady(0)
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) > budget {
+	if len(empty) > budget {
 		return nil, fmt.Errorf("context invariant set exceeds byte budget")
 	}
-	return raw, nil
+	low, high := 0, len(frontier.Ready)
+	best := empty
+	for low <= high {
+		middle := low + (high-low)/2
+		candidate, marshalErr := marshalWithReady(middle)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		if len(candidate) <= budget {
+			best = candidate
+			low = middle + 1
+		} else {
+			high = middle - 1
+		}
+	}
+	return best, nil
 }

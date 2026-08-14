@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/CongBao/dagrail/internal/domain"
@@ -507,10 +506,14 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 }
 
 func decodeGraph(path string) (domain.GraphDefinition, error) {
-	data, err := os.ReadFile(path)
+	data, err := readDefinitionFile(path)
 	if err != nil {
 		return domain.GraphDefinition{}, err
 	}
+	return decodeGraphBytes(data)
+}
+
+func decodeGraphBytes(data []byte) (domain.GraphDefinition, error) {
 	var graph domain.GraphDefinition
 	if json.Unmarshal(data, &graph) == nil && graph.APIVersion != "" {
 		return graph, nil

@@ -410,6 +410,13 @@ func rejectSensitiveString(value string) error {
 }
 
 func validatePredicate(p Predicate, source NodeDefinition) error {
+	return validatePredicateAtDepth(p, source, 0)
+}
+
+func validatePredicateAtDepth(p Predicate, source NodeDefinition, depth int) error {
+	if depth > 64 {
+		return fmt.Errorf("predicate nesting exceeds 64 levels")
+	}
 	branches := 0
 	if p.Outcome != "" {
 		branches++
@@ -449,7 +456,7 @@ func validatePredicate(p Predicate, source NodeDefinition) error {
 		return fmt.Errorf("predicate must contain exactly one closed operator")
 	}
 	for _, child := range append(append([]Predicate{}, p.All...), p.Any...) {
-		if err := validatePredicate(child, source); err != nil {
+		if err := validatePredicateAtDepth(child, source, depth+1); err != nil {
 			return err
 		}
 	}
