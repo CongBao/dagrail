@@ -156,3 +156,22 @@ func TestGraphRejectsHierarchyCycleAndFloatingAuthorityNumber(t *testing.T) {
 		t.Fatalf("invalid authority was accepted: %v", err)
 	}
 }
+
+func TestSensitiveMaterialIsRejectedEvenUnderInnocuousFieldNames(t *testing.T) {
+	cases := []json.RawMessage{
+		json.RawMessage(`{"endpoint":"https://user:password@example.com/path"}`),
+		json.RawMessage(`{"endpoint":"https://example.com/path?access_token=value"}`),
+		json.RawMessage(`{"note":"Bearer abcdefghijklmnopqrstuvwxyz"}`),
+		json.RawMessage(`{"value":"github_pat_abcdefghijklmnopqrstuvwxyz"}`),
+		json.RawMessage(`{"document":"-----BEGIN PRIVATE KEY-----\\nmaterial"}`),
+	}
+	for _, raw := range cases {
+		if err := RejectSensitiveFields(raw); err == nil {
+			t.Fatalf("sensitive material was accepted: %s", raw)
+		}
+	}
+	legitimate := json.RawMessage(`{"endpoint":"https://example.com/artifact?id=42&signal=healthy","digest":"sha256:0123456789abcdef","note":"token budget"}`)
+	if err := RejectSensitiveFields(legitimate); err != nil {
+		t.Fatalf("legitimate metadata was rejected: %v", err)
+	}
+}

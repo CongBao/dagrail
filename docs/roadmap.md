@@ -57,3 +57,15 @@ DAGrail advances through evidence-backed milestones. A version is complete only 
 - end-to-end multi-session sample project qualification;
 - stable CLI/MCP/provider compatibility promises;
 - observe-only migration workflow for existing DAGs and beta operations guide.
+
+## v0.11.0 — Operational DAG explorer
+
+- a relatively complete, still strictly read-only UI with interactive topology,
+  search and filters, node/blocker inspection, event timeline, and operational views
+  for leases, resources, incidents, attempts, and effects;
+- stable URL deep links, deterministic bounded APIs, and large-graph performance gates;
+- a second isolated tropical-cyclone-lab shadow qualification after the UI lands,
+  reading source governance artifacts into temporary DAGrail state without modifying
+  the project, its registry, or its live DAG;
+- an independent cold review of v0.11 implementation and qualification evidence before
+  the milestone is declared complete.

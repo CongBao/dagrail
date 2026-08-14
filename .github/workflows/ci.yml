@@ -16,8 +16,8 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: '1.26.x'
           cache: true
@@ -43,8 +43,8 @@ jobs:
           - {goos: windows, goarch: amd64}
           - {goos: windows, goarch: arm64}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: '1.26.x'
       - run: go build -trimpath -o dist/dagrail-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/dagrail
@@ -56,10 +56,30 @@ jobs:
   contract:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: '1.26.x'
       - run: go test ./internal/journal -run RFC8785
       - run: go test ./internal/mcpserver -run TestServerExposesOnlySixHighLevelTypedTools
       - run: go vet ./...
+      - name: Verify reproducible linked binary
+        shell: bash
+        run: |
+          version=$(sed -n 's/[[:space:]]*Version = "\([^"]*\)"/\1/p' internal/version/version.go)
+          epoch=$(git show -s --format=%ct HEAD)
+          build_date=$(date -u -d "@${epoch}" +%Y-%m-%dT%H:%M:%SZ)
+          flags="-buildid= -s -w -X github.com/CongBao/dagrail/internal/version.Version=${version} -X github.com/CongBao/dagrail/internal/version.Commit=${GITHUB_SHA} -X github.com/CongBao/dagrail/internal/version.Date=${build_date}"
+          CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "$flags" -o /tmp/dagrail-build-a ./cmd/dagrail
+          CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "$flags" -o /tmp/dagrail-build-b ./cmd/dagrail
+          cmp /tmp/dagrail-build-a /tmp/dagrail-build-b
+          for suffix in a b; do
+            package="/tmp/dagrail-package-$suffix"
+            mkdir -p "$package"
+            cp "/tmp/dagrail-build-$suffix" "$package/dagrail"
+            cp LICENSE README.md "$package/"
+            find "$package" -exec touch -h -d "@${epoch}" {} +
+            tar --sort=name --mtime="@${epoch}" --owner=0 --group=0 --numeric-owner \
+              -C "$package" -cf - LICENSE README.md dagrail | gzip -n > "/tmp/dagrail-$suffix.tar.gz"
+          done
+          cmp /tmp/dagrail-a.tar.gz /tmp/dagrail-b.tar.gz

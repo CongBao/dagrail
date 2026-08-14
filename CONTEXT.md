@@ -46,6 +46,10 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Provider Runtime**: bounded invocation boundary that validates schemas, deadlines,
   panics, output size, sensitive fields, and stable schema hashes before an application
   service may use a provider result.
+- **Runtime receipt**: local install record binding the active executable and at most
+  one digest-addressed rollback executable to exact versions and SHA-256 digests.
+- **Detached signature**: optional Ed25519 envelope over an exact portable file digest;
+  it is independent of journal hashing and does not establish actor identity.
 
 ## Invariants
 
@@ -59,6 +63,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 8. Secrets, PII, full prompts, transcripts, and large artifact bodies do not enter authority.
 9. A harness protocol capability is not a durable lifecycle capability until it is
    verified across the process boundary in which DAGrail will use it.
+10. Runtime publication is accepted only after exact digest and fresh-process version
+    verification; rollback never trusts a mutable path without its receipt digest.
 
 ## Bounded contexts
 
@@ -67,7 +73,9 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Effect control**: allowed action, outbox, prepared effect, dispatch, receipt, reconcile.
 - **Harness integration**: capability probe, plugin manifest, hooks, launch/resume envelope.
 - **Read model**: SQLite projection, context envelope, cursor delta, inspect ref, dashboard-ready queries.
-- **Operational surface**: payload-free status/history, verified journal backup, and a local read-only UI derived from authority.
+- **Operational surface**: payload-free status/history, verified journal backup,
+  runtime upgrade/rollback, optional portable-file signatures, and a local read-only
+  UI derived from authority.
 
 ## Current non-goals
 

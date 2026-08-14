@@ -2,20 +2,14 @@ package install
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
-
-	"github.com/CongBao/dagrail/internal/version"
 )
 
 const (
@@ -50,10 +44,12 @@ type Result struct {
 }
 
 type RuntimeResult struct {
-	Status      string `json:"status"`
-	Version     string `json:"version"`
-	RuntimePath string `json:"runtimePath"`
-	SHA256      string `json:"sha256"`
+	Status            string `json:"status"`
+	Version           string `json:"version"`
+	RuntimePath       string `json:"runtimePath"`
+	SHA256            string `json:"sha256"`
+	PreviousVersion   string `json:"previousVersion,omitempty"`
+	RollbackAvailable bool   `json:"rollbackAvailable"`
 }
 
 func Plan(options Options) ([]PlanResult, error) {
@@ -233,138 +229,6 @@ func DefaultRuntimePath() (string, error) {
 		return filepath.Join(root, "DAGrail", "bin", "dagrail.exe"), nil
 	}
 	return filepath.Join(home, ".local", "bin", "dagrail"), nil
-}
-
-func InstallRuntime() (RuntimeResult, error) {
-	source, err := os.Executable()
-	if err != nil {
-		return RuntimeResult{}, err
-	}
-	source, err = filepath.EvalSymlinks(source)
-	if err != nil {
-		return RuntimeResult{}, err
-	}
-	destination, err := DefaultRuntimePath()
-	if err != nil {
-		return RuntimeResult{}, err
-	}
-	sourceDigest, err := fileSHA256(source)
-	if err != nil {
-		return RuntimeResult{}, err
-	}
-	status := "installed"
-	if destinationDigest, digestErr := fileSHA256(destination); digestErr == nil && destinationDigest == sourceDigest {
-		status = "noop"
-	} else {
-		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-			return RuntimeResult{}, err
-		}
-		temporary, err := os.CreateTemp(filepath.Dir(destination), ".dagrail-*.tmp")
-		if err != nil {
-			return RuntimeResult{}, err
-		}
-		temporaryPath := temporary.Name()
-		defer os.Remove(temporaryPath)
-		sourceFile, err := os.Open(source)
-		if err != nil {
-			_ = temporary.Close()
-			return RuntimeResult{}, err
-		}
-		_, copyErr := io.Copy(temporary, sourceFile)
-		closeSourceErr := sourceFile.Close()
-		syncErr := temporary.Sync()
-		closeErr := temporary.Close()
-		if err := errors.Join(copyErr, closeSourceErr, syncErr, closeErr); err != nil {
-			return RuntimeResult{}, err
-		}
-		if runtime.GOOS != "windows" {
-			if err := os.Chmod(temporaryPath, 0o755); err != nil {
-				return RuntimeResult{}, err
-			}
-		}
-		if err := os.Rename(temporaryPath, destination); err != nil {
-			if removeErr := os.Remove(destination); removeErr != nil && !os.IsNotExist(removeErr) {
-				return RuntimeResult{}, fmt.Errorf("replace runtime: %w", err)
-			}
-			if err := os.Rename(temporaryPath, destination); err != nil {
-				return RuntimeResult{}, fmt.Errorf("publish runtime: %w", err)
-			}
-		}
-	}
-	if err := validateFreshRuntime(context.Background(), destination); err != nil {
-		return RuntimeResult{}, err
-	}
-	if err := writeRuntimeReceipt(destination, sourceDigest); err != nil {
-		return RuntimeResult{}, err
-	}
-	return RuntimeResult{Status: status, Version: version.Version, RuntimePath: destination, SHA256: sourceDigest}, nil
-}
-
-func validateFreshRuntime(ctx context.Context, path string) error {
-	if !filepath.IsAbs(path) {
-		return fmt.Errorf("runtime path must be absolute")
-	}
-	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return fmt.Errorf("runtime %s is not a regular executable file", path)
-	}
-	command := exec.CommandContext(ctx, path, "version")
-	command.Env = append(os.Environ(), "DAGRAIL_FRESH_PROCESS_PROBE=1")
-	output, err := command.Output()
-	if err != nil {
-		return fmt.Errorf("fresh runtime probe failed: %w", err)
-	}
-	var value struct {
-		Version string `json:"version"`
-	}
-	if err := json.Unmarshal(output, &value); err != nil || value.Version == "" {
-		return fmt.Errorf("fresh runtime probe returned an invalid version envelope")
-	}
-	return nil
-}
-
-func fileSHA256(path string) (string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
-func writeRuntimeReceipt(runtimePath, digest string) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-	root := os.Getenv("DAGRAIL_HOME")
-	if root == "" {
-		switch runtime.GOOS {
-		case "darwin":
-			root = filepath.Join(home, "Library", "Application Support", "dagrail")
-		case "windows":
-			root = os.Getenv("LOCALAPPDATA")
-			if root == "" {
-				root = filepath.Join(home, "AppData", "Local")
-			}
-			root = filepath.Join(root, "DAGrail")
-		default:
-			root = os.Getenv("XDG_DATA_HOME")
-			if root == "" {
-				root = filepath.Join(home, ".local", "share")
-			}
-			root = filepath.Join(root, "dagrail")
-		}
-	}
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		return err
-	}
-	data, _ := json.Marshal(map[string]any{"schemaVersion": 1, "version": version.Version, "runtimePath": runtimePath, "sha256": digest, "installedAt": time.Now().UTC().Format(time.RFC3339Nano)})
-	return os.WriteFile(filepath.Join(root, "install-receipt.json"), data, 0o600)
 }
 
 func normalizeHarnesses(values []string) ([]string, error) {

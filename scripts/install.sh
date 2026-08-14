@@ -29,9 +29,13 @@ temporary="$(mktemp -d "${TMPDIR:-/tmp}/dagrail-install.XXXXXX")"
 trap 'rm -rf "$temporary"' EXIT HUP INT TERM
 curl --fail --location --proto '=https' --tlsv1.2 "${base}/${asset}" --output "${temporary}/${asset}"
 curl --fail --location --proto '=https' --tlsv1.2 "${base}/checksums.txt" --output "${temporary}/checksums.txt"
-expected="$(awk -v asset="$asset" '$2 == asset {print $1}' "${temporary}/checksums.txt")"
+expected="$(awk -v asset="$asset" '$2 == asset {count++; digest=$1} END {if (count == 1) print digest}' "${temporary}/checksums.txt")"
 if command -v sha256sum >/dev/null 2>&1; then actual="$(sha256sum "${temporary}/${asset}" | awk '{print $1}')"; else actual="$(shasum -a 256 "${temporary}/${asset}" | awk '{print $1}')"; fi
 [ -n "$expected" ] && [ "$expected" = "$actual" ] || { echo "checksum verification failed" >&2; exit 1; }
+contents="$(tar -tzf "${temporary}/${asset}" | LC_ALL=C sort)"
+expected_contents="$(printf '%s\n' LICENSE README.md dagrail | LC_ALL=C sort)"
+[ "$contents" = "$expected_contents" ] || { echo "release archive contains unexpected paths" >&2; exit 1; }
 tar -xzf "${temporary}/${asset}" -C "$temporary"
 "${temporary}/dagrail" plugin install --harness "$harness"
+"${temporary}/dagrail" plugin runtime-status >/dev/null
 echo "DAGrail installed. Restart open agent applications."

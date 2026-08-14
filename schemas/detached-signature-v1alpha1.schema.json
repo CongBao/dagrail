@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/detached-signature-v1alpha1.schema.json",
+  "title": "DAGrail detached signature",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "algorithm",
+    "keyId",
+    "payloadSha256",
+    "signature"
+  ],
+  "properties": {
+    "apiVersion": { "const": "dagrail.io/v1alpha1" },
+    "kind": { "const": "DetachedSignature" },
+    "algorithm": { "const": "Ed25519" },
+    "keyId": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "payloadSha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9+/]{86}==$"
+    }
+  }
+}

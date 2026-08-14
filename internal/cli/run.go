@@ -17,6 +17,7 @@ import (
 	"github.com/CongBao/dagrail/internal/mcpserver"
 	internalproviders "github.com/CongBao/dagrail/internal/providers"
 	"github.com/CongBao/dagrail/internal/service"
+	"github.com/CongBao/dagrail/internal/signing"
 	dagrailui "github.com/CongBao/dagrail/internal/ui"
 	"github.com/CongBao/dagrail/internal/version"
 )
@@ -63,6 +64,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runPlugin(args[1:], stdout, stderr)
 	case "provider":
 		return runProvider(args[1:], stdout, stderr)
+	case "signature":
+		return runSignature(args[1:], stdout, stderr)
 	case "journal":
 		return runJournal(args[1:], stdout, stderr)
 	case "evidence":
@@ -78,6 +81,38 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runSignature(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: dagrail signature <keygen|sign|verify>")
+	}
+	flags := flag.NewFlagSet("signature "+args[0], flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	filePath := flags.String("file", "", "payload file")
+	privateKey := flags.String("private-key", "", "PKCS#8 Ed25519 private-key PEM")
+	publicKey := flags.String("public-key", "", "PKIX Ed25519 public-key PEM")
+	output := flags.String("output", "", "new detached signature file")
+	signaturePath := flags.String("signature", "", "detached signature file")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	var report signing.Report
+	var err error
+	switch args[0] {
+	case "keygen":
+		report, err = signing.GenerateKeyPair(*privateKey, *publicKey)
+	case "sign":
+		report, err = signing.SignFile(*filePath, *privateKey, *output)
+	case "verify":
+		report, err = signing.VerifyFile(*filePath, *signaturePath, *publicKey)
+	default:
+		return fmt.Errorf("unknown signature command %q", args[0])
+	}
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, report)
 }
 
 func runUI(args []string, stdout, stderr io.Writer) error {
@@ -319,7 +354,7 @@ func runEvidence(args []string, stdout, stderr io.Writer) error {
 
 func runPlugin(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: dagrail plugin <install|status|uninstall>")
+		return fmt.Errorf("usage: dagrail plugin <install|status|runtime-status|rollback|uninstall>")
 	}
 	flags := flag.NewFlagSet("plugin "+args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -359,6 +394,18 @@ func runPlugin(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		return writeJSON(stdout, results)
+	case "runtime-status":
+		result, err := install.RuntimeStatus()
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, result)
+	case "rollback":
+		result, err := install.RollbackRuntime()
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, result)
 	case "uninstall":
 		results, err := install.Uninstall(context.Background(), options)
 		if writeErr := writeJSON(stdout, results); writeErr != nil {

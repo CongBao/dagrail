@@ -42,7 +42,7 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 
 ## Status
 
-`v0.7.0` is a technical alpha: local-first and single-user, with one native Go
+`v0.8.0` is a technical alpha: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
 stdio MCP. Its operational surface adds explainable dependency blockers, incident
 circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
@@ -51,7 +51,9 @@ Code headless completion turns, and GitHub Copilot ACP completion turns. One str
 receipt contract keeps transport, session, delivery, completion, and DAG acceptance
 separate; every missing or unprovable capability retains an explicit manual fallback.
 The Provider Runtime executes schema-bound extensions without giving them controller
-storage handles.
+storage handles. Reproducible release inputs, per-target SPDX SBOMs and build
+provenance, digest-verified runtime upgrade/rollback, and optional detached signatures
+form the distribution-security baseline.
 
 ## Build
 
@@ -108,7 +110,12 @@ After building the binary, install its shared runtime and selected harness proje
 ```bash
 dagrail plugin install --harness codex,claude-code,copilot-cli
 dagrail plugin status
+dagrail plugin runtime-status
 ```
+
+Runtime upgrades preserve one immutable, digest-addressed rollback candidate. Use
+`dagrail plugin rollback` only after inspecting `runtime-status`; rollback switches the
+shared executable, not host-specific manifest content.
 
 Missing or unstable native dispatch capabilities fall back to an explicit launch/resume envelope. A transport response is never treated as recipient-visible delivery.
 
@@ -144,6 +151,11 @@ Create and verify a portable journal backup with `dagrail backup create` and
 See [`docs/operations.md`](docs/operations.md) for status, history, incident, backup, and
 read-only UI workflows.
 
+Portable exports can optionally be signed and verified over their exact bytes with
+`dagrail signature keygen|sign|verify`. Signatures are detached, never required for
+local runtime operation, and establish trust only when the public key is distributed
+through a separately trusted channel.
+
 ## Extensions and security boundary
 
 The public `sdk` package defines compile-in providers. Providers return decisions,
@@ -155,7 +167,10 @@ Callable providers run behind input-schema validation, a deadline, panic recover
 `stable` providers must bind the exact `InputSchema` hash. See
 [`docs/providers.md`](docs/providers.md) for the SDK and conformance workflow.
 
-DAGrail separates cooperative roles but does not claim malicious-user isolation. Journal hashing is tamper-evident, not signed. Remote stores, encryption, identity signatures, multi-tenancy, and cross-region availability are outside the alpha boundary.
+DAGrail separates cooperative roles but does not claim malicious-user isolation.
+Journal hashing is tamper-evident; optional export signatures do not add journal actor
+identity. Remote stores, encryption, identity signatures, multi-tenancy, and
+cross-region availability are outside the alpha boundary.
 
 See `CONTEXT.md` for the domain vocabulary, `docs/adr/` for architectural decisions,
 [`docs/roadmap.md`](docs/roadmap.md) for planned milestones, and

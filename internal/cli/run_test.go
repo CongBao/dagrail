@@ -449,3 +449,28 @@ func TestManualEffectRemainsUnknownUntilRecipientVisibleReceiptIsReconciled(t *t
 		t.Fatal("confirmed effect should allow explicit terminal outcome")
 	}
 }
+
+func TestSignatureCLIProducesPortableDetachedVerification(t *testing.T) {
+	root := t.TempDir()
+	payload := filepath.Join(root, "journal.ndjson")
+	privateKey := filepath.Join(root, "private.pem")
+	publicKey := filepath.Join(root, "public.pem")
+	signature := filepath.Join(root, "journal.ndjson.sig.json")
+	if err := os.WriteFile(payload, []byte("portable journal export\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) (string, error) {
+		var out, errOut bytes.Buffer
+		err := cli.Run(args, strings.NewReader(""), &out, &errOut)
+		return out.String(), err
+	}
+	if output, err := run("signature", "keygen", "--private-key", privateKey, "--public-key", publicKey); err != nil || !strings.Contains(output, `"valid":true`) {
+		t.Fatalf("keygen: %v %s", err, output)
+	}
+	if output, err := run("signature", "sign", "--file", payload, "--private-key", privateKey, "--output", signature); err != nil || !strings.Contains(output, `"payloadSha256":"sha256:`) {
+		t.Fatalf("sign: %v %s", err, output)
+	}
+	if output, err := run("signature", "verify", "--file", payload, "--signature", signature, "--public-key", publicKey); err != nil || !strings.Contains(output, `"valid":true`) {
+		t.Fatalf("verify: %v %s", err, output)
+	}
+}

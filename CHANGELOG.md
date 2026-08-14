@@ -2,6 +2,34 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.8.0 — 2026-08-14
+
+### Added
+
+- reproducible six-target release builds with deterministic archives, sorted checksums,
+  per-target SPDX SBOMs, and GitHub build-provenance attestations;
+- digest-addressed runtime upgrade backups, fresh-process verification,
+  `plugin runtime-status`, and reversible `plugin rollback`;
+- optional Ed25519 detached signatures over exact export bytes, with a public
+  v1alpha1 envelope schema and fail-closed key parsing;
+- Dependabot coverage for Go modules and GitHub Actions.
+
+### Changed
+
+- GitHub Actions are pinned to exact commits, and CI independently compares two linked
+  binaries and deterministic archives;
+- release installers validate one exact checksum entry and a closed archive allowlist;
+- secret-field screening additionally rejects common token material, bearer values,
+  URI userinfo, and credential-like URI query parameters.
+
+### Security
+
+- runtime replacement now validates both candidate and installed bytes, restores the
+  previous executable after an unsuccessful publish, and refuses corrupt rollback
+  artifacts;
+- private signing keys must be regular PKCS#8 Ed25519 files and, on POSIX, inaccessible
+  to group and other users.
+
 ## 0.7.0 — 2026-08-14
 
 ### Added

@@ -55,6 +55,37 @@ Backups may contain operational metadata and external artifact URIs. Treat them 
 sensitive project records even though DAGrail rejects secrets and artifact bodies from
 authority.
 
+## Sign portable files
+
+Detached signatures are optional and cover exact file bytes. Generate keys outside a
+governed project and distribute the public key through a separately trusted channel.
+
+```sh
+dagrail signature keygen --private-key dagrail-signing.pem \
+  --public-key dagrail-signing.pub.pem
+dagrail signature sign --file dagrail-backup.json \
+  --private-key dagrail-signing.pem --output dagrail-backup.json.sig.json
+dagrail signature verify --file dagrail-backup.json \
+  --signature dagrail-backup.json.sig.json --public-key dagrail-signing.pub.pem
+```
+
+Signing does not encrypt the export or identify actors inside its journal. Keep the
+private key outside repositories, journals, evidence, and backups. On POSIX, DAGrail
+refuses private keys readable by group or other users.
+
+## Verify or roll back the shared runtime
+
+```sh
+dagrail plugin runtime-status
+dagrail plugin rollback
+dagrail plugin runtime-status
+```
+
+An upgrade preserves one immutable binary under a SHA-256-addressed data path and
+validates every candidate in a fresh process. Rollback is reversible: the displaced
+runtime becomes the next rollback candidate. This switches the stable DAGrail
+executable only; it does not restore older harness manifests or marketplace metadata.
+
 ## Repair projections
 
 ```sh

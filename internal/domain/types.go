@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net/url"
 	"sort"
 	"strings"
 )
@@ -339,7 +340,7 @@ func RejectSensitiveFields(raw json.RawMessage) error {
 		case map[string]any:
 			for key, child := range typed {
 				normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(key, "_", ""), "-", ""))
-				for _, forbidden := range []string{"password", "secret", "token", "apikey", "authorization", "privatekey"} {
+				for _, forbidden := range []string{"password", "secret", "token", "apikey", "authorization", "privatekey", "credential", "accesskey", "cookie"} {
 					if strings.Contains(normalized, forbidden) {
 						return fmt.Errorf("field %s may contain a secret; store an external reference instead", key)
 					}
@@ -354,10 +355,58 @@ func RejectSensitiveFields(raw json.RawMessage) error {
 					return err
 				}
 			}
+		case string:
+			if err := rejectSensitiveString(typed); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
 	return walk(value)
+}
+
+func rejectSensitiveString(value string) error {
+	trimmed := strings.TrimSpace(value)
+	lower := strings.ToLower(trimmed)
+	if strings.Contains(lower, "-----begin") && strings.Contains(lower, "private key-----") {
+		return fmt.Errorf("value contains private key material; store an external reference instead")
+	}
+	for _, prefix := range []string{"ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "xoxb-", "xoxp-", "xoxa-", "xoxr-"} {
+		if strings.HasPrefix(lower, prefix) && len(trimmed) >= len(prefix)+12 {
+			return fmt.Errorf("value resembles a secret token; store an external reference instead")
+		}
+	}
+	if strings.HasPrefix(lower, "bearer ") && len(trimmed) >= 20 {
+		return fmt.Errorf("value contains a bearer credential; store an external reference instead")
+	}
+	if strings.HasPrefix(trimmed, "AKIA") && len(trimmed) >= 16 {
+		return fmt.Errorf("value resembles an AWS access key; store an external reference instead")
+	}
+	if strings.HasPrefix(lower, "sk-") && len(trimmed) >= 20 {
+		return fmt.Errorf("value resembles an API secret; store an external reference instead")
+	}
+	if !strings.Contains(trimmed, "://") {
+		return nil
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return nil
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("URI userinfo may contain credentials; store a credential-free external reference instead")
+	}
+	for key := range parsed.Query() {
+		normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(key, "_", ""), "-", ""))
+		if normalized == "sig" {
+			return fmt.Errorf("URI query field %s may contain a credential; store a credential-free external reference instead", key)
+		}
+		for _, forbidden := range []string{"password", "secret", "token", "apikey", "authorization", "credential", "accesskey", "signature"} {
+			if strings.Contains(normalized, forbidden) {
+				return fmt.Errorf("URI query field %s may contain a credential; store a credential-free external reference instead", key)
+			}
+		}
+	}
+	return nil
 }
 
 func validatePredicate(p Predicate, source NodeDefinition) error {
