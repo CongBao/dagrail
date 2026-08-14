@@ -1,8 +1,13 @@
 # Reliability qualification
 
-DAGrail v0.9 treats reliability claims as executable contracts. The suite runs against
+DAGrail treats reliability claims as executable contracts. The suite runs against
 temporary projects and never needs a daemon, remote service, real harness account, or
 external side effect.
+
+For release structure and workflow declarations, run
+`dagrail qualify release --source .`. Add `--project PATH` only when a real project is
+available for inspection-only security and recovery evidence. A passing structural
+candidate still reports production adoption gaps explicitly.
 
 ## Matrix
 

@@ -63,6 +63,8 @@ jobs:
       - run: go test ./internal/journal -run RFC8785
       - run: go test ./internal/mcpserver -run TestServerExposesOnlySixHighLevelTypedTools
       - run: go vet ./...
+      - name: Verify structural release qualification
+        run: go run ./cmd/dagrail qualify release --source .
       - name: Verify reproducible linked binary
         shell: bash
         run: |

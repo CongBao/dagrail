@@ -65,6 +65,9 @@ proved by the portable binary.
 - Recovery rehearsal binds all checks to one captured journal head, restores only into
   disposable storage, and compares a stable logical-table fingerprint rather than
   SQLite page bytes. It cannot overwrite or truncate the live journal.
+- Release qualification accepts only fixed, bounded, regular source files under the
+  selected root, verifies workflow action commit pins, emits no paths, and keeps
+  structural automation declarations separate from external adoption evidence.
 
 ## Threats intentionally not solved
 

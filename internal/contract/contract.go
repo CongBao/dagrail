@@ -34,25 +34,26 @@ type ContextBudget struct {
 }
 
 type Report struct {
-	APIVersion          string                   `json:"apiVersion"`
-	Kind                string                   `json:"kind"`
-	Version             string                   `json:"version"`
-	Stability           string                   `json:"stability"`
-	Graph               VersionedSurface         `json:"graph"`
-	CLI                 VersionedSurface         `json:"cli"`
-	UI                  DocumentedSurface        `json:"ui"`
-	Security            DocumentedSurface        `json:"security"`
-	JournalVerification DocumentedSurface        `json:"journalVerification"`
-	PluginConformance   DocumentedSurface        `json:"pluginConformance"`
-	Support             DocumentedSurface        `json:"support"`
-	Recovery            DocumentedSurface        `json:"recovery"`
-	Provider            VersionedSurface         `json:"providerSdk"`
-	Journal             JournalContract          `json:"journal"`
-	Projection          int                      `json:"projectionSchema"`
-	MCP                 []mcpserver.ToolContract `json:"mcpTools"`
-	Contexts            []ContextBudget          `json:"contextBudgets"`
-	Commands            []string                 `json:"topLevelCommands"`
-	Promises            []string                 `json:"compatibilityPromises"`
+	APIVersion           string                   `json:"apiVersion"`
+	Kind                 string                   `json:"kind"`
+	Version              string                   `json:"version"`
+	Stability            string                   `json:"stability"`
+	Graph                VersionedSurface         `json:"graph"`
+	CLI                  VersionedSurface         `json:"cli"`
+	UI                   DocumentedSurface        `json:"ui"`
+	Security             DocumentedSurface        `json:"security"`
+	JournalVerification  DocumentedSurface        `json:"journalVerification"`
+	PluginConformance    DocumentedSurface        `json:"pluginConformance"`
+	Support              DocumentedSurface        `json:"support"`
+	Recovery             DocumentedSurface        `json:"recovery"`
+	ReleaseQualification DocumentedSurface        `json:"releaseQualification"`
+	Provider             VersionedSurface         `json:"providerSdk"`
+	Journal              JournalContract          `json:"journal"`
+	Projection           int                      `json:"projectionSchema"`
+	MCP                  []mcpserver.ToolContract `json:"mcpTools"`
+	Contexts             []ContextBudget          `json:"contextBudgets"`
+	Commands             []string                 `json:"topLevelCommands"`
+	Promises             []string                 `json:"compatibilityPromises"`
 }
 
 func Current() Report {
@@ -99,6 +100,12 @@ func Current() Report {
 			SchemaPath:   "schemas/recovery-rehearsal-v1alpha1.schema.json",
 			SchemaSHA256: "sha256:8a465d234f701ee98247117021f92657f603161aeb16f00a3ae3c1537e58b514",
 		},
+		ReleaseQualification: DocumentedSurface{
+			APIVersion:   "dagrail.io/release-qualification/v1alpha1",
+			Stability:    "additive-structural-candidate",
+			SchemaPath:   "schemas/release-qualification-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:a01d53232ed16fa69f7da2d08156bb0113ae0679a9c396428bb931be03d738f3",
+		},
 		Provider: VersionedSurface{APIVersion: sdk.APIVersion, Stability: "source-compatible"},
 		Journal: JournalContract{
 			ReadableSegmentSchemas: []int{journal.LegacySegmentSchemaVersion, journal.CurrentSegmentSchemaVersion},
@@ -113,7 +120,7 @@ func Current() Report {
 			{View: "worker", Bytes: 8192},
 		},
 		Commands: []string{
-			"action", "backup", "context", "contract", "doctor", "evidence", "frontier", "graph", "harness", "history", "hook", "incident", "init", "inspect", "journal", "mcp", "observe", "plugin", "pre-wait", "projection", "provider", "reconcile", "recovery", "role", "security", "signature", "status", "support", "ui", "version",
+			"action", "backup", "context", "contract", "doctor", "evidence", "frontier", "graph", "harness", "history", "hook", "incident", "init", "inspect", "journal", "mcp", "observe", "plugin", "pre-wait", "projection", "provider", "qualify", "reconcile", "recovery", "role", "security", "signature", "status", "support", "ui", "version",
 		},
 		Promises: []string{
 			"journal history is never rewritten by an upgrade",
@@ -125,6 +132,7 @@ func Current() Report {
 			"the local security boundary does not claim malicious same-user or multi-tenant isolation",
 			"support reports contain no authority payloads, absolute paths, prompts, artifact bodies, or harness output",
 			"recovery rehearsal writes only to disposable storage and binds replay and projection evidence to one immutable journal head",
+			"release qualification distinguishes structural candidate evidence from outstanding production adoption evidence",
 			"SQLite remains disposable and rebuildable from the verified journal",
 		},
 	}

@@ -90,6 +90,12 @@ disposable directory, replays it, and rebuilds a separate SQLite projection. It 
 replaces live files. Its state and projection fingerprints are digests, not signatures;
 they prove deterministic local equivalence but do not establish an external identity.
 
+Release qualification reads only fixed, bounded, non-symlink public source files and
+emits closed status codes rather than source or project paths. Optional project evidence
+uses inspection-only security and recovery checks. Structural qualification never
+claims that CI actually ran for a particular tag or that production adoption occurred;
+the tag workflow supplies build evidence and the report leaves adoption gaps explicit.
+
 Detached Ed25519 signatures are optional and cover the SHA-256 digest of exact file
 bytes with a DAGrail domain separator. Private keys must be protected separately and
 public keys must be distributed through a trusted channel. Export signatures neither

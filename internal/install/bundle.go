@@ -36,6 +36,16 @@ type bundleFile struct {
 	Data []byte
 }
 
+// LinkedPluginBundleStatus validates the exact embedded public file set without
+// consulting or writing per-user runtime state.
+func LinkedPluginBundleStatus() (BundleResult, error) {
+	files, digest, total, err := linkedPluginBundle()
+	if err != nil {
+		return BundleResult{}, err
+	}
+	return BundleResult{Status: "linked", Version: version.Version, Digest: digest, Files: len(files), Bytes: total}, nil
+}
+
 func MaterializePluginBundle() (BundleResult, error) {
 	files, digest, total, err := linkedPluginBundle()
 	if err != nil {

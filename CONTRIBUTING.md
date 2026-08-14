@@ -5,12 +5,13 @@ DAGrail requires Go 1.26.6 or newer and uses test-driven changes at its durable 
 Before opening a change:
 
 ```sh
-gofmt -w .
+gofmt -w $(git ls-files '*.go')
 go test ./...
 go test -race ./...
 CGO_ENABLED=0 go build -trimpath ./cmd/dagrail
 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 go run github.com/google/go-licenses/v2@v2.0.1 check ./cmd/dagrail --disallowed_types=forbidden,unknown
+go run ./cmd/dagrail qualify release --source .
 ```
 
 Changes to graph, journal, provider, MCP, or receipt contracts require a compatibility test and an ADR when they are difficult to reverse. Never add a second authority beside the journal. New provider implementations must be deterministic or explicitly return an external receipt; they cannot receive storage handles.

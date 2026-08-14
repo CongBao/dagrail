@@ -2,6 +2,27 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.15.0 — 2026-08-14
+
+### Added
+
+- `qualify release`, a schema-bound structural-candidate report that validates public
+  repository completeness, the compatibility contract, published schema digests,
+  plugin metadata, the linked bundle, workflow gates, and commit-pinned actions;
+- optional inspection-only project evidence for security audit and recovery rehearsal,
+  kept separate from source-release qualification;
+- public API, first-DAG tutorial, release, governance, support, and code-of-conduct
+  documentation for an external adopter.
+
+### Changed
+
+- tag releases now repeat tests, race detection, vet, and all bounded fuzz targets before
+  publication; publish also depends on qualification, security, six builds,
+  reproducibility, SBOM, checksum, and provenance jobs;
+- the release report explicitly keeps `productionValidated` false and lists independent
+  adoption, long-running live use, real-host receipt proof, and operator restore drills
+  as outstanding evidence rather than inferring them from tests.
+
 ## 0.14.0 — 2026-08-14
 
 ### Added

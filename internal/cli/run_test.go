@@ -547,6 +547,28 @@ func TestRecoveryCLIEmitsSchemaBoundReadOnlyRehearsal(t *testing.T) {
 	}
 }
 
+func TestQualifyReleaseCLIDistinguishesCandidateFromProductionEvidence(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if err := cli.Run([]string{"qualify", "release", "--source", root}, strings.NewReader(""), &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"apiVersion":"dagrail.io/release-qualification/v1alpha1"`) || !strings.Contains(out.String(), `"structuralCandidate":true`) || !strings.Contains(out.String(), `"productionValidated":false`) {
+		t.Fatalf("unexpected release qualification: %s", out.String())
+	}
+}
+
+func TestQualifyReleaseCLIRejectsTrailingArguments(t *testing.T) {
+	var out, errOut bytes.Buffer
+	err := cli.Run([]string{"qualify", "release", "unexpected"}, strings.NewReader(""), &out, &errOut)
+	if err == nil || out.Len() != 0 {
+		t.Fatalf("trailing qualification argument was not rejected: err=%v output=%s", err, out.String())
+	}
+}
+
 func TestObserveCLIRecordsOnlyAnIsolatedShadow(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("DAGRAIL_HOME", filepath.Join(root, "runtime-data"))

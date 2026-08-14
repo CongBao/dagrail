@@ -27,6 +27,8 @@ digests, context budgets, and command inventory implemented by the current binar
 - RecoveryRehearsal v1alpha1 is a read-only, additive report bound to one immutable
   journal head. A passing rehearsal proves exact-prefix restore, reducer replay, current
   schema readability, projection rebuild, and logical projection equivalence.
+- ReleaseQualification v1alpha1 is an additive structural report. It never upgrades
+  declared automation or source completeness into production-adoption evidence.
 
 ## Not promised
 

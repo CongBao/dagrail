@@ -47,7 +47,7 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 
 ## Status
 
-`v0.14.0` is a recoverable beta candidate: local-first and single-user, with one native Go
+`v0.15.0` is a pre-1.0 release candidate: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
 stdio MCP. Its operational surface adds explainable dependency blockers, incident
 circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
@@ -61,6 +61,11 @@ provenance, digest-verified runtime upgrade/rollback, and optional detached sign
 form the distribution-security baseline. `dagrail contract` exposes the exact beta
 surfaces implemented by a binary, while `dagrail observe` can qualify an existing DAG
 through a separate, digest-bound shadow without modifying the source project.
+
+The v0.15 structural release report validates public source and automated gate
+declarations, but deliberately reports `productionValidated: false`. Independent
+external adoption, a long-running live DAG, real-host delivery receipts, and an operator
+backup/restore drill remain outstanding before a 1.0 claim.
 
 The v1beta1 Explorer adds bounded Topology, Nodes, Timeline, and Operations views. It
 supports search, filters, stable local deep links, focused graph neighborhoods, and
@@ -187,6 +192,7 @@ dagrail doctor
 dagrail security audit
 dagrail support preview
 dagrail recovery rehearse
+dagrail qualify release --source .
 ```
 
 Create and verify a portable journal backup with `dagrail backup create` and
@@ -208,6 +214,12 @@ Portable exports can optionally be signed and verified over their exact bytes wi
 `dagrail signature keygen|sign|verify`. Signatures are detached, never required for
 local runtime operation, and establish trust only when the public key is distributed
 through a separately trusted channel.
+
+Public integration contracts are summarized in [`docs/api.md`](docs/api.md), and new
+users can start with [`docs/tutorial.md`](docs/tutorial.md). Release evidence and policy
+live in [`docs/release.md`](docs/release.md), with community expectations in
+[`GOVERNANCE.md`](GOVERNANCE.md), [`SUPPORT.md`](SUPPORT.md), and
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
 ## Extensions and security boundary
 

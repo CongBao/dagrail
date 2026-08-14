@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/CongBao/dagrail/schemas/release-qualification-v1alpha1.schema.json",
+  "title": "DAGrail Release Qualification v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "version",
+    "structuralCandidate",
+    "productionValidated",
+    "projectEvidence",
+    "bundle",
+    "checks",
+    "externalGates",
+    "adoptionGaps"
+  ],
+  "properties": {
+    "apiVersion": { "const": "dagrail.io/release-qualification/v1alpha1" },
+    "kind": { "const": "ReleaseQualification" },
+    "version": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._+:-]+$" },
+    "structuralCandidate": { "type": "boolean" },
+    "productionValidated": { "const": false },
+    "projectEvidence": { "type": "boolean" },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["valid"],
+      "properties": {
+        "valid": { "type": "boolean" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "digest": { "$ref": "#/$defs/digest" },
+        "files": { "type": "integer", "minimum": 1 },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 8388608 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "valid": { "const": true } } },
+          "then": { "required": ["version", "digest", "files", "bytes"] }
+        }
+      ]
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "items": { "$ref": "#/$defs/check" }
+    },
+    "externalGates": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/requirement" }
+    },
+    "adoptionGaps": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": { "$ref": "#/$defs/requirement" }
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "code"],
+      "properties": {
+        "id": {
+          "enum": [
+            "source-layout",
+            "compatibility-contract",
+            "published-schema-digests",
+            "plugin-metadata-versions",
+            "linked-plugin-bundle",
+            "ci-workflow",
+            "release-workflow",
+            "workflow-action-pins",
+            "project-security",
+            "project-recovery"
+          ]
+        },
+        "status": { "enum": ["pass", "fail", "not_run"] },
+        "code": {
+          "enum": [
+            "required_public_files_present",
+            "required_public_file_missing",
+            "contract_schema_valid",
+            "contract_schema_invalid",
+            "all_schema_digests_match",
+            "schema_digest_mismatch",
+            "all_versions_match",
+            "plugin_version_mismatch",
+            "closed_bundle_valid",
+            "linked_bundle_invalid",
+            "continuous_gates_declared",
+            "continuous_gate_missing",
+            "tag_gates_declared",
+            "release_gate_missing",
+            "all_actions_commit_pinned",
+            "unpinned_action",
+            "optional_project_not_supplied",
+            "project_open_failed",
+            "security_audit_passed",
+            "security_audit_failed",
+            "recovery_rehearsal_passed",
+            "recovery_rehearsal_failed"
+          ]
+        }
+      }
+    },
+    "requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "automatedBy"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9-]+$", "maxLength": 64 },
+        "status": { "enum": ["automated", "outstanding"] },
+        "automatedBy": { "enum": ["ci+release", "release", "manual"] }
+      }
+    }
+  }
+}

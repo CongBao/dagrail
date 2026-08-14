@@ -18,6 +18,7 @@ import (
 	"github.com/CongBao/dagrail/internal/mcpserver"
 	"github.com/CongBao/dagrail/internal/observe"
 	internalproviders "github.com/CongBao/dagrail/internal/providers"
+	"github.com/CongBao/dagrail/internal/qualification"
 	"github.com/CongBao/dagrail/internal/service"
 	"github.com/CongBao/dagrail/internal/signing"
 	dagrailui "github.com/CongBao/dagrail/internal/ui"
@@ -82,6 +83,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runIncident(args[1:], stdout, stderr)
 	case "projection":
 		return runProjection(args[1:], stdout, stderr)
+	case "qualify":
+		return runQualify(args[1:], stdout, stderr)
 	case "doctor":
 		return runDoctor(args[1:], stdout, stderr)
 	case "security":
@@ -1031,6 +1034,33 @@ func runRecovery(args []string, stdout, stderr io.Writer) error {
 	}
 	if !report.Ready {
 		return fmt.Errorf("recovery rehearsal did not pass")
+	}
+	return nil
+}
+
+func runQualify(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 || args[0] != "release" {
+		return fmt.Errorf("usage: dagrail qualify release [--source path] [--project path]")
+	}
+	flags := flag.NewFlagSet("qualify release", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	source := flags.String("source", ".", "DAGrail source checkout")
+	project := flags.String("project", "", "optional DAGrail project for security and recovery evidence")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("usage: dagrail qualify release [--source path] [--project path]")
+	}
+	report, err := qualification.Run(*source, *project)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(stdout, report); err != nil {
+		return err
+	}
+	if !report.StructuralCandidate {
+		return fmt.Errorf("release qualification did not pass")
 	}
 	return nil
 }

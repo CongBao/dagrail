@@ -78,6 +78,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Recovery rehearsal**: a read-only proof bound to one journal head that restores its
   exact prefix in disposable storage, replays the reducer, rebuilds SQLite, and compares
   logical projection fingerprints.
+- **Release qualification**: a structural, schema-bound source and workflow audit that
+  lists external production evidence separately and never marks it complete by proxy.
 
 ## Invariants
 
@@ -114,6 +116,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
     previewable before an exclusive owner-only export.
 19. Recovery rehearsal never replaces live authority or projection files; every restore
     and rebuild write is confined to disposable storage and compared by stable digest.
+20. A release candidate may be structurally qualified while production validation stays
+    false; adoption evidence must be observed, not inferred from CI.
 
 ## Bounded contexts
 
