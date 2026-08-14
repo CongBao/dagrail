@@ -3,13 +3,42 @@ package sdk
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+
+	"github.com/gowebpki/jcs"
+)
+
+type Stability string
+
+const (
+	StabilityExperimental Stability = "experimental"
+	StabilityStable       Stability = "stable"
 )
 
 type Metadata struct {
-	ID         string `json:"id"`
-	Version    string `json:"version"`
-	SchemaHash string `json:"schemaHash"`
+	ID         string    `json:"id"`
+	Version    string    `json:"version"`
+	SchemaHash string    `json:"schemaHash"`
+	Stability  Stability `json:"stability,omitempty"`
+}
+
+// InputSchemaProvider is implemented by callable providers. DAGrail validates
+// each request against this JSON Schema before provider code is entered.
+type InputSchemaProvider interface {
+	InputSchema() json.RawMessage
+}
+
+// InputSchemaHash returns the domain-separated hash used by stable provider
+// metadata. The schema must be valid JSON and is canonicalized with RFC 8785.
+func InputSchemaHash(schema json.RawMessage) (string, error) {
+	canonical, err := jcs.Transform(schema)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(append([]byte("dagrail-provider-input-schema-v1\x00"), canonical...))
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 type OutcomeDefinition struct {
@@ -24,8 +53,8 @@ type NodeKindProvider interface {
 }
 
 type PredicateRequest struct {
-	Predicate json.RawMessage
-	Source    json.RawMessage
+	Predicate json.RawMessage `json:"predicate"`
+	Source    json.RawMessage `json:"source"`
 }
 type PredicateProvider interface {
 	Metadata() Metadata
@@ -33,9 +62,9 @@ type PredicateProvider interface {
 }
 
 type PolicyRequest struct {
-	PolicyID string
-	Input    json.RawMessage
-	Evidence []json.RawMessage
+	PolicyID string            `json:"policyId"`
+	Input    json.RawMessage   `json:"input"`
+	Evidence []json.RawMessage `json:"evidence,omitempty"`
 }
 type PolicyDecision struct {
 	Outcome string          `json:"outcome"`

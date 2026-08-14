@@ -28,15 +28,16 @@ adapters remain the executors.
 - revision-bound allowed actions instead of hand-written lifecycle envelopes;
 - bounded role-specific context through CLI or six high-level MCP tools;
 - immutable execution packages and deterministic evidence-reuse decisions;
+- bounded compile-in providers with schema and stability contracts;
 - recoverable external effects with explicit `unknown` and `reconcile` states;
 - an immutable RFC 8785 journal with disposable SQLite projections.
 
 ## Status
 
-`v0.3.0` is a technical alpha: local-first and single-user, with one native Go
+`v0.4.0` is a technical alpha: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
-stdio MCP. It keeps execution evidence reusable across policy-only changes while
-requiring a rerun for any protected-core change.
+stdio MCP. Its Provider Runtime executes schema-bound policy, predicate, importer, and
+projection extensions without giving them controller storage handles.
 
 ## Build
 
@@ -122,6 +123,11 @@ dagrail doctor
 The public `sdk` package defines compile-in providers. Providers return decisions,
 proposals, or receipts and do not receive journal or SQLite handles. DAGrail does not load
 `.so`, WASM, Rego, or CEL modules.
+
+Callable providers run behind input-schema validation, a deadline, panic recovery, a
+64 KiB output limit, and secret-field screening. `experimental` providers may evolve;
+`stable` providers must bind the exact `InputSchema` hash. See
+[`docs/providers.md`](docs/providers.md) for the SDK and conformance workflow.
 
 DAGrail separates cooperative roles but does not claim malicious-user isolation. Journal hashing is tamper-evident, not signed. Remote stores, encryption, identity signatures, multi-tenancy, and cross-region availability are outside the alpha boundary.
 

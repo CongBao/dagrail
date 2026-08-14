@@ -21,4 +21,9 @@ Evidence changes must keep execution observations separate from semantic policy
 outcomes. Reuse tests need both an unchanged protected core and at least one changed-core
 reason; a reuse decision must remain replay-verifiable from journal data alone.
 
+Callable providers require self-contained JSON Schema fixtures plus tests for malformed
+input, timeout or cancellation, panic, oversized output, and sensitive-field rejection.
+Use `sdk.InputSchemaHash` for stable metadata and run `dagrail provider check` in the
+custom distribution. Provider code never receives a storage or controller handle.
+
 Keep control-plane transactions short. Add focused tests first, converge locally, then run the full race and cross-build gates once.

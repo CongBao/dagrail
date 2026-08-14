@@ -2,6 +2,18 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.4.0 — 2026-08-14
+
+### Added
+
+- bounded Provider Runtime for policy, predicate, graph-importer, and projection calls;
+- self-contained JSON Schema input validation, call deadlines, panic recovery, output
+  limits, authority JSON checks, and sensitive-field screening;
+- explicit experimental/stable provider contracts with exact stable schema hashing;
+- `dagrail provider list|check|invoke`, provider-backed graph import, and verified-event
+  projection rendering;
+- provider import provenance in the immutable journal and a public conformance guide.
+
 ## 0.3.0 — 2026-08-14
 
 ### Added

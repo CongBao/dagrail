@@ -24,11 +24,12 @@ import (
 )
 
 type Service struct {
-	Project    project.Project
-	Journal    *journal.Store
-	Projection *projection.Store
-	Providers  *internalproviders.Registry
-	Now        func() time.Time
+	Project         project.Project
+	Journal         *journal.Store
+	Projection      *projection.Store
+	Providers       *internalproviders.Registry
+	ProviderRuntime *internalproviders.Runtime
+	Now             func() time.Time
 }
 
 func Open(root string) (*Service, error) {
@@ -85,7 +86,7 @@ func Open(root string) (*Service, error) {
 			return nil, registerErr
 		}
 	}
-	service := &Service{Project: p, Journal: j, Projection: projectionStore, Providers: registry, Now: time.Now}
+	service := &Service{Project: p, Journal: j, Projection: projectionStore, Providers: registry, ProviderRuntime: internalproviders.NewRuntime(registry), Now: time.Now}
 	if err := service.settleAutomatic(); err != nil {
 		return nil, err
 	}
@@ -117,12 +118,26 @@ func (s *Service) ImportGraph(path, idempotencyKey, actorRole string) (domain.Co
 	if existing, ok := state.Commands[idempotencyKey]; ok {
 		return existing, nil
 	}
-	if state.Graph != nil {
-		return domain.CommandResult{}, fmt.Errorf("graph is already imported; use a graph change")
-	}
 	graph, err := decodeGraph(path)
 	if err != nil {
 		return domain.CommandResult{}, err
+	}
+	return s.importGraphDefinition(graph, idempotencyKey, actorRole, nil)
+}
+
+func (s *Service) importGraphDefinition(graph domain.GraphDefinition, idempotencyKey, actorRole string, source any) (domain.CommandResult, error) {
+	if idempotencyKey == "" {
+		return domain.CommandResult{}, fmt.Errorf("idempotency key is required")
+	}
+	state, _, err := s.load()
+	if err != nil {
+		return domain.CommandResult{}, err
+	}
+	if existing, ok := state.Commands[idempotencyKey]; ok {
+		return existing, nil
+	}
+	if state.Graph != nil {
+		return domain.CommandResult{}, fmt.Errorf("graph is already imported; use a graph change")
 	}
 	if err := domain.ValidateGraph(graph); err != nil {
 		return domain.CommandResult{}, err
@@ -137,7 +152,8 @@ func (s *Service) ImportGraph(path, idempotencyKey, actorRole string) (domain.Co
 	payload, _ := json.Marshal(struct {
 		Graph    domain.GraphDefinition `json:"graph"`
 		Revision string                 `json:"revision"`
-	}{graph, revision})
+		Source   any                    `json:"source,omitempty"`
+	}{graph, revision, source})
 	expectedHead := state.HeadHash
 	segment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "graph.import", ActorRole: actorRole, IdempotencyKey: idempotencyKey}, []journal.Event{{Type: "graph.imported", Payload: payload}}, s.Now(), &expectedHead)
 	if err != nil {
@@ -551,6 +567,13 @@ func (s *Service) validateGraphProviders(graph domain.GraphDefinition) error {
 		ref, ok := declared[node.Kind]
 		if !ok || ref.Version != metadata.Version || ref.SchemaHash != metadata.SchemaHash {
 			return fmt.Errorf("custom node kind %s must bind its compiled provider version and schema hash", node.Kind)
+		}
+		outcomes := make([]sdk.OutcomeDefinition, 0, len(node.Outcomes))
+		for _, outcome := range node.Outcomes {
+			outcomes = append(outcomes, sdk.OutcomeDefinition{ID: outcome.ID, Class: outcome.Class})
+		}
+		if err := s.ProviderRuntime.ValidateNodeKind(node.Kind, node.Inputs, outcomes); err != nil {
+			return fmt.Errorf("custom node %s: %w", node.ID, err)
 		}
 	}
 	return nil

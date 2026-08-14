@@ -47,6 +47,12 @@ func TestUserCanInitializeImportGraphAndReadFrontier(t *testing.T) {
 	if _, err := run("graph", "import", "--root", root, "--file", graphPath, "--idempotency-key", "import-example"); err != nil {
 		t.Fatalf("import: %v", err)
 	}
+	if err := os.Remove(graphPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("graph", "import", "--root", root, "--file", graphPath, "--idempotency-key", "import-example"); err != nil {
+		t.Fatalf("idempotent import must not reread a missing source: %v", err)
+	}
 	out, err := run("frontier", "--root", root, "--format", "json")
 	if err != nil {
 		t.Fatalf("frontier: %v", err)
@@ -60,6 +66,14 @@ func TestUserCanInitializeImportGraphAndReadFrontier(t *testing.T) {
 	}
 	if !strings.Contains(compatibility, `"currentWriteSegmentSchema":2`) || !strings.Contains(compatibility, `"projectionSchemaVersion":3`) {
 		t.Fatalf("compatibility report lacks current schemas: %s", compatibility)
+	}
+	providers, err := run("provider", "list", "--root", root)
+	if err != nil || !strings.Contains(providers, `"id":"manual"`) || !strings.Contains(providers, `"stability":"experimental"`) {
+		t.Fatalf("provider inventory missing built-ins: %v %s", err, providers)
+	}
+	conformance, err := run("provider", "check", "--root", root)
+	if err != nil || !strings.Contains(conformance, `"healthy":true`) {
+		t.Fatalf("provider conformance failed: %v %s", err, conformance)
 	}
 }
 

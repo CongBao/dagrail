@@ -45,6 +45,9 @@ func Register(provider any) error {
 	if metadata.ID == "" || metadata.Version == "" || metadata.SchemaHash == "" {
 		return fmt.Errorf("provider metadata requires ID, version and schema hash")
 	}
+	if metadata.Stability != "" && metadata.Stability != sdk.StabilityExperimental && metadata.Stability != sdk.StabilityStable {
+		return fmt.Errorf("provider metadata stability must be experimental or stable")
+	}
 	kinds := make([]string, 0, 7)
 	if _, ok := provider.(sdk.NodeKindProvider); ok {
 		kinds = append(kinds, NodeKind)

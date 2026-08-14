@@ -39,6 +39,9 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Dependency cut**: only the transitive graph region frozen by an unsatisfied failure path.
 - **Harness**: an agent host such as Codex, Claude Code, or GitHub Copilot CLI.
 - **Provider**: compile-in extension returning pure decisions, proposals, or receipts without direct storage access.
+- **Provider Runtime**: bounded invocation boundary that validates schemas, deadlines,
+  panics, output size, sensitive fields, and stable schema hashes before an application
+  service may use a provider result.
 
 ## Invariants
 

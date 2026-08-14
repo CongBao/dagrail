@@ -2,10 +2,29 @@ package providers
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/CongBao/dagrail/sdk"
 )
+
+const (
+	KindNodeKind   = "node-kind"
+	KindPredicate  = "predicate"
+	KindPolicy     = "policy"
+	KindEffect     = "effect"
+	KindHarness    = "harness"
+	KindImporter   = "graph-importer"
+	KindProjection = "projection"
+)
+
+type InventoryItem struct {
+	Kind           string       `json:"kind"`
+	Metadata       sdk.Metadata `json:"metadata"`
+	Callable       bool         `json:"callable"`
+	SchemaRequired bool         `json:"schemaRequired"`
+	HasSchema      bool         `json:"hasSchema"`
+}
 
 type Registry struct {
 	mu          sync.RWMutex
@@ -29,7 +48,17 @@ func metadataOK(metadata sdk.Metadata) error {
 	if metadata.ID == "" || metadata.Version == "" || metadata.SchemaHash == "" {
 		return fmt.Errorf("provider metadata requires ID, version and schema hash")
 	}
+	if metadata.Stability != "" && metadata.Stability != sdk.StabilityExperimental && metadata.Stability != sdk.StabilityStable {
+		return fmt.Errorf("provider metadata stability must be experimental or stable")
+	}
 	return nil
+}
+
+func normalizedMetadata(metadata sdk.Metadata) sdk.Metadata {
+	if metadata.Stability == "" {
+		metadata.Stability = sdk.StabilityExperimental
+	}
+	return metadata
 }
 
 func register[T any](items map[string]T, metadata sdk.Metadata, provider T, kind string) error {
@@ -167,4 +196,46 @@ func (r *Registry) Harness(id string) (sdk.HarnessAdapter, bool) {
 	defer r.mu.RUnlock()
 	value, ok := r.harnesses[id]
 	return value, ok
+}
+
+func inventoryItem(kind string, provider any, callable, schemaRequired bool) InventoryItem {
+	metadata := normalizedMetadata(provider.(interface{ Metadata() sdk.Metadata }).Metadata())
+	_, hasSchema := provider.(sdk.InputSchemaProvider)
+	return InventoryItem{Kind: kind, Metadata: metadata, Callable: callable, SchemaRequired: schemaRequired, HasSchema: hasSchema}
+}
+
+// Inventory returns a stable, sorted snapshot without exposing provider
+// implementations to callers.
+func (r *Registry) Inventory() []InventoryItem {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	items := make([]InventoryItem, 0, len(r.nodeKinds)+len(r.predicates)+len(r.policies)+len(r.effects)+len(r.harnesses)+len(r.importers)+len(r.projections))
+	for _, provider := range r.nodeKinds {
+		items = append(items, inventoryItem(KindNodeKind, provider, false, true))
+	}
+	for _, provider := range r.predicates {
+		items = append(items, inventoryItem(KindPredicate, provider, true, true))
+	}
+	for _, provider := range r.policies {
+		items = append(items, inventoryItem(KindPolicy, provider, true, true))
+	}
+	for _, provider := range r.effects {
+		items = append(items, inventoryItem(KindEffect, provider, false, false))
+	}
+	for _, provider := range r.harnesses {
+		items = append(items, inventoryItem(KindHarness, provider, false, false))
+	}
+	for _, provider := range r.importers {
+		items = append(items, inventoryItem(KindImporter, provider, true, true))
+	}
+	for _, provider := range r.projections {
+		items = append(items, inventoryItem(KindProjection, provider, true, true))
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Kind == items[j].Kind {
+			return items[i].Metadata.ID < items[j].Metadata.ID
+		}
+		return items[i].Kind < items[j].Kind
+	})
+	return items
 }

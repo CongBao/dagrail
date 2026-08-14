@@ -75,6 +75,18 @@ func (s *Service) Doctor() DoctorReport {
 			add("harness-provider:"+harnessID, "pass", "registered; native capabilities require a separate probe")
 		}
 	}
+	providerReport := s.ProviderRuntime.Check()
+	if providerReport.Healthy {
+		add("provider-conformance", "pass", fmt.Sprintf("%d provider capabilities checked", len(providerReport.Checks)))
+	} else {
+		failed := 0
+		for _, check := range providerReport.Checks {
+			if check.Status == "fail" {
+				failed++
+			}
+		}
+		add("provider-conformance", "fail", fmt.Sprintf("%d provider capabilities failed conformance", failed))
+	}
 	return report
 }
 

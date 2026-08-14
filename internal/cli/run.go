@@ -14,6 +14,7 @@ import (
 	"github.com/CongBao/dagrail/internal/hook"
 	"github.com/CongBao/dagrail/internal/install"
 	"github.com/CongBao/dagrail/internal/mcpserver"
+	internalproviders "github.com/CongBao/dagrail/internal/providers"
 	"github.com/CongBao/dagrail/internal/service"
 	"github.com/CongBao/dagrail/internal/version"
 )
@@ -50,6 +51,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runHarness(args[1:], stdout, stderr)
 	case "plugin":
 		return runPlugin(args[1:], stdout, stderr)
+	case "provider":
+		return runProvider(args[1:], stdout, stderr)
 	case "journal":
 		return runJournal(args[1:], stdout, stderr)
 	case "evidence":
@@ -62,6 +65,52 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return writeJSON(stdout, map[string]string{"version": version.Version, "commit": version.Commit, "date": version.Date})
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
+	}
+}
+
+func runProvider(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: dagrail provider <list|check|invoke>")
+	}
+	flags := flag.NewFlagSet("provider "+args[0], flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	root := flags.String("root", ".", "project root")
+	kind := flags.String("kind", "", "predicate, policy, graph-importer, or projection")
+	id := flags.String("id", "", "provider ID")
+	input := flags.String("input", "{}", "provider invocation JSON")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	s, err := service.Open(*root)
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "list":
+		return writeJSON(stdout, map[string]any{"providers": s.ProviderInventory()})
+	case "check":
+		report := s.CheckProviders()
+		if err := writeJSON(stdout, report); err != nil {
+			return err
+		}
+		if !report.Healthy {
+			return fmt.Errorf("provider conformance checks failed")
+		}
+		return nil
+	case "invoke":
+		if *kind == "" || *id == "" {
+			return fmt.Errorf("--kind and --id are required")
+		}
+		if !json.Valid([]byte(*input)) {
+			return fmt.Errorf("--input must be valid JSON")
+		}
+		result, err := s.InvokeProvider(context.Background(), internalproviders.Invocation{Kind: *kind, ProviderID: *id, Input: json.RawMessage(*input)})
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, result)
+	default:
+		return fmt.Errorf("unknown provider command %q", args[0])
 	}
 }
 
@@ -394,19 +443,29 @@ func runGraph(args []string, stdout, stderr io.Writer) error {
 		flags.SetOutput(stderr)
 		root := flags.String("root", ".", "project root")
 		file := flags.String("file", "", "graph file")
+		providerID := flags.String("provider", "", "compiled graph importer provider ID")
+		providerInput := flags.String("input", "{}", "graph importer provider input JSON")
 		key := flags.String("idempotency-key", "", "idempotency key")
 		role := flags.String("actor-role", "", "actor role")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		if *file == "" {
-			return fmt.Errorf("--file is required")
+		if (*file == "") == (*providerID == "") {
+			return fmt.Errorf("exactly one of --file or --provider is required")
 		}
 		s, err := service.Open(*root)
 		if err != nil {
 			return err
 		}
-		result, err := s.ImportGraph(*file, *key, *role)
+		var result any
+		if *providerID != "" {
+			if !json.Valid([]byte(*providerInput)) {
+				return fmt.Errorf("--input must be valid JSON")
+			}
+			result, err = s.ImportGraphFromProvider(context.Background(), *providerID, json.RawMessage(*providerInput), *key, *role)
+		} else {
+			result, err = s.ImportGraph(*file, *key, *role)
+		}
 		if err != nil {
 			return err
 		}
@@ -596,12 +655,13 @@ func runDoctor(args []string, stdout, stderr io.Writer) error {
 }
 
 func runProjection(args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "rebuild" {
-		return fmt.Errorf("usage: dagrail projection rebuild")
+	if len(args) == 0 {
+		return fmt.Errorf("usage: dagrail projection <rebuild|render>")
 	}
-	flags := flag.NewFlagSet("projection rebuild", flag.ContinueOnError)
+	flags := flag.NewFlagSet("projection "+args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
+	providerID := flags.String("provider", "", "compiled projection provider ID")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -609,10 +669,24 @@ func runProjection(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := s.RebuildProjection(); err != nil {
-		return err
+	switch args[0] {
+	case "rebuild":
+		if err := s.RebuildProjection(); err != nil {
+			return err
+		}
+		return writeJSON(stdout, map[string]any{"rebuilt": true})
+	case "render":
+		if *providerID == "" {
+			return fmt.Errorf("--provider is required")
+		}
+		result, err := s.RenderProjection(context.Background(), *providerID)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, result)
+	default:
+		return fmt.Errorf("unknown projection command %q", args[0])
 	}
-	return writeJSON(stdout, map[string]any{"rebuilt": true})
 }
 
 func writeJSON(writer io.Writer, value any) error {
