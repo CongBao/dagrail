@@ -1,9 +1,13 @@
 package service
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/CongBao/dagrail/internal/domain"
 )
 
 const maxDefinitionBytes = 8 * 1024 * 1024
@@ -32,4 +36,20 @@ func readDefinitionFile(path string) ([]byte, error) {
 		return nil, fmt.Errorf("definition input exceeds %d bytes", maxDefinitionBytes)
 	}
 	return raw, nil
+}
+
+func decodeStrictAuthorityJSON(raw []byte, target any) error {
+	if err := domain.ValidateAuthorityJSON(raw); err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return fmt.Errorf("JSON input has trailing content")
+	}
+	return nil
 }

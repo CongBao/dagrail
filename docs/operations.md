@@ -21,6 +21,20 @@ Explorer and opens the default browser; use `--open=false` when automatic launch
 wanted. See [`ui.md`](ui.md) for bounded APIs, deep links, filtering, and large-graph
 behavior.
 
+## Audit the local trust boundary
+
+```sh
+dagrail security audit --root .
+dagrail journal verify --root .
+```
+
+The security audit reports typed pass/warn/fail checks without absolute project paths
+or authority payloads. On POSIX it verifies that runtime authority is owner-only and
+that the repository locator is not group/other writable. On Windows it verifies file
+structure and explicitly delegates ACL inspection to host tooling. `journal verify`
+returns the verified head, compatibility window, canonical export size, and digest.
+Neither command establishes actor identity or malicious same-user isolation.
+
 ## Manage incidents
 
 An incident has a stable owner Role, deadline, attempt budget, progress metric, and

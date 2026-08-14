@@ -14,6 +14,14 @@ import (
 const (
 	GraphAPIVersion = "dagrail.io/v1alpha1"
 	GraphKind       = "Graph"
+
+	// Authority JSON is persisted or used to derive a durable decision. These
+	// limits keep every caller on the same duplicate-key, nesting, and scalar
+	// rules instead of relying on decoder-specific behavior.
+	MaxAuthorityDepth       = 64
+	MaxAuthorityValues      = 1_000_000
+	MaxAuthorityStringBytes = 1 << 20
+	MaxAuthorityKeyBytes    = 1024
 )
 
 type GraphDefinition struct {
@@ -117,6 +125,13 @@ var builtinKinds = map[string]bool{
 func IsBuiltinNodeKind(kind string) bool { return builtinKinds[kind] }
 
 func ValidateGraph(g GraphDefinition) error {
+	raw, err := json.Marshal(g)
+	if err != nil {
+		return fmt.Errorf("encode graph authority: %w", err)
+	}
+	if err := RejectSensitiveFields(raw); err != nil {
+		return fmt.Errorf("graph authority: %w", err)
+	}
 	if g.APIVersion != GraphAPIVersion || g.Kind != GraphKind {
 		return fmt.Errorf("graph must be %s %s", GraphAPIVersion, GraphKind)
 	}
@@ -166,9 +181,6 @@ func ValidateGraph(g GraphDefinition) error {
 		}
 		if len(node.Inputs) > 0 {
 			if err := ValidateAuthorityJSON(node.Inputs); err != nil {
-				return fmt.Errorf("node %s inputs: %w", node.ID, err)
-			}
-			if err := RejectSensitiveFields(node.Inputs); err != nil {
 				return fmt.Errorf("node %s inputs: %w", node.ID, err)
 			}
 		}
@@ -290,18 +302,63 @@ func ValidateGraph(g GraphDefinition) error {
 func ValidateAuthorityJSON(raw json.RawMessage) error {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return fmt.Errorf("invalid JSON: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return fmt.Errorf("invalid trailing JSON content")
-	}
 	limit := new(big.Int).SetInt64(9_007_199_254_740_991)
-	var walk func(any) error
-	walk = func(current any) error {
-		switch typed := current.(type) {
+	values := 0
+	var walk func(int) error
+	walk = func(depth int) error {
+		if depth > MaxAuthorityDepth {
+			return fmt.Errorf("authority JSON nesting exceeds %d levels", MaxAuthorityDepth)
+		}
+		token, err := decoder.Token()
+		if err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+		values++
+		if values > MaxAuthorityValues {
+			return fmt.Errorf("authority JSON exceeds %d values", MaxAuthorityValues)
+		}
+		switch typed := token.(type) {
+		case json.Delim:
+			switch typed {
+			case '{':
+				seen := map[string]struct{}{}
+				for decoder.More() {
+					keyToken, err := decoder.Token()
+					if err != nil {
+						return fmt.Errorf("invalid JSON object: %w", err)
+					}
+					key, ok := keyToken.(string)
+					if !ok {
+						return fmt.Errorf("invalid JSON object key")
+					}
+					if len([]byte(key)) > MaxAuthorityKeyBytes {
+						return fmt.Errorf("authority JSON key exceeds %d bytes", MaxAuthorityKeyBytes)
+					}
+					if _, exists := seen[key]; exists {
+						return fmt.Errorf("authority JSON contains duplicate key %q", key)
+					}
+					seen[key] = struct{}{}
+					if err := walk(depth + 1); err != nil {
+						return err
+					}
+				}
+				closing, err := decoder.Token()
+				if err != nil || closing != json.Delim('}') {
+					return fmt.Errorf("invalid JSON object terminator")
+				}
+			case '[':
+				for decoder.More() {
+					if err := walk(depth + 1); err != nil {
+						return err
+					}
+				}
+				closing, err := decoder.Token()
+				if err != nil || closing != json.Delim(']') {
+					return fmt.Errorf("invalid JSON array terminator")
+				}
+			default:
+				return fmt.Errorf("unexpected JSON delimiter %q", typed)
+			}
 		case json.Number:
 			text := typed.String()
 			if strings.ContainsAny(text, ".eE") {
@@ -311,25 +368,26 @@ func ValidateAuthorityJSON(raw json.RawMessage) error {
 			if !ok || new(big.Int).Abs(integer).Cmp(limit) > 0 {
 				return fmt.Errorf("authority integer %s exceeds the RFC 8785 safe range; encode it as a string", text)
 			}
-		case map[string]any:
-			for _, child := range typed {
-				if err := walk(child); err != nil {
-					return err
-				}
-			}
-		case []any:
-			for _, child := range typed {
-				if err := walk(child); err != nil {
-					return err
-				}
+		case string:
+			if len([]byte(typed)) > MaxAuthorityStringBytes {
+				return fmt.Errorf("authority JSON string exceeds %d bytes", MaxAuthorityStringBytes)
 			}
 		}
 		return nil
 	}
-	return walk(value)
+	if err := walk(0); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return fmt.Errorf("invalid trailing JSON content")
+	}
+	return nil
 }
 
 func RejectSensitiveFields(raw json.RawMessage) error {
+	if err := ValidateAuthorityJSON(raw); err != nil {
+		return err
+	}
 	var value any
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return fmt.Errorf("invalid JSON: %w", err)

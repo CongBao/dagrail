@@ -1,11 +1,14 @@
 package install_test
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/CongBao/dagrail/internal/install"
+	"github.com/CongBao/dagrail/internal/version"
 )
 
 func TestInstallPlanUsesOneAbsoluteRuntimeForAllThreeHarnesses(t *testing.T) {
@@ -24,6 +27,31 @@ func TestInstallPlanUsesOneAbsoluteRuntimeForAllThreeHarnesses(t *testing.T) {
 		}
 		if len(plan.PluginInstall) == 0 || len(plan.MCPRemove) == 0 {
 			t.Fatalf("incomplete install plan: %#v", plan)
+		}
+	}
+}
+
+func TestPublishedPluginMetadataMatchesRuntimeVersion(t *testing.T) {
+	for _, path := range []string{
+		"../../.codex-plugin/plugin.json",
+		"../../.claude-plugin/plugin.json",
+		"../../.plugin/plugin.json",
+		"../../.github/plugin/marketplace.json",
+	} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var value map[string]any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			t.Fatal(err)
+		}
+		observed, _ := value["version"].(string)
+		if metadata, ok := value["metadata"].(map[string]any); ok {
+			observed, _ = metadata["version"].(string)
+		}
+		if observed != version.Version {
+			t.Fatalf("%s version %q does not match runtime %q", path, observed, version.Version)
 		}
 	}
 }

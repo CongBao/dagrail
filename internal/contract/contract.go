@@ -32,20 +32,22 @@ type ContextBudget struct {
 }
 
 type Report struct {
-	APIVersion string                   `json:"apiVersion"`
-	Kind       string                   `json:"kind"`
-	Version    string                   `json:"version"`
-	Stability  string                   `json:"stability"`
-	Graph      VersionedSurface         `json:"graph"`
-	CLI        VersionedSurface         `json:"cli"`
-	UI         DocumentedSurface        `json:"ui"`
-	Provider   VersionedSurface         `json:"providerSdk"`
-	Journal    JournalContract          `json:"journal"`
-	Projection int                      `json:"projectionSchema"`
-	MCP        []mcpserver.ToolContract `json:"mcpTools"`
-	Contexts   []ContextBudget          `json:"contextBudgets"`
-	Commands   []string                 `json:"topLevelCommands"`
-	Promises   []string                 `json:"compatibilityPromises"`
+	APIVersion          string                   `json:"apiVersion"`
+	Kind                string                   `json:"kind"`
+	Version             string                   `json:"version"`
+	Stability           string                   `json:"stability"`
+	Graph               VersionedSurface         `json:"graph"`
+	CLI                 VersionedSurface         `json:"cli"`
+	UI                  DocumentedSurface        `json:"ui"`
+	Security            DocumentedSurface        `json:"security"`
+	JournalVerification DocumentedSurface        `json:"journalVerification"`
+	Provider            VersionedSurface         `json:"providerSdk"`
+	Journal             JournalContract          `json:"journal"`
+	Projection          int                      `json:"projectionSchema"`
+	MCP                 []mcpserver.ToolContract `json:"mcpTools"`
+	Contexts            []ContextBudget          `json:"contextBudgets"`
+	Commands            []string                 `json:"topLevelCommands"`
+	Promises            []string                 `json:"compatibilityPromises"`
 }
 
 func Current() Report {
@@ -62,6 +64,18 @@ func Current() Report {
 			SchemaPath:   "schemas/ui-api-v1beta1.schema.json",
 			SchemaSHA256: "sha256:8831e13abdd73698f75e0f97b406f0cfba96c055a31223494272b6d69f0dd5d4",
 		},
+		Security: DocumentedSurface{
+			APIVersion:   "dagrail.io/security/v1alpha1",
+			Stability:    "additive-local-audit",
+			SchemaPath:   "schemas/security-audit-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:134f80395106519ded01e9bb1c7ac518e3bc36fd415c106610d453e8a6b8597a",
+		},
+		JournalVerification: DocumentedSurface{
+			APIVersion:   "dagrail.io/journal-verification/v1alpha1",
+			Stability:    "additive-read-only",
+			SchemaPath:   "schemas/journal-verification-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:2a05bc82ce706e9744745fc2aee3a32f52498dc47971dc4131a416983c0782c4",
+		},
 		Provider: VersionedSurface{APIVersion: sdk.APIVersion, Stability: "source-compatible"},
 		Journal: JournalContract{
 			ReadableSegmentSchemas: []int{journal.LegacySegmentSchemaVersion, journal.CurrentSegmentSchemaVersion},
@@ -76,7 +90,7 @@ func Current() Report {
 			{View: "worker", Bytes: 8192},
 		},
 		Commands: []string{
-			"action", "backup", "context", "contract", "doctor", "evidence", "frontier", "graph", "harness", "history", "hook", "incident", "init", "inspect", "journal", "mcp", "observe", "plugin", "pre-wait", "projection", "provider", "reconcile", "role", "signature", "status", "ui", "version",
+			"action", "backup", "context", "contract", "doctor", "evidence", "frontier", "graph", "harness", "history", "hook", "incident", "init", "inspect", "journal", "mcp", "observe", "plugin", "pre-wait", "projection", "provider", "reconcile", "role", "security", "signature", "status", "ui", "version",
 		},
 		Promises: []string{
 			"journal history is never rewritten by an upgrade",
@@ -84,6 +98,8 @@ func Current() Report {
 			"stable provider interfaces receive only source-compatible additions through the v0.x beta line",
 			"documented JSON fields are additive unless a new API version is selected",
 			"the v1beta1 explorer remains loopback-only and exposes no lifecycle mutation route",
+			"security audit diagnostics omit authority payloads and absolute project paths",
+			"the local security boundary does not claim malicious same-user or multi-tenant isolation",
 			"SQLite remains disposable and rebuildable from the verified journal",
 		},
 	}

@@ -2,6 +2,38 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.12.0 — 2026-08-14
+
+### Added
+
+- a versioned threat model and ADR that make the host OS account the explicit outer
+  trust boundary without claiming malicious same-user or multi-tenant isolation;
+- `dagrail security audit`, a schema-bound, path-redacted report over runtime-data,
+  journal, projection, locator, action-secret, and observation-locator structure and
+  permissions;
+- a richer schema-bound `journal verify` report with head identity, schema window,
+  canonical export byte count, and SHA-256 digest;
+- per-push known-vulnerability, module-integrity, and forbidden/unknown dependency
+  license gates using pinned security tools.
+- a `go1.26.6` toolchain floor so source and release builds include the standard-library
+  fixes required by the vulnerability gate.
+
+### Security
+
+- authority JSON now rejects duplicate keys, excessive nesting/value/key/string
+  counts, unknown closed-envelope fields, trailing documents, and unsafe numeric forms;
+- journal loading rejects symlinks, excessive segment/event counts, segments over
+  16 MiB, and canonical unknown fields that are not covered by the typed hash envelope;
+- project locators are bounded strict YAML; MCP stdio is capped per message and per
+  tool input; CLI JSON flags, hooks, signatures, effect bindings, reconciliation
+  evidence, and receipts have explicit limits;
+- SQLite and the HMAC action secret are hardened to owner-only files on POSIX, and
+  sensitive effect evidence is screened before it reaches immutable authority;
+- Graph metadata, project locators, Role bindings, incident text, commands, and event
+  payloads are screened at both entry-specific and final journal-write boundaries;
+- applied dynamic-graph authorization tokens are discarded before the revision event
+  is committed and never become journal authority.
+
 ## 0.11.0 — 2026-08-14
 
 ### Added

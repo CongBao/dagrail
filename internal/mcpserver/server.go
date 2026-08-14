@@ -1,10 +1,13 @@
 package mcpserver
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 
 	"github.com/CongBao/dagrail/internal/domain"
@@ -13,6 +16,11 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/gowebpki/jcs"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+const (
+	MaxMCPMessageBytes   = 1 << 20
+	MaxMCPToolInputBytes = 64 * 1024
 )
 
 type ContextInput struct {
@@ -56,24 +64,31 @@ type ToolContract struct {
 
 func ToolContracts() []ToolContract {
 	return []ToolContract{
-		toolContract("dag_context", schemaFor[ContextInput](), true),
-		toolContract("dag_inspect", schemaFor[InspectInput](), true),
-		toolContract("dag_apply", schemaFor[ApplyInput](), false),
+		toolContract("dag_context", contextSchema(), true),
+		toolContract("dag_inspect", inspectSchema(), true),
+		toolContract("dag_apply", applySchema(), false),
 		toolContract("dag_graph_change", graphChangeSchema(), false),
-		toolContract("dag_reconcile", schemaFor[ReconcileInput](), false),
+		toolContract("dag_reconcile", reconcileSchema(), false),
 		toolContract("dag_pre_wait", schemaFor[PreWaitInput](), true),
 	}
 }
 
 func Run(ctx context.Context, svc *service.Service) error {
-	return New(svc).Run(ctx, &mcp.StdioTransport{})
+	transport := &mcp.IOTransport{
+		Reader: &readCloser{Reader: newBoundedNDJSONReader(os.Stdin, MaxMCPMessageBytes)},
+		Writer: nopWriteCloser{Writer: os.Stdout},
+	}
+	return New(svc).Run(ctx, transport)
 }
 
 func New(svc *service.Service) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "dagrail", Title: "DAGrail", Description: "LLM-led local DAG governance control plane.", Version: version.Version, WebsiteURL: "https://github.com/CongBao/dagrail"}, &mcp.ServerOptions{Instructions: "Read bounded context, choose only a returned allowed action, preserve idempotency keys, reconcile unknown effects, and run dag_pre_wait before yielding.", Capabilities: &mcp.ServerCapabilities{}})
 	closed, openWorld := false, false
 	readOnly := true
-	mcp.AddTool(server, &mcp.Tool{Name: "dag_context", Title: "Get DAG context", Description: "Return a byte-bounded role or node context and allowed actions.", InputSchema: schemaFor[ContextInput](), Annotations: &mcp.ToolAnnotations{Title: "Get DAG context", ReadOnlyHint: true, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(_ context.Context, _ *mcp.CallToolRequest, input ContextInput) (*mcp.CallToolResult, service.ContextEnvelope, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_context", Title: "Get DAG context", Description: "Return a byte-bounded role or node context and allowed actions.", InputSchema: contextSchema(), Annotations: &mcp.ToolAnnotations{Title: "Get DAG context", ReadOnlyHint: true, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(_ context.Context, _ *mcp.CallToolRequest, input ContextInput) (*mcp.CallToolResult, service.ContextEnvelope, error) {
+		if err := validateToolInput(input); err != nil {
+			return nil, service.ContextEnvelope{}, err
+		}
 		raw, err := svc.ContextSince(input.View, input.RoleID, input.NodeID, input.BudgetBytes, input.Cursor)
 		if err != nil {
 			return nil, service.ContextEnvelope{}, err
@@ -82,16 +97,25 @@ func New(svc *service.Service) *mcp.Server {
 		err = json.Unmarshal(raw, &output)
 		return nil, output, err
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "dag_inspect", Title: "Inspect DAG object", Description: "Resolve one opaque node, attempt, execution package, reuse decision, artifact, effect, incident, resource, or history ref.", InputSchema: schemaFor[InspectInput](), Annotations: &mcp.ToolAnnotations{Title: "Inspect DAG object", ReadOnlyHint: true, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(_ context.Context, _ *mcp.CallToolRequest, input InspectInput) (*mcp.CallToolResult, InspectOutput, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_inspect", Title: "Inspect DAG object", Description: "Resolve one opaque node, attempt, execution package, reuse decision, artifact, effect, incident, resource, or history ref.", InputSchema: inspectSchema(), Annotations: &mcp.ToolAnnotations{Title: "Inspect DAG object", ReadOnlyHint: true, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(_ context.Context, _ *mcp.CallToolRequest, input InspectInput) (*mcp.CallToolResult, InspectOutput, error) {
+		if err := validateToolInput(input); err != nil {
+			return nil, InspectOutput{}, err
+		}
 		value, err := svc.Inspect(input.Ref)
 		return nil, InspectOutput{Value: value}, err
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "dag_apply", Title: "Apply allowed DAG action", Description: "Apply one version-bound allowed action with a stable idempotency key.", InputSchema: schemaFor[ApplyInput](), Annotations: &mcp.ToolAnnotations{Title: "Apply allowed DAG action", ReadOnlyHint: false, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(_ context.Context, _ *mcp.CallToolRequest, input ApplyInput) (*mcp.CallToolResult, service.ActionResult, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_apply", Title: "Apply allowed DAG action", Description: "Apply one version-bound allowed action with a stable idempotency key.", InputSchema: applySchema(), Annotations: &mcp.ToolAnnotations{Title: "Apply allowed DAG action", ReadOnlyHint: false, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(_ context.Context, _ *mcp.CallToolRequest, input ApplyInput) (*mcp.CallToolResult, service.ActionResult, error) {
+		if err := validateToolInput(input); err != nil {
+			return nil, service.ActionResult{}, err
+		}
 		raw, _ := json.Marshal(input.Input)
 		output, err := svc.ApplyAction(input.ActionRef, raw, input.IdempotencyKey)
 		return nil, output, err
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "dag_graph_change", Title: "Preview or apply graph change", Description: "Preview a typed GraphPatch or apply it with the returned impact token.", InputSchema: graphChangeSchema(), Annotations: &mcp.ToolAnnotations{Title: "Preview or apply graph change", ReadOnlyHint: false, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(_ context.Context, _ *mcp.CallToolRequest, input GraphChangeInput) (*mcp.CallToolResult, service.GraphImpact, error) {
+		if err := validateToolInput(input); err != nil {
+			return nil, service.GraphImpact{}, err
+		}
 		raw, _ := json.Marshal(input.Patch)
 		file, err := os.CreateTemp(svc.Project.DataDir, "mcp-graph-patch-*.json")
 		if err != nil {
@@ -113,7 +137,10 @@ func New(svc *service.Service) *mcp.Server {
 		output, err := svc.ApplyGraphChange(path, input.Token, input.IdempotencyKey, input.ActorRole)
 		return nil, output, err
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "dag_reconcile", Title: "Reconcile effect", Description: "Reconcile one prepared or unknown effect through native observation or typed adapter evidence.", InputSchema: schemaFor[ReconcileInput](), Annotations: &mcp.ToolAnnotations{Title: "Reconcile effect", ReadOnlyHint: false, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(_ context.Context, _ *mcp.CallToolRequest, input ReconcileInput) (*mcp.CallToolResult, domain.EffectAction, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_reconcile", Title: "Reconcile effect", Description: "Reconcile one prepared or unknown effect through native observation or typed adapter evidence.", InputSchema: reconcileSchema(), Annotations: &mcp.ToolAnnotations{Title: "Reconcile effect", ReadOnlyHint: false, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(_ context.Context, _ *mcp.CallToolRequest, input ReconcileInput) (*mcp.CallToolResult, domain.EffectAction, error) {
+		if err := validateToolInput(input); err != nil {
+			return nil, domain.EffectAction{}, err
+		}
 		raw, _ := json.Marshal(input.Receipt)
 		output, err := svc.ReconcileEffect(input.ActionID, raw, input.IdempotencyKey)
 		return nil, output, err
@@ -136,8 +163,118 @@ func schemaFor[T any]() *jsonschema.Schema {
 func graphChangeSchema() *jsonschema.Schema {
 	schema := schemaFor[GraphChangeInput]()
 	schema.Properties["mode"].Enum = []any{"preview", "apply"}
+	setMaxLength(schema, "mode", 16)
+	setMaxLength(schema, "token", 16*1024)
+	setMaxLength(schema, "idempotency_key", 256)
+	setMaxLength(schema, "actor_role", 256)
 	return schema
 }
+
+func contextSchema() *jsonschema.Schema {
+	schema := schemaFor[ContextInput]()
+	setMaxLength(schema, "view", 32)
+	setMaxLength(schema, "role_id", 256)
+	setMaxLength(schema, "node_id", 256)
+	return schema
+}
+
+func inspectSchema() *jsonschema.Schema {
+	schema := schemaFor[InspectInput]()
+	setMaxLength(schema, "ref", 2048)
+	return schema
+}
+
+func applySchema() *jsonschema.Schema {
+	schema := schemaFor[ApplyInput]()
+	setMaxLength(schema, "action_ref", 16*1024)
+	setMaxLength(schema, "idempotency_key", 256)
+	return schema
+}
+
+func reconcileSchema() *jsonschema.Schema {
+	schema := schemaFor[ReconcileInput]()
+	setMaxLength(schema, "action_id", 256)
+	setMaxLength(schema, "idempotency_key", 256)
+	return schema
+}
+
+func setMaxLength(schema *jsonschema.Schema, property string, value int) {
+	if candidate := schema.Properties[property]; candidate != nil {
+		candidate.MaxLength = &value
+	}
+}
+
+func validateToolInput(input any) error {
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return fmt.Errorf("encode MCP tool input: %w", err)
+	}
+	if len(raw) > MaxMCPToolInputBytes {
+		return fmt.Errorf("MCP tool input exceeds %d bytes", MaxMCPToolInputBytes)
+	}
+	if err := domain.ValidateAuthorityJSON(raw); err != nil {
+		return fmt.Errorf("MCP tool input: %w", err)
+	}
+	return nil
+}
+
+type boundedNDJSONReader struct {
+	reader  *bufio.Reader
+	limit   int
+	pending []byte
+}
+
+func newBoundedNDJSONReader(reader io.Reader, limit int) *boundedNDJSONReader {
+	return &boundedNDJSONReader{reader: bufio.NewReaderSize(reader, 64*1024), limit: limit}
+}
+
+func (r *boundedNDJSONReader) Read(target []byte) (int, error) {
+	if len(r.pending) == 0 {
+		line, err := r.readLine()
+		if err != nil {
+			return 0, err
+		}
+		r.pending = line
+	}
+	n := copy(target, r.pending)
+	r.pending = r.pending[n:]
+	return n, nil
+}
+
+func (r *boundedNDJSONReader) readLine() ([]byte, error) {
+	line := make([]byte, 0, 4096)
+	for {
+		chunk, err := r.reader.ReadSlice('\n')
+		if len(line)+len(chunk) > r.limit {
+			for err == bufio.ErrBufferFull {
+				_, err = r.reader.ReadSlice('\n')
+			}
+			return nil, fmt.Errorf("MCP message exceeds %d bytes", r.limit)
+		}
+		line = append(line, chunk...)
+		switch err {
+		case nil:
+			return line, nil
+		case bufio.ErrBufferFull:
+			continue
+		case io.EOF:
+			if len(line) == 0 {
+				return nil, io.EOF
+			}
+			return line, nil
+		default:
+			return nil, err
+		}
+	}
+}
+
+type readCloser struct{ io.Reader }
+
+func (*readCloser) Close() error { return nil }
+
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
 
 func toolContract(name string, schema *jsonschema.Schema, readOnly bool) ToolContract {
 	raw, err := json.Marshal(schema)

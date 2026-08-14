@@ -41,7 +41,7 @@ type GraphImpact struct {
 	AddedEdges       []string `json:"addedEdges,omitempty"`
 	RemovedEdges     []string `json:"removedEdges,omitempty"`
 	DependencyCut    []string `json:"dependencyCut,omitempty"`
-	Token            string   `json:"token"`
+	Token            string   `json:"token,omitempty"`
 	ExpiresAt        string   `json:"expiresAt"`
 }
 
@@ -139,6 +139,9 @@ func (s *Service) ApplyGraphChange(path, token, idempotencyKey, actorRole string
 		return GraphImpact{}, fmt.Errorf("proposed graph revision does not match impact token")
 	}
 	impact.CurrentRevision, impact.ProposedRevision, impact.ExpiresAt = state.GraphRevision, revision, tokenPayload.ExpiresAt
+	// The impact token is a short-lived authorization proof for apply. It has
+	// served its purpose at this point and must never become journal authority.
+	impact.Token = ""
 	payload, _ := json.Marshal(struct {
 		Graph            domain.GraphDefinition `json:"graph"`
 		Revision         string                 `json:"revision"`
@@ -216,7 +219,11 @@ func decodeGraphPatch(path string) (GraphPatch, string, error) {
 
 func decodeGraphPatchBytes(data []byte) (GraphPatch, string, error) {
 	var patch GraphPatch
-	if err := json.Unmarshal(data, &patch); err != nil || patch.APIVersion == "" {
+	if json.Valid(data) {
+		if err := decodeStrictAuthorityJSON(data, &patch); err != nil {
+			return patch, "", err
+		}
+	} else {
 		var value any
 		if yamlErr := yaml.Unmarshal(data, &value); yamlErr != nil {
 			return patch, "", yamlErr
@@ -225,7 +232,10 @@ func decodeGraphPatchBytes(data []byte) (GraphPatch, string, error) {
 		if marshalErr != nil {
 			return patch, "", marshalErr
 		}
-		if err := json.Unmarshal(normalized, &patch); err != nil {
+		if len(normalized) > maxDefinitionBytes {
+			return patch, "", fmt.Errorf("normalized definition input exceeds %d bytes", maxDefinitionBytes)
+		}
+		if err := decodeStrictAuthorityJSON(normalized, &patch); err != nil {
 			return patch, "", err
 		}
 	}

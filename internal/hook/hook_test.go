@@ -39,3 +39,15 @@ func TestHookInjectsOnlyBoundedStatePointerAndNeverEchoesPrompt(t *testing.T) {
 		t.Fatalf("hook echoed prompt or omitted liveness guard: %s", raw)
 	}
 }
+
+func TestHookSilentlyRejectsOversizedOrTrailingHostPayloads(t *testing.T) {
+	for _, payload := range []string{
+		`{"cwd":"` + strings.Repeat("x", hook.MaxInputBytes) + `"}`,
+		`{} {}`,
+	} {
+		output, active, err := hook.Run("codex", "session-start", ".", strings.NewReader(payload))
+		if err != nil || active || output != (hook.Output{}) {
+			t.Fatalf("hostile hook payload escaped fail-safe handling: active=%t output=%+v err=%v", active, output, err)
+		}
+	}
+}

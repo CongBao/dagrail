@@ -388,11 +388,11 @@ func writeRuntimeReceipt(dataRoot string, receipt RuntimeReceipt) error {
 
 func readRuntimeReceipt(dataRoot string) (RuntimeReceipt, error) {
 	path := filepath.Join(dataRoot, "install-receipt.json")
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return RuntimeReceipt{}, err
 	}
-	if !info.Mode().IsRegular() || info.Size() > 64*1024 {
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > 64*1024 {
 		return RuntimeReceipt{}, fmt.Errorf("invalid install receipt file")
 	}
 	raw, err := os.ReadFile(path)

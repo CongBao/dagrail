@@ -12,8 +12,8 @@ import (
 )
 
 func (s *Service) ProgressIncident(incidentID, actorRole, note string, madeProgress bool, idempotencyKey string) (domain.Incident, error) {
-	if strings.TrimSpace(note) == "" || len(note) > 1024 {
-		return domain.Incident{}, fmt.Errorf("progress note must be 1..1024 bytes")
+	if err := validateIncidentText("progress note", note, 1024); err != nil {
+		return domain.Incident{}, err
 	}
 	return s.updateIncident(incidentID, actorRole, idempotencyKey, "incident.progress", func(incident *domain.Incident, now time.Time) error {
 		if incident.Status != "open" {
@@ -37,8 +37,8 @@ func (s *Service) ProgressIncident(incidentID, actorRole, note string, madeProgr
 }
 
 func (s *Service) TripIncident(incidentID, actorRole, reason, idempotencyKey string) (domain.Incident, error) {
-	if strings.TrimSpace(reason) == "" || len(reason) > 512 {
-		return domain.Incident{}, fmt.Errorf("circuit reason must be 1..512 bytes")
+	if err := validateIncidentText("circuit reason", reason, 512); err != nil {
+		return domain.Incident{}, err
 	}
 	return s.updateIncident(incidentID, actorRole, idempotencyKey, "incident.trip", func(incident *domain.Incident, _ time.Time) error {
 		if incident.Status == "resolved" {
@@ -50,8 +50,8 @@ func (s *Service) TripIncident(incidentID, actorRole, reason, idempotencyKey str
 }
 
 func (s *Service) ResolveIncident(incidentID, actorRole, resolution, idempotencyKey string) (domain.Incident, error) {
-	if strings.TrimSpace(resolution) == "" || len(resolution) > 1024 {
-		return domain.Incident{}, fmt.Errorf("resolution must be 1..1024 bytes")
+	if err := validateIncidentText("resolution", resolution, 1024); err != nil {
+		return domain.Incident{}, err
 	}
 	return s.updateIncident(incidentID, actorRole, idempotencyKey, "incident.resolve", func(incident *domain.Incident, _ time.Time) error {
 		if incident.Status == "resolved" {
@@ -60,6 +60,20 @@ func (s *Service) ResolveIncident(incidentID, actorRole, resolution, idempotency
 		incident.Status, incident.Resolution = "resolved", resolution
 		return nil
 	})
+}
+
+func validateIncidentText(label, value string, maximum int) error {
+	if strings.TrimSpace(value) == "" || len([]byte(value)) > maximum {
+		return fmt.Errorf("%s must be 1..%d bytes", label, maximum)
+	}
+	raw, err := json.Marshal(map[string]string{"value": value})
+	if err != nil {
+		return fmt.Errorf("validate %s: %w", label, err)
+	}
+	if err := domain.RejectSensitiveFields(raw); err != nil {
+		return fmt.Errorf("%s contains prohibited material: %w", label, err)
+	}
+	return nil
 }
 
 func (s *Service) updateIncident(incidentID, actorRole, idempotencyKey, commandKind string, mutate func(*domain.Incident, time.Time) error) (domain.Incident, error) {

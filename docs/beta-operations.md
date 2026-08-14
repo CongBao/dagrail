@@ -1,15 +1,17 @@
 # Beta operations guide
 
-This checklist is the supported local operating path for DAGrail v0.10.
+This checklist is the supported local operating path for DAGrail v0.12.
 
 1. Validate and import a Graph Definition with a stable idempotency key.
 2. Inspect `dagrail contract`, `doctor`, `status`, and `frontier` before assigning work.
-3. Bind a stable Role to the current harness/session, then request bounded `context`.
-4. Select an action returned by `action list`; never synthesize an action reference.
-5. Checkpoint before handing an active Attempt to a replacement session.
-6. Treat every `unknown` effect as possibly completed. Reconcile it before retrying.
-7. Run `pre-wait` before declaring the graph idle or yielding an orchestrator session.
-8. Periodically create and verify a portable journal backup. SQLite is disposable.
+3. Run `dagrail security audit`; resolve every failed check and explicitly evaluate
+   Windows ACLs when the portable audit reports that they were not verified.
+4. Bind a stable Role to the current harness/session, then request bounded `context`.
+5. Select an action returned by `action list`; never synthesize an action reference.
+6. Checkpoint before handing an active Attempt to a replacement session.
+7. Treat every `unknown` effect as possibly completed. Reconcile it before retrying.
+8. Run `pre-wait` before declaring the graph idle or yielding an orchestrator session.
+9. Periodically create and verify a portable journal backup. SQLite is disposable.
 
 For an existing DAG, use the separate observe-only workflow before deciding whether to
 migrate. The beta controller remains local-first, cooperative, single-user, and

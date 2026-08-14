@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/journal-verification-v1alpha1.schema.json",
+  "title": "DAGrail journal verification v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "valid", "segments", "events", "headSequence", "canonicalExportBytes", "canonicalExportSha256", "compatibility"],
+  "properties": {
+    "apiVersion": {"const": "dagrail.io/journal-verification/v1alpha1"},
+    "kind": {"const": "JournalVerification"},
+    "valid": {"const": true},
+    "segments": {"type": "integer", "minimum": 0, "maximum": 1000000},
+    "events": {"type": "integer", "minimum": 0},
+    "headSequence": {"type": "integer", "minimum": 0},
+    "headHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "canonicalExportBytes": {"type": "integer", "minimum": 0},
+    "canonicalExportSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["journal", "projectionSchemaVersion", "currentProjectionSchemaVersion"],
+      "properties": {
+        "journal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["compatible", "segmentCount", "eventCount", "legacySegmentCount", "upcastedEventCount", "readableSegmentSchemas", "currentWriteSegmentSchema", "currentWriteEventSchema", "segmentSchemas", "eventSchemas"],
+          "properties": {
+            "compatible": {"const": true},
+            "segmentCount": {"type": "integer", "minimum": 0},
+            "eventCount": {"type": "integer", "minimum": 0},
+            "legacySegmentCount": {"type": "integer", "minimum": 0},
+            "upcastedEventCount": {"type": "integer", "minimum": 0},
+            "readableSegmentSchemas": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 1}, "uniqueItems": true},
+            "currentWriteSegmentSchema": {"type": "integer", "minimum": 1},
+            "currentWriteEventSchema": {"type": "integer", "minimum": 1},
+            "segmentSchemas": {"$ref": "#/$defs/countMap"},
+            "eventSchemas": {"$ref": "#/$defs/countMap"}
+          }
+        },
+        "projectionSchemaVersion": {"type": "integer", "minimum": 1},
+        "currentProjectionSchemaVersion": {"type": "integer", "minimum": 1}
+      }
+    }
+  },
+  "$defs": {
+    "countMap": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[1-9][0-9]*$"},
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    }
+  }
+}

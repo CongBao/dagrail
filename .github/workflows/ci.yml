@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.x'
+          go-version: '1.26.6'
           cache: true
       - run: go test ./...
         env:
@@ -46,7 +46,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.x'
+          go-version: '1.26.6'
       - run: go build -trimpath -o dist/dagrail-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/dagrail
         env:
           CGO_ENABLED: '0'
@@ -59,7 +59,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.x'
+          go-version: '1.26.6'
       - run: go test ./internal/journal -run RFC8785
       - run: go test ./internal/mcpserver -run TestServerExposesOnlySixHighLevelTypedTools
       - run: go vet ./...
@@ -99,7 +99,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.x'
+          go-version: '1.26.6'
           cache: true
       - name: Run bounded fuzz target
         run: go test ${{ matrix.package }} -run '^$' -fuzz '^${{ matrix.fuzz }}$' -fuzztime=5s
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.6'
+          cache: true
+      - name: Verify module checksums
+        run: go mod verify
+      - name: Reject reachable known vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+      - name: Reject forbidden or unknown dependency licenses
+        run: go run github.com/google/go-licenses/v2@v2.0.1 check ./cmd/dagrail --disallowed_types=forbidden,unknown

@@ -1,8 +1,10 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"time"
 
@@ -81,6 +83,9 @@ func (s *Service) CreateBackup() ([]byte, BackupReport, error) {
 	if err != nil {
 		return nil, BackupReport{}, err
 	}
+	if len(canonical)+1 > MaxPortableJournalBytes {
+		return nil, BackupReport{}, fmt.Errorf("backup exceeds %d bytes", MaxPortableJournalBytes)
+	}
 	report := backupReport(envelope)
 	return append(canonical, '\n'), report, nil
 }
@@ -124,8 +129,14 @@ func decodeBackup(data []byte) (BackupEnvelope, error) {
 		return BackupEnvelope{}, err
 	}
 	var envelope BackupEnvelope
-	if err := json.Unmarshal(data, &envelope); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil {
 		return envelope, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return envelope, fmt.Errorf("backup has trailing content")
 	}
 	if envelope.APIVersion != BackupAPIVersion || envelope.Kind != "JournalBackup" || envelope.Project.ProjectID == "" || envelope.Digest == "" {
 		return envelope, fmt.Errorf("invalid DAGrail backup envelope")

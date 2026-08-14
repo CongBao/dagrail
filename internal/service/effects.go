@@ -48,6 +48,9 @@ func (s *Service) applyEffectAction(state domain.State, payload actionRefPayload
 		if err := domain.ValidateAuthorityJSON(prepared.Binding); err != nil {
 			return ActionResult{}, fmt.Errorf("effect preparation returned invalid authority data: %w", err)
 		}
+		if err := domain.RejectSensitiveFields(prepared.Binding); err != nil {
+			return ActionResult{}, fmt.Errorf("effect preparation returned sensitive authority data: %w", err)
+		}
 	}
 	preparedRaw, _ := json.Marshal(prepared)
 	now := s.Now().UTC().Format(time.RFC3339Nano)
@@ -99,6 +102,17 @@ func (s *Service) applyEffectAction(state domain.State, payload actionRefPayload
 func (s *Service) ReconcileEffect(actionID string, evidence json.RawMessage, idempotencyKey string) (domain.EffectAction, error) {
 	if actionID == "" || idempotencyKey == "" {
 		return domain.EffectAction{}, fmt.Errorf("action and idempotency key are required")
+	}
+	if len(evidence) > 64*1024 {
+		return domain.EffectAction{}, fmt.Errorf("reconciliation evidence cannot exceed 64 KiB")
+	}
+	if len(evidence) > 0 {
+		if err := domain.ValidateAuthorityJSON(evidence); err != nil {
+			return domain.EffectAction{}, fmt.Errorf("reconciliation evidence: %w", err)
+		}
+		if err := domain.RejectSensitiveFields(evidence); err != nil {
+			return domain.EffectAction{}, fmt.Errorf("reconciliation evidence: %w", err)
+		}
 	}
 	state, _, err := s.load()
 	if err != nil {
@@ -169,6 +183,12 @@ func (s *Service) observeEffect(actionID string, receipt sdk.EffectReceipt, idem
 		return domain.EffectAction{}, err
 	}
 	receiptRaw, _ := json.Marshal(receipt)
+	if len(receiptRaw) > 64*1024 {
+		return domain.EffectAction{}, fmt.Errorf("effect receipt cannot exceed 64 KiB")
+	}
+	if err := domain.RejectSensitiveFields(receiptRaw); err != nil {
+		return domain.EffectAction{}, fmt.Errorf("effect receipt: %w", err)
+	}
 	now := s.Now().UTC()
 	payload, _ := json.Marshal(struct {
 		ActionID  string          `json:"actionId"`

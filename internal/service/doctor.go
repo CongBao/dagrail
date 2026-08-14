@@ -21,6 +21,8 @@ type DoctorReport struct {
 	Checks  []DoctorCheck `json:"checks"`
 }
 
+const MaxPortableJournalBytes = 256 * 1024 * 1024
+
 func (s *Service) Doctor() DoctorReport {
 	report := DoctorReport{Healthy: true}
 	add := func(name, status, detail string) {
@@ -52,14 +54,14 @@ func (s *Service) Doctor() DoctorReport {
 	if executable, err := os.Executable(); err != nil || !filepath.IsAbs(executable) {
 		add("runtime-path", "fail", "runtime path is not an absolute executable path")
 	} else {
-		add("runtime-path", "pass", executable)
+		add("runtime-path", "pass", "absolute executable path verified; value redacted")
 	}
 	if hookRuntime, err := exec.LookPath("dagrail"); err != nil || !filepath.IsAbs(hookRuntime) {
 		add("hook-runtime", "warn", "dagrail is not resolvable by an absolute path in a fresh host PATH; MCP remains absolute but hooks need PATH configuration")
 	} else if output, probeErr := exec.Command(hookRuntime, "version").Output(); probeErr != nil || len(output) == 0 {
 		add("hook-runtime", "fail", "fresh hook runtime version probe failed")
 	} else {
-		add("hook-runtime", "pass", hookRuntime)
+		add("hook-runtime", "pass", "fresh-process runtime probe passed; path redacted")
 	}
 	for _, providerID := range []string{"manual", "git.merge", "harness.codex", "harness.claude-code", "harness.copilot-cli"} {
 		if _, ok := s.Providers.Effect(providerID); !ok {
@@ -104,6 +106,9 @@ func (s *Service) ExportJournal() ([]byte, error) {
 		canonical, err := jcs.Transform(raw)
 		if err != nil {
 			return nil, err
+		}
+		if len(canonical)+1 > MaxPortableJournalBytes-len(result) {
+			return nil, fmt.Errorf("canonical journal export exceeds %d bytes", MaxPortableJournalBytes)
 		}
 		result = append(result, canonical...)
 		result = append(result, '\n')

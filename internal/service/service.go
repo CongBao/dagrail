@@ -531,7 +531,10 @@ func decodeGraph(path string) (domain.GraphDefinition, error) {
 
 func decodeGraphBytes(data []byte) (domain.GraphDefinition, error) {
 	var graph domain.GraphDefinition
-	if json.Unmarshal(data, &graph) == nil && graph.APIVersion != "" {
+	if json.Valid(data) {
+		if err := decodeStrictAuthorityJSON(data, &graph); err != nil {
+			return graph, err
+		}
 		return graph, nil
 	}
 	var intermediate any
@@ -542,7 +545,10 @@ func decodeGraphBytes(data []byte) (domain.GraphDefinition, error) {
 	if err != nil {
 		return graph, err
 	}
-	if err := json.Unmarshal(normalized, &graph); err != nil {
+	if len(normalized) > maxDefinitionBytes {
+		return graph, fmt.Errorf("normalized definition input exceeds %d bytes", maxDefinitionBytes)
+	}
+	if err := decodeStrictAuthorityJSON(normalized, &graph); err != nil {
 		return graph, err
 	}
 	return graph, nil

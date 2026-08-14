@@ -16,6 +16,7 @@ external side effect.
 | Longevity | 256 sequential segments and a repeated final command | sequence/hash chain verifies and retry remains idempotent |
 | Scale/context | 2,048 simultaneously ready nodes | full frontier is inspectable; orchestrator, worker, and reviewer contexts stay in budget |
 | Structured inputs | graph, patch, segment, and receipt fuzz corpora | no panic, unsafe receipt promotion, or unbounded accepted input |
+| Trust boundary | duplicate/unknown/deep inputs, oversized MCP/hook/journal frames, permission drift | closed rejection and path-redacted audit evidence |
 
 The rename is the logical commit point. A returned error after rename is deliberately
 ambiguous: callers reconcile by replaying the journal and repeating the stable
@@ -44,6 +45,15 @@ go test ./internal/harness -run '^$' -fuzz '^FuzzNativeReceiptConformance$' -fuz
 GitHub CI runs every seed corpus as part of normal tests and performs a bounded fuzz
 smoke for each target on every push. Longer fuzz runs are an investigation tool, not a
 claim that all possible failures have been proven absent.
+
+## Security qualification
+
+Every push verifies module checksums, runs pinned `govulncheck` against reachable code,
+and rejects dependencies classified as forbidden or unknown by the pinned license
+tool. The test suite validates published SecurityAudit and JournalVerification schemas,
+permission drift, duplicate keys, deep JSON, strict project locators, unknown journal
+fields, MCP frame limits, and fail-safe hook parsing. These gates cover known evidence;
+they do not prove the absence of undisclosed vulnerabilities or license mistakes.
 
 ## Explorer qualification
 

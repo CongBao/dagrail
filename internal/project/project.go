@@ -1,17 +1,22 @@
 package project
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 
+	"github.com/CongBao/dagrail/internal/domain"
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 )
 
 const markerPath = ".dagrail/project.yaml"
+const maxMarkerBytes = 64 * 1024
 
 type Config struct {
 	APIVersion string   `yaml:"apiVersion" json:"apiVersion"`
@@ -42,6 +47,9 @@ func Init(root, name string) (Project, error) {
 		return Project{}, err
 	}
 	config := Config{APIVersion: "dagrail.io/v1alpha1", Kind: "Project", ProjectID: uuid.NewString(), Name: name, Providers: []string{"core@0.1.0"}}
+	if err := validateConfigAuthority(config); err != nil {
+		return Project{}, err
+	}
 	data, err := yaml.Marshal(config)
 	if err != nil {
 		return Project{}, err
@@ -64,16 +72,34 @@ func Open(root string) (Project, error) {
 	if err != nil {
 		return Project{}, err
 	}
-	data, err := os.ReadFile(filepath.Join(projectRoot, filepath.FromSlash(markerPath)))
+	marker := filepath.Join(projectRoot, filepath.FromSlash(markerPath))
+	info, err := os.Lstat(marker)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > maxMarkerBytes {
+		return Project{}, fmt.Errorf("open DAGrail project: project locator must be a regular non-symlink file no larger than %d bytes", maxMarkerBytes)
+	}
+	data, err := os.ReadFile(marker)
 	if err != nil {
 		return Project{}, fmt.Errorf("open DAGrail project: %w", err)
 	}
 	var config Config
-	if err := yaml.Unmarshal(data, &config); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&config); err != nil {
 		return Project{}, fmt.Errorf("decode project locator: %w", err)
 	}
-	if config.APIVersion != "dagrail.io/v1alpha1" || config.Kind != "Project" || config.ProjectID == "" {
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return Project{}, fmt.Errorf("decode project locator: multiple YAML documents are not allowed")
+	}
+	if config.APIVersion != "dagrail.io/v1alpha1" || config.Kind != "Project" || config.ProjectID == "" || len(config.ProjectID) > 128 || len([]byte(config.Name)) > 1024 || len(config.Providers) > 256 {
 		return Project{}, fmt.Errorf("invalid DAGrail project locator")
+	}
+	if err := validateConfigAuthority(config); err != nil {
+		return Project{}, err
+	}
+	parsedProjectID, err := uuid.Parse(config.ProjectID)
+	if err != nil || parsedProjectID.String() != config.ProjectID {
+		return Project{}, fmt.Errorf("invalid DAGrail project UUID")
 	}
 	dataDir, err := projectDataDir(config.ProjectID)
 	if err != nil {
@@ -82,7 +108,21 @@ func Open(root string) (Project, error) {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return Project{}, err
 	}
+	if info, err := os.Lstat(dataDir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return Project{}, fmt.Errorf("project data directory must be a non-symlink directory")
+	}
 	return Project{Root: projectRoot, Config: config, DataDir: dataDir}, nil
+}
+
+func validateConfigAuthority(config Config) error {
+	raw, err := json.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("encode project locator: %w", err)
+	}
+	if err := domain.RejectSensitiveFields(raw); err != nil {
+		return fmt.Errorf("project locator contains prohibited material: %w", err)
+	}
+	return nil
 }
 
 func findRoot(start string) (string, error) {

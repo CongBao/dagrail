@@ -20,6 +20,8 @@ import (
 
 type Store struct{ path string }
 
+const MaxProjectionBytes int64 = 16 << 30
+
 var ErrFutureSchema = errors.New("projection schema was created by a newer DAGrail version")
 
 const CurrentSchemaVersion = 3
@@ -41,7 +43,17 @@ func Open(dataDir string) (*Store, error) {
 	defer func() { _ = fileLock.Unlock() }()
 
 	store := &Store{path: filepath.Join(dataDir, "projection.sqlite")}
+	if info, err := os.Lstat(store.path); err == nil {
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > MaxProjectionBytes {
+			return nil, fmt.Errorf("projection must be a regular non-symlink file no larger than %d bytes", MaxProjectionBytes)
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
 	if err := store.initialize(); err == nil {
+		if err := os.Chmod(store.path, 0o600); err != nil {
+			return nil, fmt.Errorf("harden projection permissions: %w", err)
+		}
 		return store, nil
 	} else if errors.Is(err, ErrFutureSchema) || isTransientSQLiteError(err) {
 		return nil, err
@@ -54,6 +66,9 @@ func Open(dataDir string) (*Store, error) {
 	_ = os.Remove(store.path + "-shm")
 	if err := store.initialize(); err != nil {
 		return nil, err
+	}
+	if err := os.Chmod(store.path, 0o600); err != nil {
+		return nil, fmt.Errorf("harden rebuilt projection permissions: %w", err)
 	}
 	return store, nil
 }

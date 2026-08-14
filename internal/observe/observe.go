@@ -377,8 +377,8 @@ func writeLocator(dataDir string, locator observationLocator) error {
 
 func readLocator(dataDir string) (observationLocator, error) {
 	path := filepath.Join(dataDir, "observation-locator.json")
-	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > 64*1024 {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > 64*1024 {
 		return observationLocator{}, fmt.Errorf("shadow observation locator is unavailable")
 	}
 	raw, err := os.ReadFile(path)

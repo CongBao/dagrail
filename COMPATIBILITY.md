@@ -18,6 +18,9 @@ digests, context budgets, and command inventory implemented by the current binar
 - Graph Definition v1alpha1 remains importable. A future graph format uses another
   `apiVersion` rather than silently changing existing semantics.
 - SQLite is never portable authority and may be rebuilt from the verified journal.
+- SecurityAudit and JournalVerification v1alpha1 fields are governed by the schema
+  paths and exact digests in `dagrail contract`. They are additive, read-only reports;
+  they do not upgrade the local-user boundary into an authorization system.
 
 ## Not promised
 

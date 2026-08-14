@@ -1,6 +1,6 @@
 # Contributing
 
-DAGrail requires Go 1.26 and uses test-driven changes at its durable seams.
+DAGrail requires Go 1.26.6 or newer and uses test-driven changes at its durable seams.
 
 Before opening a change:
 
@@ -9,6 +9,8 @@ gofmt -w .
 go test ./...
 go test -race ./...
 CGO_ENABLED=0 go build -trimpath ./cmd/dagrail
+go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+go run github.com/google/go-licenses/v2@v2.0.1 check ./cmd/dagrail --disallowed_types=forbidden,unknown
 ```
 
 Changes to graph, journal, provider, MCP, or receipt contracts require a compatibility test and an ADR when they are difficult to reverse. Never add a second authority beside the journal. New provider implementations must be deterministic or explicitly return an external receipt; they cannot receive storage handles.
@@ -27,6 +29,10 @@ Use `sdk.InputSchemaHash` for stable metadata and run `dagrail provider check` i
 custom distribution. Provider code never receives a storage or controller handle.
 
 Keep control-plane transactions short. Add focused tests first, converge locally, then run the full race and cross-build gates once.
+
+Public file and protocol readers require explicit byte/count/depth limits, duplicate
+and trailing-content tests, and closed decoding for typed envelopes. Security
+diagnostics must not emit authority payloads, secrets, or absolute project paths.
 
 The local UI is a read model, not a control surface. New UI endpoints must remain
 `GET`/`HEAD` only, loopback-bound, bounded, free of action references and event payloads,

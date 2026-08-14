@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +92,21 @@ func TestDefinitionInputsHaveAnExplicitSizeLimit(t *testing.T) {
 	}
 	if _, _, err := decodeGraphPatch(path); err == nil {
 		t.Fatal("oversized graph patch input was accepted")
+	}
+}
+
+func TestDefinitionInputsRejectUnknownAndDuplicateFields(t *testing.T) {
+	unknownGraph := []byte(`{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"strict"},"spec":{"roles":[],"nodes":[]},"unexpected":true}`)
+	if _, err := decodeGraphBytes(unknownGraph); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("unknown Graph field was accepted: %v", err)
+	}
+	duplicatePatch := []byte(`{"apiVersion":"dagrail.io/v1alpha1","kind":"GraphPatch","kind":"GraphPatch","operations":[{"op":"removeNode","nodeId":"B"}]}`)
+	if _, _, err := decodeGraphPatchBytes(duplicatePatch); err == nil || !strings.Contains(err.Error(), "duplicate key") {
+		t.Fatalf("duplicate GraphPatch field was accepted: %v", err)
+	}
+	unknownYAML := []byte("apiVersion: dagrail.io/v1alpha1\nkind: Graph\nmetadata:\n  name: strict\nspec:\n  roles: []\n  nodes: []\nunexpected: true\n")
+	if _, err := decodeGraphBytes(unknownYAML); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("unknown YAML Graph field was accepted: %v", err)
 	}
 }
 

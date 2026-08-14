@@ -44,6 +44,16 @@ func TestFrontierEvaluatesClosedTypedFacts(t *testing.T) {
 	}
 }
 
+func TestAuthorityJSONRejectsDuplicateKeysAndExcessiveNesting(t *testing.T) {
+	if err := ValidateAuthorityJSON(json.RawMessage(`{"kind":"first","kind":"second"}`)); err == nil || !strings.Contains(err.Error(), "duplicate key") {
+		t.Fatalf("duplicate authority key was accepted: %v", err)
+	}
+	nested := strings.Repeat(`{"child":`, MaxAuthorityDepth+2) + `null` + strings.Repeat(`}`, MaxAuthorityDepth+2)
+	if err := ValidateAuthorityJSON(json.RawMessage(nested)); err == nil || !strings.Contains(err.Error(), "nesting") {
+		t.Fatalf("excessively nested authority JSON was accepted: %v", err)
+	}
+}
+
 func TestPredicateFactRequiresKeyAndValue(t *testing.T) {
 	source := NodeDefinition{ID: "source", Outcomes: []Outcome{{ID: "ok", Class: "success"}}}
 	if err := validatePredicate(Predicate{Decision: &ValueMatch{}}, source); err == nil {
@@ -173,5 +183,20 @@ func TestSensitiveMaterialIsRejectedEvenUnderInnocuousFieldNames(t *testing.T) {
 	legitimate := json.RawMessage(`{"endpoint":"https://example.com/artifact?id=42&signal=healthy","digest":"sha256:0123456789abcdef","note":"token budget"}`)
 	if err := RejectSensitiveFields(legitimate); err != nil {
 		t.Fatalf("legitimate metadata was rejected: %v", err)
+	}
+}
+
+func TestGraphRejectsSensitiveMaterialOutsideNodeInputs(t *testing.T) {
+	graph := GraphDefinition{
+		APIVersion: GraphAPIVersion,
+		Kind:       GraphKind,
+		Metadata: GraphMetadata{
+			Name:         "unsafe",
+			ExternalRefs: []ExternalRef{{System: "web", Type: "requirement", ID: "one", URL: "https://example.com/item?access_token=secret"}},
+		},
+		Spec: GraphSpec{Nodes: []NodeDefinition{{ID: "done", Kind: "join", Title: "done", Outcomes: []Outcome{{ID: "ok", Class: "success"}}}}},
+	}
+	if err := ValidateGraph(graph); err == nil || !strings.Contains(err.Error(), "credential") {
+		t.Fatalf("sensitive graph metadata was accepted: %v", err)
 	}
 }

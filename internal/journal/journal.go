@@ -16,11 +16,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/CongBao/dagrail/internal/domain"
 	"github.com/gofrs/flock"
 	"github.com/gowebpki/jcs"
 )
 
 const hashDomain = "dagrail-journal-v1\x00"
+
+const (
+	MaxSegmentBytes     = 16 * 1024 * 1024
+	MaxSegmentCount     = 1_000_000
+	MaxEventsPerSegment = 10_000
+)
 
 const (
 	LegacySegmentSchemaVersion  = 1
@@ -99,6 +106,9 @@ func Open(dataDir, projectID string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
+	if info, err := os.Lstat(dir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("journal path must be a non-symlink directory")
+	}
 	lockPath := filepath.Join(dataDir, "writer.lock")
 	mutex, _ := processLocks.LoadOrStore(lockPath, &sync.Mutex{})
 	return &Store{dir: dir, projectID: projectID, lock: flock.New(lockPath), mu: mutex.(*sync.Mutex)}, nil
@@ -132,7 +142,14 @@ func (s *Store) Append(command Command, events []Event, now time.Time) (Segment,
 func (s *Store) AppendOnce(command Command, events []Event, now time.Time, expectedHead *string) (Segment, bool, error) {
 	var result Segment
 	created := false
-	err := s.WithLock(func() error {
+	commandRaw, err := json.Marshal(command)
+	if err != nil {
+		return result, false, err
+	}
+	if err := domain.RejectSensitiveFields(commandRaw); err != nil {
+		return result, false, fmt.Errorf("journal command contains prohibited material: %w", err)
+	}
+	err = s.WithLock(func() error {
 		segments, err := s.readAllUnlocked()
 		if err != nil {
 			return err
@@ -175,6 +192,9 @@ func (s *Store) AppendOnce(command Command, events []Event, now time.Time, expec
 		canonical, err := jcs.Transform(data)
 		if err != nil {
 			return err
+		}
+		if len(canonical) > MaxSegmentBytes {
+			return fmt.Errorf("journal segment exceeds %d bytes", MaxSegmentBytes)
 		}
 		name := fmt.Sprintf("%012d-%s.json", sequence, hash)
 		if err := s.injectFault("before-temp-create"); err != nil {
@@ -238,6 +258,9 @@ func (s *Store) ReadAll() ([]Segment, error) {
 
 // ValidateSegments verifies an in-memory portable journal without writing it.
 func ValidateSegments(projectID string, segments []Segment) error {
+	if len(segments) > MaxSegmentCount {
+		return fmt.Errorf("journal exceeds %d segments", MaxSegmentCount)
+	}
 	previous := ""
 	for index, segment := range segments {
 		if segment.Sequence != uint64(index+1) || segment.ProjectID != projectID || segment.PreviousHash != previous {
@@ -357,32 +380,65 @@ func (s *Store) Compatibility() (CompatibilityReport, error) {
 }
 
 func (s *Store) readAllUnlocked() ([]Segment, error) {
-	entries, err := os.ReadDir(s.dir)
+	directory, err := os.Open(s.dir)
 	if err != nil {
 		return nil, err
 	}
+	defer directory.Close()
 	names := make([]string, 0)
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
-			names = append(names, entry.Name())
+	for {
+		entries, readErr := directory.ReadDir(1024)
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
+				if entry.Type()&os.ModeSymlink != 0 {
+					return nil, fmt.Errorf("journal segment %s must not be a symlink", entry.Name())
+				}
+				names = append(names, entry.Name())
+				if len(names) > MaxSegmentCount {
+					return nil, fmt.Errorf("journal exceeds %d segments", MaxSegmentCount)
+				}
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return nil, readErr
 		}
 	}
 	sort.Strings(names)
 	segments := make([]Segment, 0, len(names))
 	previous := ""
 	for index, name := range names {
-		file, err := os.Open(filepath.Join(s.dir, name))
+		path := filepath.Join(s.dir, name)
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > MaxSegmentBytes {
+			return nil, fmt.Errorf("journal segment %s must be a regular file no larger than %d bytes", name, MaxSegmentBytes)
+		}
+		file, err := os.Open(path)
 		if err != nil {
 			return nil, err
 		}
-		data, err := io.ReadAll(file)
+		data, err := io.ReadAll(io.LimitReader(file, MaxSegmentBytes+1))
 		_ = file.Close()
 		if err != nil {
 			return nil, err
 		}
-		var segment Segment
-		if err := json.Unmarshal(data, &segment); err != nil {
+		if len(data) > MaxSegmentBytes {
+			return nil, fmt.Errorf("journal segment %s exceeds %d bytes", name, MaxSegmentBytes)
+		}
+		if err := domain.ValidateAuthorityJSON(data); err != nil {
 			return nil, fmt.Errorf("decode journal segment %s: %w", name, err)
+		}
+		var segment Segment
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&segment); err != nil {
+			return nil, fmt.Errorf("decode journal segment %s: %w", name, err)
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			return nil, fmt.Errorf("decode journal segment %s: trailing content", name)
 		}
 		canonical, err := jcs.Transform(data)
 		if err != nil || !bytes.Equal(data, canonical) {
@@ -412,6 +468,9 @@ func prepareEvents(events []Event) ([]Event, error) {
 	if len(events) == 0 {
 		return nil, errors.New("journal segment must contain at least one event")
 	}
+	if len(events) > MaxEventsPerSegment {
+		return nil, fmt.Errorf("journal segment exceeds %d events", MaxEventsPerSegment)
+	}
 	prepared := make([]Event, len(events))
 	for index, event := range events {
 		if event.SchemaVersion == 0 {
@@ -422,6 +481,9 @@ func prepareEvents(events []Event) ([]Event, error) {
 		}
 		if err := validateEvent(event); err != nil {
 			return nil, fmt.Errorf("event %d: %w", index, err)
+		}
+		if err := domain.RejectSensitiveFields(event.Payload); err != nil {
+			return nil, fmt.Errorf("event %d contains prohibited material: %w", index, err)
 		}
 		event.Payload = append(json.RawMessage(nil), event.Payload...)
 		prepared[index] = event
@@ -435,6 +497,9 @@ func validateStoredEvents(segmentSchema int, events []Event) error {
 	}
 	if len(events) == 0 {
 		return errors.New("journal segment must contain at least one event")
+	}
+	if len(events) > MaxEventsPerSegment {
+		return fmt.Errorf("journal segment exceeds %d events", MaxEventsPerSegment)
 	}
 	for index, event := range events {
 		switch segmentSchema {

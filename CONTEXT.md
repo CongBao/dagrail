@@ -63,6 +63,9 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **DAG Explorer**: loopback-only, mutation-free browser projection over bounded,
   deterministic v1beta1 query APIs. A selected Node deep link is a view locator, never
   a lifecycle capability.
+- **Security audit**: path-redacted v1alpha1 evidence over the cooperative OS-user
+  boundary, filesystem permissions, journal verification, and projection integrity;
+  it is not an authorization decision.
 
 ## Invariants
 
@@ -89,6 +92,10 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
     graph neighborhoods are bounded, `HEAD` shares GET validation, focused truncation
     preserves the selected Node, and no raw event/effect payload or action ref is
     returned.
+15. Authority JSON is duplicate-free, depth/value bounded, and closed where its
+    envelope is typed; no reducer consumes a journal segment before these checks.
+16. Roles do not isolate a malicious same-user process. Security diagnostics state
+    this boundary and never expose authority payloads or absolute project paths.
 
 ## Bounded contexts
 
@@ -100,8 +107,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Explorer projection**: bounded overview, Node inventory, focused topology, Node
   detail, payload-free timeline, and operational summaries with stable local deep links.
 - **Operational surface**: payload-free status/history, verified journal backup,
-  runtime upgrade/rollback, optional portable-file signatures, and a local read-only
-  UI derived from authority.
+  runtime upgrade/rollback, optional portable-file signatures, local security audit,
+  and a local read-only UI derived from authority.
 - **Migration observation**: bounded source digests, private locators, isolated shadow
   import, and repeatable drift verification without lifecycle control.
 

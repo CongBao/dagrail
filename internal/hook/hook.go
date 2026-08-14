@@ -3,6 +3,7 @@
 package hook
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -88,13 +89,24 @@ func Run(harness, event, root string, reader io.Reader) (Output, bool, error) {
 }
 
 func readObject(reader io.Reader) (map[string]any, error) {
-	decoder := json.NewDecoder(io.LimitReader(reader, MaxInputBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(reader, MaxInputBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > MaxInputBytes {
+		return nil, fmt.Errorf("hook input exceeds %d bytes", MaxInputBytes)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	var value map[string]any
 	if err := decoder.Decode(&value); err != nil {
 		if err == io.EOF {
 			return map[string]any{}, nil
 		}
 		return nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("hook input has trailing content")
 	}
 	return value, nil
 }

@@ -82,6 +82,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runProjection(args[1:], stdout, stderr)
 	case "doctor":
 		return runDoctor(args[1:], stdout, stderr)
+	case "security":
+		return runSecurity(args[1:], stdout, stderr)
 	case "version":
 		return writeJSON(stdout, map[string]string{"version": version.Version, "commit": version.Commit, "date": version.Date})
 	default:
@@ -371,8 +373,8 @@ func runProvider(args []string, stdout, stderr io.Writer) error {
 		if *kind == "" || *id == "" {
 			return fmt.Errorf("--kind and --id are required")
 		}
-		if !json.Valid([]byte(*input)) {
-			return fmt.Errorf("--input must be valid JSON")
+		if !validBoundedJSON(*input, 64*1024) {
+			return fmt.Errorf("--input must be valid JSON no larger than 64 KiB")
 		}
 		result, err := s.InvokeProvider(context.Background(), internalproviders.Invocation{Kind: *kind, ProviderID: *id, Input: json.RawMessage(*input)})
 		if err != nil {
@@ -547,8 +549,8 @@ func runReconcile(args []string, stdout, stderr io.Writer) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if !json.Valid([]byte(*receipt)) {
-		return fmt.Errorf("--receipt must be valid JSON")
+	if !validBoundedJSON(*receipt, 64*1024) {
+		return fmt.Errorf("--receipt must be valid JSON no larger than 64 KiB")
 	}
 	s, err := service.Open(*root)
 	if err != nil {
@@ -663,8 +665,8 @@ func runAction(args []string, stdout, stderr io.Writer) error {
 		}
 		return writeJSON(stdout, value)
 	case "apply":
-		if !json.Valid([]byte(*input)) {
-			return fmt.Errorf("--input must be valid JSON")
+		if !validBoundedJSON(*input, 64*1024) {
+			return fmt.Errorf("--input must be valid JSON no larger than 64 KiB")
 		}
 		value, err := s.ApplyAction(*ref, json.RawMessage(*input), *key)
 		if err != nil {
@@ -741,8 +743,8 @@ func runGraph(args []string, stdout, stderr io.Writer) error {
 		}
 		var result any
 		if *providerID != "" {
-			if !json.Valid([]byte(*providerInput)) {
-				return fmt.Errorf("--input must be valid JSON")
+			if !validBoundedJSON(*providerInput, 64*1024) {
+				return fmt.Errorf("--input must be valid JSON no larger than 64 KiB")
 			}
 			result, err = s.ImportGraphFromProvider(context.Background(), *providerID, json.RawMessage(*providerInput), *key, *role)
 		} else {
@@ -873,15 +875,11 @@ func runJournal(args []string, stdout, stderr io.Writer) error {
 	}
 	switch args[0] {
 	case "verify":
-		segments, err := s.VerifyJournal()
+		report, err := s.VerifyJournalReport()
 		if err != nil {
 			return err
 		}
-		compatibility, err := s.Compatibility()
-		if err != nil {
-			return err
-		}
-		return writeJSON(stdout, map[string]any{"valid": true, "segments": len(segments), "compatibility": compatibility})
+		return writeJSON(stdout, report)
 	case "compatibility":
 		compatibility, err := s.Compatibility()
 		if err != nil {
@@ -894,7 +892,7 @@ func runJournal(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		if *output != "" {
-			if err := os.WriteFile(*output, data, 0o600); err != nil {
+			if err := writeExclusive(*output, data, 0o600); err != nil {
 				return err
 			}
 			return writeJSON(stdout, map[string]any{"exported": true, "output": *output, "bytes": len(data)})
@@ -913,6 +911,30 @@ func runJournal(args []string, stdout, stderr io.Writer) error {
 	default:
 		return fmt.Errorf("unknown journal command %q", args[0])
 	}
+}
+
+func runSecurity(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 || args[0] != "audit" {
+		return fmt.Errorf("usage: dagrail security audit [--root path]")
+	}
+	flags := flag.NewFlagSet("security audit", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	root := flags.String("root", ".", "project root")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	s, err := service.Open(*root)
+	if err != nil {
+		return err
+	}
+	report := s.SecurityAudit()
+	if err := writeJSON(stdout, report); err != nil {
+		return err
+	}
+	if !report.Secure {
+		return fmt.Errorf("security audit found failed checks")
+	}
+	return nil
 }
 
 func runDoctor(args []string, stdout, stderr io.Writer) error {
@@ -975,4 +997,33 @@ func writeJSON(writer io.Writer, value any) error {
 	encoder := json.NewEncoder(writer)
 	encoder.SetEscapeHTML(false)
 	return encoder.Encode(value)
+}
+
+func validBoundedJSON(value string, limit int) bool {
+	return len([]byte(value)) <= limit && json.Valid([]byte(value))
+}
+
+func writeExclusive(path string, data []byte, mode os.FileMode) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	complete := false
+	defer func() {
+		if !complete {
+			_ = file.Close()
+			_ = os.Remove(path)
+		}
+	}()
+	if _, err := file.Write(data); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	complete = true
+	return nil
 }

@@ -2,9 +2,20 @@
 
 Please report vulnerabilities privately through GitHub Security Advisories for this repository. Do not include real secrets, PII, private journal segments, or artifact URLs in a public issue.
 
-## Alpha security boundary
+## Local beta security boundary
 
 DAGrail is currently a cooperative single-user local tool. Role capabilities prevent accidental collisions; they are not an authorization boundary against another local process running as the same OS user. Journal hashes detect mutation but do not prove an actor identity. External URIs and receipts may reveal metadata and should use least-privilege stores.
+
+Run `dagrail security audit --root .` to verify the declared boundary, owner-only POSIX
+runtime state, journal bytes, and SQLite integrity without emitting authority payloads
+or absolute project paths. Windows results deliberately report that ACL verification
+requires host tooling. See the versioned
+[`threat model`](docs/security/threat-model-v1.md) for assets, entry points, controls,
+and residual risks.
+
+Source and release builds require Go 1.26.6 or newer. The module toolchain directive
+prevents silently using earlier Go 1.26 standard libraries that fail the pinned
+`govulncheck` release gate.
 
 The controller rejects secret-like fields in effect requests and never intentionally stores prompts or chat transcripts. Operators remain responsible for keeping secrets outside Graph Definitions, checkpoints, journal exports, and evidence metadata.
 
@@ -16,6 +27,12 @@ material.
 Graph Definition and GraphPatch inputs must be regular files no larger than 8 MiB.
 Predicate ASTs may nest at most 64 levels. These limits bound parser and recursive
 validation exposure; they do not substitute for reviewing graph provenance.
+
+All authority JSON rejects duplicate keys, unsafe numeric forms, more than 64 nesting
+levels, excessive values, overlong keys/strings, and trailing documents. Journal
+segments are regular non-symlink canonical files limited to 16 MiB, 10,000 events per
+segment, and one million segments per local project. MCP stdio messages are limited to
+1 MiB and each high-level tool input to 64 KiB.
 
 Compile-in providers are trusted code, not a sandbox. The Provider Runtime validates
 JSON Schema, deadlines, panics, output size, and secret-like fields, but Go code that
@@ -59,6 +76,12 @@ Detached Ed25519 signatures are optional and cover the SHA-256 digest of exact f
 bytes with a DAGrail domain separator. Private keys must be protected separately and
 public keys must be distributed through a trusted channel. Export signatures neither
 encrypt data nor identify individual journal actors.
+
+Signing and verification stream regular payload files up to 1 GiB. Journal export
+refuses to overwrite an existing destination; operators should sign a newly created
+export rather than a mutable working file. In-memory portable journal exports and
+backups are capped at 256 MiB; larger-history streaming portability remains a later
+lifecycle-maturity capability.
 
 Observe-only migration opens caller-selected authority as regular files and rejects
 absolute or escaping entries, duplicate paths, symlink escape, and oversized inputs.

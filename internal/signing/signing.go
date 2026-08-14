@@ -19,11 +19,12 @@ import (
 )
 
 const (
-	APIVersion = "dagrail.io/v1alpha1"
-	Kind       = "DetachedSignature"
-	Algorithm  = "Ed25519"
-	Domain     = "dagrail-detached-signature-v1\x00"
-	keyLimit   = 64 * 1024
+	APIVersion                  = "dagrail.io/v1alpha1"
+	Kind                        = "DetachedSignature"
+	Algorithm                   = "Ed25519"
+	Domain                      = "dagrail-detached-signature-v1\x00"
+	keyLimit                    = 64 * 1024
+	MaxSignedPayloadBytes int64 = 1 << 30
 )
 
 type Envelope struct {
@@ -146,12 +147,12 @@ func VerifyFile(payloadPath, signaturePath, publicKeyPath string) (Report, error
 }
 
 func readPrivateKey(path string) (ed25519.PrivateKey, error) {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("private key is not a regular file")
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("private key is not a regular non-symlink file")
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		return nil, fmt.Errorf("private key permissions must not allow group or other access")
@@ -202,8 +203,8 @@ func fileDigest(path string) (string, error) {
 	}
 	defer file.Close()
 	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		return "", fmt.Errorf("payload must be a regular file")
+	if err != nil || !info.Mode().IsRegular() || info.Size() > MaxSignedPayloadBytes {
+		return "", fmt.Errorf("payload must be a regular file no larger than %d bytes", MaxSignedPayloadBytes)
 	}
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
@@ -218,12 +219,12 @@ func publicKeyID(key ed25519.PublicKey) string {
 }
 
 func readBounded(path string, limit int64) ([]byte, error) {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Size() > limit {
-		return nil, fmt.Errorf("file must be regular and no larger than %d bytes", limit)
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > limit {
+		return nil, fmt.Errorf("file must be regular, non-symlink, and no larger than %d bytes", limit)
 	}
 	return os.ReadFile(path)
 }

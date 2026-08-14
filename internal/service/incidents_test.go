@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -55,6 +56,16 @@ func TestIncidentProgressTripsCircuitAndCanResolve(t *testing.T) {
 	state, err := svc.State()
 	if err != nil || state.Incidents[incidentID].Resolution == "" {
 		t.Fatalf("incident did not replay: %v %+v", err, state.Incidents[incidentID])
+	}
+}
+
+func TestIncidentTextRejectsSensitiveMaterialBeforeStateAccess(t *testing.T) {
+	svc := &Service{}
+	if _, err := svc.ProgressIncident("incident", "worker", "Bearer abcdefghijklmnopqrstuvwxyz", false, "progress"); err == nil || !strings.Contains(err.Error(), "prohibited") {
+		t.Fatalf("sensitive incident note was accepted: %v", err)
+	}
+	if _, err := svc.TripIncident("incident", "worker", "github_pat_abcdefghijklmnopqrstuvwxyz", "trip"); err == nil || !strings.Contains(err.Error(), "prohibited") {
+		t.Fatalf("sensitive circuit reason was accepted: %v", err)
 	}
 }
 

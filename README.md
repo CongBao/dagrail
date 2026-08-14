@@ -39,13 +39,15 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 - recoverable external effects with explicit `unknown` and `reconcile` states;
 - an immutable RFC 8785 journal with disposable SQLite projections;
 - explainable readiness, owned incidents, bounded history, verified backups, and a
-  browser-opened read-only DAG Explorer with focused topology and deep links.
+  browser-opened read-only DAG Explorer with focused topology and deep links;
+- a path-redacted local security audit, strict hostile-input limits, and schema-bound
+  journal verification evidence;
 - executable crash/ambiguity, cross-process contention, corruption, fuzz, and
   large-graph qualification suites.
 
 ## Status
 
-`v0.11.0` is a beta candidate: local-first and single-user, with one native Go
+`v0.12.0` is a hardened beta candidate: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
 stdio MCP. Its operational surface adds explainable dependency blockers, incident
 circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
@@ -65,6 +67,12 @@ supports search, filters, stable local deep links, focused graph neighborhoods, 
 payload-free Node inspection while retaining a closed `GET`/`HEAD`-only HTTP surface.
 Its response/error schema and exact digest are published through `dagrail contract`.
 
+The v0.12 security surface publishes a versioned threat model and machine-readable
+audit schema. It closes public authority envelopes, bounds MCP frames and tool inputs,
+verifies owner-only POSIX runtime state, and makes vulnerability and license checks CI
+gates. The boundary remains cooperative: another malicious process running as the same
+OS user is outside the guarantee.
+
 The reliability suite kills writer subprocesses on both sides of the journal rename
 commit point, contends independent writers, corrupts disposable and authoritative
 stores, fuzzes graph/patch/journal/receipt inputs, and holds context output to fixed
@@ -73,7 +81,9 @@ budgets on a 2,048-node frontier. See
 
 ## Build
 
-Until the first GitHub release is published, build from source with Go 1.26 or newer:
+Until the first GitHub release is published, build from source with Go 1.26.6 or newer.
+The module toolchain directive prevents builds with a known-vulnerable earlier 1.26
+standard library:
 
 ```bash
 CGO_ENABLED=0 go build -trimpath -o dagrail ./cmd/dagrail
@@ -161,6 +171,7 @@ dagrail journal export --output journal.ndjson
 dagrail journal replay
 dagrail projection rebuild
 dagrail doctor
+dagrail security audit
 ```
 
 Create and verify a portable journal backup with `dagrail backup create` and
@@ -191,7 +202,7 @@ Callable providers run behind input-schema validation, a deadline, panic recover
 `stable` providers must bind the exact `InputSchema` hash. See
 [`docs/providers.md`](docs/providers.md) for the SDK and conformance workflow.
 
-DAGrail separates cooperative roles but does not claim malicious-user isolation.
+DAGrail separates cooperative roles but does not claim malicious same-user isolation.
 Journal hashing is tamper-evident; optional export signatures do not add journal actor
 identity. Remote stores, encryption, identity signatures, multi-tenancy, and
 cross-region availability are outside the alpha boundary.
@@ -200,6 +211,8 @@ See `CONTEXT.md` for the domain vocabulary, `docs/adr/` for architectural decisi
 [`docs/roadmap.md`](docs/roadmap.md) for planned milestones, and
 [`CHANGELOG.md`](CHANGELOG.md) for released changes. Public beta guarantees and explicit
 non-guarantees are in [`COMPATIBILITY.md`](COMPATIBILITY.md).
+The versioned security analysis is in
+[`docs/security/threat-model-v1.md`](docs/security/threat-model-v1.md).
 
 ## License
 

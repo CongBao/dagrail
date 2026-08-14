@@ -17,6 +17,7 @@ import (
 
 const (
 	DefaultCallTimeout    = 5 * time.Second
+	DefaultMaxInputBytes  = 8 * 1024 * 1024
 	DefaultMaxOutputBytes = 64 * 1024
 )
 
@@ -315,6 +316,9 @@ func validateProviderSchema(raw json.RawMessage) (string, error) {
 }
 
 func validateInput(schemaRaw, input json.RawMessage) error {
+	if len(input) > DefaultMaxInputBytes {
+		return fmt.Errorf("input exceeds %d bytes", DefaultMaxInputBytes)
+	}
 	if err := domain.ValidateAuthorityJSON(input); err != nil {
 		return err
 	}

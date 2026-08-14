@@ -2,6 +2,8 @@ module github.com/CongBao/dagrail
 
 go 1.26.0
 
+toolchain go1.26.6
+
 require (
 	github.com/gofrs/flock v0.13.0
 	github.com/google/jsonschema-go v0.4.3

@@ -84,6 +84,14 @@ func TestUserCanInitializeImportGraphAndReadFrontier(t *testing.T) {
 	if !strings.Contains(compatibility, `"currentWriteSegmentSchema":2`) || !strings.Contains(compatibility, `"projectionSchemaVersion":3`) {
 		t.Fatalf("compatibility report lacks current schemas: %s", compatibility)
 	}
+	verification, err := run("journal", "verify", "--root", root)
+	if err != nil || !strings.Contains(verification, `"kind":"JournalVerification"`) || !strings.Contains(verification, `"canonicalExportSha256":"sha256:`) {
+		t.Fatalf("journal verification lacks bounded integrity evidence: %v %s", err, verification)
+	}
+	securityAudit, err := run("security", "audit", "--root", root)
+	if err != nil || !strings.Contains(securityAudit, `"secure":true`) || !strings.Contains(securityAudit, `"multiTenantIsolation":false`) || strings.Contains(securityAudit, root) {
+		t.Fatalf("security audit is unhealthy or path-leaking: %v %s", err, securityAudit)
+	}
 	providers, err := run("provider", "list", "--root", root)
 	if err != nil || !strings.Contains(providers, `"id":"manual"`) || !strings.Contains(providers, `"stability":"experimental"`) {
 		t.Fatalf("provider inventory missing built-ins: %v %s", err, providers)

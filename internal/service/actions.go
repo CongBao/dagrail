@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -60,6 +61,13 @@ func (s *Service) BindRole(roleID, harness, sessionID string, ttl time.Duration,
 	}
 	if roleID == "" || harness == "" || sessionID == "" {
 		return domain.RoleLease{}, fmt.Errorf("role, harness and session are required")
+	}
+	bindingRaw, err := json.Marshal(map[string]string{"roleId": roleID, "harness": harness, "sessionId": sessionID})
+	if err != nil {
+		return domain.RoleLease{}, err
+	}
+	if err := domain.RejectSensitiveFields(bindingRaw); err != nil {
+		return domain.RoleLease{}, fmt.Errorf("role binding contains prohibited material: %w", err)
 	}
 	if ttl <= 0 {
 		ttl = 15 * time.Minute
@@ -228,6 +236,9 @@ func (s *Service) ListActions(roleID, nodeID string) (ActionList, error) {
 func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey string) (ActionResult, error) {
 	if idempotencyKey == "" {
 		return ActionResult{}, fmt.Errorf("idempotency key is required")
+	}
+	if len(input) > 64*1024 {
+		return ActionResult{}, fmt.Errorf("action input cannot exceed 64 KiB")
 	}
 	if err := domain.ValidateAuthorityJSON(input); err != nil {
 		return ActionResult{}, fmt.Errorf("action input: %w", err)
@@ -483,12 +494,16 @@ func activeAttempt(state domain.State, payload actionRefPayload) (domain.Attempt
 
 func (s *Service) actionSecret() ([]byte, error) {
 	path := filepath.Join(s.Project.DataDir, "action-secret")
-	if data, err := os.ReadFile(path); err == nil && len(data) == 32 {
+	if data, exists, err := readActionSecret(path); err != nil {
+		return nil, err
+	} else if exists {
 		return data, nil
 	}
 	var result []byte
 	err := s.Journal.WithLock(func() error {
-		if existing, readErr := os.ReadFile(path); readErr == nil && len(existing) == 32 {
+		if existing, exists, readErr := readActionSecret(path); readErr != nil {
+			return readErr
+		} else if exists {
 			result = existing
 			return nil
 		}
@@ -524,6 +539,30 @@ func (s *Service) actionSecret() ([]byte, error) {
 		return nil
 	})
 	return result, err
+}
+
+func readActionSecret(path string) ([]byte, bool, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() != 32 {
+		return nil, false, fmt.Errorf("action secret must be a regular non-symlink 32-byte file")
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		return nil, false, fmt.Errorf("action secret permissions must not allow group or other access")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(data) != 32 {
+		return nil, false, fmt.Errorf("action secret changed while being read")
+	}
+	return data, true, nil
 }
 
 func signActionRef(payload actionRefPayload, secret []byte) (string, error) {
