@@ -3,6 +3,7 @@ package effects
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/CongBao/dagrail/sdk"
@@ -50,6 +51,23 @@ func TestHarnessDispatchDoesNotConflateTransportWithVisibleDelivery(t *testing.T
 	}
 	if visible.Status != "confirmed" || visible.AcceptanceStatus != "pending" || visible.CompletionStatus != "pending" {
 		t.Fatalf("receipt states were collapsed: %#v", visible)
+	}
+}
+
+func TestHarnessPreparePreservesExplicitOneShotPermissionPolicy(t *testing.T) {
+	root := t.TempDir()
+	adapter := HarnessDispatch{Harness: fakeHarness{}}
+	request := sdk.EffectRequest{ProjectRoot: root, Request: json.RawMessage(`{"roleId":"worker","nodeId":"A","permissionPolicy":"allow-once"}`)}
+	prepared, err := adapter.Prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(prepared.Binding) || !strings.Contains(string(prepared.Binding), `"permissionPolicy":"allow-once"`) {
+		t.Fatalf("permission policy was not bound into prepared effect: %s", prepared.Binding)
+	}
+	request.Request = json.RawMessage(`{"roleId":"worker","nodeId":"A","permissionPolicy":"allow-always"}`)
+	if _, err := adapter.Prepare(context.Background(), request); err == nil {
+		t.Fatal("persistent automatic permission was accepted")
 	}
 }
 

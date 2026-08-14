@@ -23,13 +23,6 @@ const (
 	codexMessageLimit   = 16 * 1024 * 1024
 )
 
-type nativeCapability struct {
-	Available bool
-	Mode      string
-	Protocol  string
-	Reason    string
-}
-
 type codexStartRequest struct {
 	WorkingDirectory string
 	Prompt           string
@@ -46,7 +39,7 @@ type codexBackend interface {
 type appServerBackend struct{}
 
 func (appServerBackend) Probe(ctx context.Context, executable string) nativeCapability {
-	result := nativeCapability{Mode: "manual", Reason: "Codex app-server daemon/proxy capability unavailable"}
+	result := nativeCapability{Mode: "manual", Stability: "stable", Execution: "asynchronous-turn", Reason: "Codex app-server daemon/proxy capability unavailable"}
 	if executable == "" {
 		result.Reason = "Codex executable not found"
 		return result
@@ -59,7 +52,9 @@ func (appServerBackend) Probe(ctx context.Context, executable string) nativeCapa
 			return result
 		}
 	}
-	result.Available, result.Mode, result.Protocol, result.Reason = true, "native-daemon-proxy", codexProtocol, ""
+	result.Available, result.Dispatch, result.Resume, result.Inspect = true, true, true, true
+	result.Mode, result.Protocol, result.Reason = "native-daemon-proxy", codexProtocol, ""
+	result.ReceiptProof = []string{"session-created", "exact-user-message", "turn-observation"}
 	return result
 }
 
@@ -114,7 +109,7 @@ func startCodexSession(client *jsonRPCClient, request codexStartRequest) (sdk.Ef
 		}
 	}
 
-	receipt.ExternalID, receipt.TransportStatus, receipt.SessionStatus = threadID, "accepted", "created"
+	receipt.ExternalID, receipt.TransportAccepted, receipt.TransportStatus, receipt.SessionStatus = threadID, true, "accepted", "created"
 	result, err := client.Call("turn/start", map[string]any{
 		"threadId":            threadID,
 		"input":               []map[string]any{{"type": "text", "text": request.Prompt}},
@@ -145,7 +140,7 @@ func startCodexSession(client *jsonRPCClient, request codexStartRequest) (sdk.Ef
 }
 
 func observeCodexSession(client *jsonRPCClient, sessionID string, prior sdk.EffectReceipt, detail codexReceiptDetail) (sdk.EffectReceipt, error) {
-	receipt := sdk.EffectReceipt{Status: "unknown", ExternalID: sessionID, TransportStatus: "accepted", SessionStatus: "unknown", DeliveryStatus: "unknown", AcceptanceStatus: prior.AcceptanceStatus, CompletionStatus: "unknown"}
+	receipt := sdk.EffectReceipt{Status: "unknown", ExternalID: sessionID, TransportAccepted: true, TransportStatus: "accepted", SessionStatus: "unknown", DeliveryStatus: "unknown", AcceptanceStatus: prior.AcceptanceStatus, CompletionStatus: "unknown"}
 	if receipt.AcceptanceStatus == "" {
 		receipt.AcceptanceStatus = "pending"
 	}

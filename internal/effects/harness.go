@@ -21,6 +21,7 @@ type harnessBinding struct {
 	RoleID           string `json:"roleId"`
 	NodeID           string `json:"nodeId"`
 	SessionID        string `json:"sessionId,omitempty"`
+	PermissionPolicy string `json:"permissionPolicy,omitempty"`
 }
 
 func (h HarnessDispatch) Prepare(_ context.Context, request sdk.EffectRequest) (sdk.PreparedEffect, error) {
@@ -45,6 +46,9 @@ func (h HarnessDispatch) Prepare(_ context.Context, request sdk.EffectRequest) (
 	}
 	if binding.RoleID == "" || binding.NodeID == "" {
 		return sdk.PreparedEffect{}, fmt.Errorf("harness dispatch requires roleId and nodeId")
+	}
+	if binding.PermissionPolicy != "" && binding.PermissionPolicy != "deny" && binding.PermissionPolicy != "allow-once" {
+		return sdk.PreparedEffect{}, fmt.Errorf("permissionPolicy must be deny or allow-once")
 	}
 	binding.WorkingDirectory = workingDirectory
 	raw, _ := json.Marshal(binding)

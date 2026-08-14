@@ -2,6 +2,28 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.7.0 — 2026-08-14
+
+### Added
+
+- capability-gated Claude Code headless JSON start/resume with preselected session IDs,
+  synchronous completion receipts, and digest-only result metadata;
+- GitHub Copilot CLI ACP v1 stdio dispatch with exact JSON-RPC request binding,
+  synchronous stop-reason receipts, bounded streams, and default-deny permission calls;
+- a shared native-receipt conformance contract that prevents transport, session,
+  visible delivery, harness completion, and DAG acceptance from collapsing;
+- opt-in installed-Copilot ACP integration smoke coverage and protocol fixture tests.
+
+### Changed
+
+- first-party harness probes now report protocol stability, execution mode, and the
+  exact receipt proofs they can provide;
+- Copilot cross-process resume and observation remain explicit manual fallbacks: a
+  real stdio smoke showed that an advertised ACP `loadSession` bit does not make an
+  ephemeral ACP session durable across server processes;
+- Copilot tool permission requests default to one-shot rejection; only an explicit
+  graph request may select `allow-once`, and persistent automatic approval is rejected.
+
 ## 0.6.0 — 2026-08-14
 
 ### Added

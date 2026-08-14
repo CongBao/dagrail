@@ -42,14 +42,16 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 
 ## Status
 
-`v0.6.0` is a technical alpha: local-first and single-user, with one native Go
+`v0.7.0` is a technical alpha: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
 stdio MCP. Its operational surface adds explainable dependency blockers, incident
 circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
-read-only UI. A capability-gated Codex adapter now supports native thread start, resume,
-recipient-visible delivery proof, and read-only session observation while retaining an
-explicit manual fallback. The Provider Runtime executes schema-bound extensions without
-giving them controller storage handles.
+read-only UI. Capability-gated native adapters support Codex thread lifecycle, Claude
+Code headless completion turns, and GitHub Copilot ACP completion turns. One strict
+receipt contract keeps transport, session, delivery, completion, and DAG acceptance
+separate; every missing or unprovable capability retains an explicit manual fallback.
+The Provider Runtime executes schema-bound extensions without giving them controller
+storage handles.
 
 ## Build
 
@@ -94,9 +96,9 @@ dagrail inspect --root . reuse-decision:reuse_...
 
 | Harness | Integration |
 | --- | --- |
-| OpenAI Codex | Plugin, skills, hooks, CLI, and MCP |
-| Claude Code | Plugin, skills, hooks, CLI, and MCP |
-| GitHub Copilot CLI | Plugin, skills, hooks, CLI, and MCP |
+| OpenAI Codex | Plugin surface plus native asynchronous start, resume, and observation when app-server capabilities pass |
+| Claude Code | Plugin surface plus native synchronous headless start/resume when documented JSON flags pass |
+| GitHub Copilot CLI | Plugin surface plus experimental synchronous ACP dispatch; cross-process resume remains manual |
 | Other harnesses | CLI/MCP plus compile-in Go providers |
 
 After building the binary, install its shared runtime and selected harness projections:
@@ -111,7 +113,8 @@ dagrail plugin status
 Missing or unstable native dispatch capabilities fall back to an explicit launch/resume envelope. A transport response is never treated as recipient-visible delivery.
 
 Codex native lifecycle uses its local app-server only when daemon/proxy capabilities are
-present. Claude Code and GitHub Copilot remain explicit manual fallbacks in v0.6. See
+present. Claude and Copilot native turns run outside journal transactions and store only
+bounded receipt metadata and digests, never model output. See
 [`docs/harnesses.md`](docs/harnesses.md) for dispatch, receipt, reconcile, and replacement
 session semantics.
 

@@ -26,16 +26,16 @@ func (backend *fakeCodexBackend) Start(_ context.Context, _ string, request code
 	if sessionID == "" {
 		sessionID = "thread-new"
 	}
-	return sdk.EffectReceipt{Status: "confirmed", ExternalID: sessionID, RecipientVisible: true, DeliveryStatus: "visible"}, nil
+	return confirmedNativeReceipt(sessionID), nil
 }
 
 func (backend *fakeCodexBackend) Observe(_ context.Context, _ string, sessionID string, _ json.RawMessage) (sdk.EffectReceipt, error) {
 	backend.observed = sessionID
-	return sdk.EffectReceipt{Status: "confirmed", ExternalID: sessionID, RecipientVisible: true, DeliveryStatus: "visible"}, nil
+	return confirmedNativeReceipt(sessionID), nil
 }
 
 func TestCodexAdapterGatesNativeStartResumeAndObservation(t *testing.T) {
-	backend := &fakeCodexBackend{capability: nativeCapability{Available: true, Mode: "native-daemon-proxy", Protocol: codexProtocol}}
+	backend := &fakeCodexBackend{capability: nativeCapability{Available: true, Dispatch: true, Resume: true, Inspect: true, Mode: "native-daemon-proxy", Protocol: codexProtocol}}
 	adapter := &Adapter{id: "codex", command: "go", codex: backend}
 	request := sdk.EffectRequest{ActionID: "action-stable", Request: json.RawMessage(`{"workingDirectory":"/project","roleId":"worker","nodeId":"A"}`), PriorReceipt: json.RawMessage(`{"externalId":"thread-old"}`)}
 

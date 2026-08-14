@@ -27,3 +27,11 @@ harness-owned app-server daemon and stdio proxy. Receipt detail omits the genera
 prompt. Capability probing does not start a thread, and automated tests use protocol
 fixtures rather than an account. The adapter does not auto-approve commands or treat
 Codex turn completion as a DAG semantic outcome.
+
+Claude Code native dispatch uses documented headless JSON flags, has a two-hour turn
+deadline, and records only output size and digests. Existing Claude settings still
+govern tool permissions. Copilot native dispatch uses ACP v1 over a child process's
+stdio, caps each message at 16 MiB, and runs one synchronous turn. ACP permission
+requests default to `reject_once`; a graph may opt into `allow-once`, but DAGrail never
+selects `allow_always`. Copilot's ACP surface is a public preview and is reported as
+experimental. Neither adapter turns harness completion into Node acceptance.

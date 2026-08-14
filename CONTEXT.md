@@ -39,7 +39,9 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Resource lease**: ownership of bounded executor, browser, server, port, memory, disk, or another declared capacity.
 - **Dependency cut**: only the transitive graph region frozen by an unsatisfied failure path.
 - **Harness**: an agent host such as Codex, Claude Code, or GitHub Copilot CLI.
-- **Native harness receipt**: adapter observation binding a DAGrail action to exact host session, turn, and visible-message identities without promoting host completion into DAG acceptance.
+- **Native harness receipt**: adapter observation binding a DAGrail action to a proved
+  host session and either an exact visible message or the matching synchronous prompt
+  completion response, without promoting host completion into DAG acceptance.
 - **Provider**: compile-in extension returning pure decisions, proposals, or receipts without direct storage access.
 - **Provider Runtime**: bounded invocation boundary that validates schemas, deadlines,
   panics, output size, sensitive fields, and stable schema hashes before an application
@@ -55,6 +57,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 6. Hooks may discover, inject bounded context, and observe sessions; they cannot transition lifecycle state.
 7. Unknown event types and future unsupported journal schemas fail closed.
 8. Secrets, PII, full prompts, transcripts, and large artifact bodies do not enter authority.
+9. A harness protocol capability is not a durable lifecycle capability until it is
+   verified across the process boundary in which DAGrail will use it.
 
 ## Bounded contexts
 
