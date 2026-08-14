@@ -14,6 +14,10 @@ go run github.com/google/go-licenses/v2@v2.0.1 check ./cmd/dagrail --disallowed_
 go run ./cmd/dagrail qualify release --source .
 ```
 
+Changes to release packaging must also pass `go test ./internal/release` and preserve
+the exact ReleaseManifest/ReleaseVerification schema digests exposed by `dagrail
+contract`.
+
 Changes to graph, journal, provider, MCP, or receipt contracts require a compatibility test and an ADR when they are difficult to reverse. Never add a second authority beside the journal. New provider implementations must be deterministic or explicitly return an external receipt; they cannot receive storage handles.
 
 Journal readers must verify the exact stored bytes and hash chain before applying an

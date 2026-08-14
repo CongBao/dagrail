@@ -25,6 +25,12 @@ candidate still reports production adoption gaps explicitly.
 | Plugin projection | linked bytes, relative marketplace sources, local materialization mutation, missing hosts | exact bundle verification and closed conformance reasons with manual fallback |
 | Support evidence | private roots, project/graph/Node/actor identities, repeat export | schema-valid aggregate report, no private values, and exclusive file creation |
 | Disaster recovery | exact-prefix restore, legacy upcast, stale/deleted projection, independent rebuild | identical state and logical projection fingerprints without live mutation |
+| Release artifacts | missing/extra/mutated files, duplicate/unsorted checksums, unsafe archives, invalid SPDX, identity drift | one closed 12-payload manifest and schema-valid offline verification |
+
+Every push also builds the six real target binaries, packages them with release metadata,
+generates SPDX inventories through the pinned release action, aggregates the artifacts,
+and runs the same manifest generator/verifier used by tag publication. This rehearsal
+does not publish, attest, or claim that a user installed the resulting artifacts.
 
 The rename is the logical commit point. A returned error after rename is deliberately
 ambiguous: callers reconcile by replaying the journal and repeating the stable
@@ -48,6 +54,7 @@ go test ./internal/domain -run '^$' -fuzz '^FuzzValidateGraphJSON$' -fuzztime=30
 go test ./internal/journal -run '^$' -fuzz '^FuzzValidateSegments$' -fuzztime=30s
 go test ./internal/service -run '^$' -fuzz '^FuzzDecodeGraphPatch$' -fuzztime=30s
 go test ./internal/harness -run '^$' -fuzz '^FuzzNativeReceiptConformance$' -fuzztime=30s
+go test ./internal/release -run '^$' -fuzz '^FuzzReleaseMetadataInputs$' -fuzztime=30s
 ```
 
 GitHub CI runs every seed corpus as part of normal tests and performs a bounded fuzz

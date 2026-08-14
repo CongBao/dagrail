@@ -80,6 +80,11 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
   logical projection fingerprints.
 - **Release qualification**: a structural, schema-bound source and workflow audit that
   lists external production evidence separately and never marks it complete by proxy.
+- **Release manifest**: a closed distribution inventory binding the six binary archives,
+  six SPDX inventories, sorted checksums, tag, commit, and source-date epoch by digest.
+- **Release verification**: a path-free offline proof that the manifest, payload set,
+  archive metadata, expansion bounds, checksums, and SPDX envelopes agree; it does not
+  authenticate a publisher.
 
 ## Invariants
 
@@ -118,6 +123,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
     and rebuild write is confined to disposable storage and compared by stable digest.
 20. A release candidate may be structurally qualified while production validation stays
     false; adoption evidence must be observed, not inferred from CI.
+21. A published release set is closed and manifest-bound before publication; checksum
+    consistency never substitutes for provenance or publisher trust.
 
 ## Bounded contexts
 

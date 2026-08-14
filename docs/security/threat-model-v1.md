@@ -68,6 +68,9 @@ proved by the portable binary.
 - Release qualification accepts only fixed, bounded, regular source files under the
   selected root, verifies workflow action commit pins, emits no paths, and keeps
   structural automation declarations separate from external adoption evidence.
+- Release verification accepts one closed top-level artifact set, streams bounded
+  digests, inspects archive members without extraction, validates SPDX structure, and
+  emits no local paths. Its manifest is integrity metadata, not a publisher credential.
 
 ## Threats intentionally not solved
 

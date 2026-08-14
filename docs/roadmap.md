@@ -101,3 +101,26 @@ DAGrail advances through evidence-backed milestones. A version is complete only 
   licenses, vulnerabilities, reproducibility, SBOM, provenance, installers, and docs;
 - a documented evidence matrix separating implementation qualification from the real
   production adoption evidence that remains intentionally outstanding before 1.0.
+
+## v0.16.0 — Closed release artifacts
+
+- schema-bound manifest generation and offline verification for the exact six-platform
+  binary/SBOM release set;
+- checksum completeness, archive closure, decompression bounds, deterministic metadata,
+  source identity, and SPDX inventory enforcement before tag publication;
+- provenance attestation for both the sorted checksum set and verified release manifest.
+
+## v0.17.0 — Stable operator and automation UX
+
+- typed CLI error and exit-code contracts, machine-readable command discovery, shell
+  completion, and compatibility tests for scripted use;
+- bounded progress and cancellation behavior for slow local operations;
+- installation and upgrade diagnostics that remain actionable without raw host output.
+
+## v0.18.0 — 1.0 readiness convergence
+
+- historical-binary upgrade and rollback matrix across the beta compatibility window;
+- one aggregate readiness report covering distribution, recovery, security, plugin,
+  API, documentation, and release-policy evidence;
+- a formal 1.0 readiness decision that continues to list missing real-world adoption
+  evidence instead of synthesizing it from CI.

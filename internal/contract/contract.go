@@ -5,6 +5,7 @@ import (
 	"github.com/CongBao/dagrail/internal/journal"
 	"github.com/CongBao/dagrail/internal/mcpserver"
 	"github.com/CongBao/dagrail/internal/projection"
+	dagrelease "github.com/CongBao/dagrail/internal/release"
 	"github.com/CongBao/dagrail/internal/service"
 	"github.com/CongBao/dagrail/internal/version"
 	"github.com/CongBao/dagrail/sdk"
@@ -47,6 +48,8 @@ type Report struct {
 	Support              DocumentedSurface        `json:"support"`
 	Recovery             DocumentedSurface        `json:"recovery"`
 	ReleaseQualification DocumentedSurface        `json:"releaseQualification"`
+	ReleaseManifest      DocumentedSurface        `json:"releaseManifest"`
+	ReleaseVerification  DocumentedSurface        `json:"releaseVerification"`
 	Provider             VersionedSurface         `json:"providerSdk"`
 	Journal              JournalContract          `json:"journal"`
 	Projection           int                      `json:"projectionSchema"`
@@ -104,7 +107,19 @@ func Current() Report {
 			APIVersion:   "dagrail.io/release-qualification/v1alpha1",
 			Stability:    "additive-structural-candidate",
 			SchemaPath:   "schemas/release-qualification-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:a01d53232ed16fa69f7da2d08156bb0113ae0679a9c396428bb931be03d738f3",
+			SchemaSHA256: "sha256:3933ef967b58b4ee462a7416123bed42a46c74af44a6a0db2c11e8e03e079d51",
+		},
+		ReleaseManifest: DocumentedSurface{
+			APIVersion:   dagrelease.ManifestAPIVersion,
+			Stability:    "additive-distribution-contract",
+			SchemaPath:   "schemas/release-manifest-v1beta1.schema.json",
+			SchemaSHA256: "sha256:cb04a29967fbe1a150c0dbc1f9d780cc5d7f494680a5d1eae173728ea4c9980f",
+		},
+		ReleaseVerification: DocumentedSurface{
+			APIVersion:   dagrelease.VerificationAPIVersion,
+			Stability:    "additive-offline-verification",
+			SchemaPath:   "schemas/release-verification-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:9a23a60cdef7b2444f5deb0ed802935b1f2052aea3156582eb3e0244989cb283",
 		},
 		Provider: VersionedSurface{APIVersion: sdk.APIVersion, Stability: "source-compatible"},
 		Journal: JournalContract{
@@ -120,7 +135,7 @@ func Current() Report {
 			{View: "worker", Bytes: 8192},
 		},
 		Commands: []string{
-			"action", "backup", "context", "contract", "doctor", "evidence", "frontier", "graph", "harness", "history", "hook", "incident", "init", "inspect", "journal", "mcp", "observe", "plugin", "pre-wait", "projection", "provider", "qualify", "reconcile", "recovery", "role", "security", "signature", "status", "support", "ui", "version",
+			"action", "backup", "context", "contract", "doctor", "evidence", "frontier", "graph", "harness", "history", "hook", "incident", "init", "inspect", "journal", "mcp", "observe", "plugin", "pre-wait", "projection", "provider", "qualify", "reconcile", "recovery", "release", "role", "security", "signature", "status", "support", "ui", "version",
 		},
 		Promises: []string{
 			"journal history is never rewritten by an upgrade",
@@ -133,6 +148,7 @@ func Current() Report {
 			"support reports contain no authority payloads, absolute paths, prompts, artifact bodies, or harness output",
 			"recovery rehearsal writes only to disposable storage and binds replay and projection evidence to one immutable journal head",
 			"release qualification distinguishes structural candidate evidence from outstanding production adoption evidence",
+			"published release sets bind exactly six archives, six SPDX inventories, sorted checksums, source identity, and bounded offline verification",
 			"SQLite remains disposable and rebuildable from the verified journal",
 		},
 	}

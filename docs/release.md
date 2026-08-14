@@ -23,12 +23,29 @@ inspection-only security and recovery evidence from a real DAGrail project.
 `productionValidated: false` while independent adoption, long-running live-DAG use,
 real host receipt proof, and an operator backup/restore drill remain outstanding.
 
+## Artifact contract
+
+The publish job first creates sorted SHA-256 checksums over exactly six binary archives
+and six SPDX JSON inventories. It then runs:
+
+```sh
+dagrail release manifest --directory dist --version VERSION --tag TAG \
+  --commit FULL_SHA --source-date-epoch COMMIT_EPOCH
+dagrail release verify --directory dist
+```
+
+`release-manifest.json` records every payload digest and size plus the checksum-file
+digest. Verification rejects missing, extra, duplicate, symlinked, oversized, mutated,
+or unsorted files; unsafe or non-deterministic archives; and incomplete SPDX documents.
+The manifest proves internal consistency, not publisher identity. Consumers should also
+verify the GitHub provenance attestation through their separately trusted GitHub policy.
+
 ## Tag workflow
 
 Tags matching `v*` run tests, race detection, vet, bounded fuzz targets, dependency and
 license checks, six static builds, reproducibility comparison, deterministic archives,
-checksums, SPDX SBOM generation, and GitHub build-provenance attestations. Publication
-depends on all qualification, security, and build jobs.
+checksums, a closed release manifest, SPDX SBOM generation, and GitHub build-provenance
+attestations. Publication depends on all qualification, security, and build jobs.
 
 The tag version must exactly match `internal/version/version.go`. Release archives
 contain only the executable, LICENSE, and README; the executable carries the verified

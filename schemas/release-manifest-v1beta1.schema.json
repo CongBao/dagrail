@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/release-manifest-v1beta1.schema.json",
+  "title": "DAGrail Release Manifest v1beta1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "version", "tag", "commit", "sourceDateEpoch", "checksums", "artifacts"],
+  "properties": {
+    "apiVersion": {"const": "dagrail.io/release-manifest/v1beta1"},
+    "kind": {"const": "ReleaseManifest"},
+    "version": {"$ref": "#/$defs/version"},
+    "tag": {"type": "string", "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"},
+    "commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+    "sourceDateEpoch": {"type": "integer", "minimum": 946684800, "maximum": 32503680000},
+    "checksums": {"$ref": "#/$defs/checksums"},
+    "artifacts": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "items": {"$ref": "#/$defs/artifact"}
+    }
+  },
+  "$defs": {
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$",
+      "maxLength": 128
+    },
+    "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "checksums": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sha256", "bytes"],
+      "properties": {
+        "name": {"const": "checksums.txt"},
+        "sha256": {"$ref": "#/$defs/digest"},
+        "bytes": {"type": "integer", "minimum": 1, "maximum": 1048576}
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind", "os", "arch", "format", "sha256", "bytes"],
+      "properties": {
+        "name": {
+          "enum": [
+            "dagrail_darwin_amd64.spdx.json",
+            "dagrail_darwin_amd64.tar.gz",
+            "dagrail_darwin_arm64.spdx.json",
+            "dagrail_darwin_arm64.tar.gz",
+            "dagrail_linux_amd64.spdx.json",
+            "dagrail_linux_amd64.tar.gz",
+            "dagrail_linux_arm64.spdx.json",
+            "dagrail_linux_arm64.tar.gz",
+            "dagrail_windows_amd64.spdx.json",
+            "dagrail_windows_amd64.zip",
+            "dagrail_windows_arm64.spdx.json",
+            "dagrail_windows_arm64.zip"
+          ]
+        },
+        "kind": {"enum": ["binary-archive", "spdx-sbom"]},
+        "os": {"enum": ["darwin", "linux", "windows"]},
+        "arch": {"enum": ["amd64", "arm64"]},
+        "format": {"enum": ["tar.gz", "zip", "spdx-json"]},
+        "sha256": {"$ref": "#/$defs/digest"},
+        "bytes": {"type": "integer", "minimum": 1, "maximum": 536870912}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "spdx-sbom"}}},
+          "then": {"properties": {"format": {"const": "spdx-json"}, "name": {"pattern": "\\.spdx\\.json$"}, "bytes": {"maximum": 67108864}}}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "binary-archive"}}},
+          "then": {"properties": {"format": {"enum": ["tar.gz", "zip"]}, "name": {"pattern": "\\.(?:tar\\.gz|zip)$"}}}
+        }
+      ]
+    }
+  }
+}

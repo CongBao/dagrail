@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/CongBao/dagrail/internal/observe"
 	internalproviders "github.com/CongBao/dagrail/internal/providers"
 	"github.com/CongBao/dagrail/internal/qualification"
+	dagrelease "github.com/CongBao/dagrail/internal/release"
 	"github.com/CongBao/dagrail/internal/service"
 	"github.com/CongBao/dagrail/internal/signing"
 	dagrailui "github.com/CongBao/dagrail/internal/ui"
@@ -85,6 +87,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runProjection(args[1:], stdout, stderr)
 	case "qualify":
 		return runQualify(args[1:], stdout, stderr)
+	case "release":
+		return runRelease(args[1:], stdout, stderr)
 	case "doctor":
 		return runDoctor(args[1:], stdout, stderr)
 	case "security":
@@ -1063,6 +1067,66 @@ func runQualify(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("release qualification did not pass")
 	}
 	return nil
+}
+
+func runRelease(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: dagrail release <manifest|verify>")
+	}
+	switch args[0] {
+	case "manifest":
+		flags := flag.NewFlagSet("release manifest", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		directory := flags.String("directory", "dist", "closed release artifact directory")
+		releaseVersion := flags.String("version", version.Version, "release version")
+		tag := flags.String("tag", "", "v-prefixed release tag")
+		commit := flags.String("commit", "", "full release commit SHA")
+		sourceDateEpoch := flags.Int64("source-date-epoch", 0, "release commit timestamp")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 {
+			return fmt.Errorf("usage: dagrail release manifest [--directory dist] --commit SHA --source-date-epoch EPOCH")
+		}
+		if *releaseVersion != version.Version {
+			return fmt.Errorf("--version must match this DAGrail source version")
+		}
+		if *tag == "" {
+			*tag = "v" + *releaseVersion
+		}
+		manifest, err := dagrelease.Generate(*directory, *releaseVersion, *tag, *commit, *sourceDateEpoch)
+		if err != nil {
+			return err
+		}
+		raw, err := dagrelease.MarshalManifest(manifest)
+		if err != nil {
+			return err
+		}
+		if err := dagrelease.WriteManifest(filepath.Join(*directory, dagrelease.ManifestFileName), raw); err != nil {
+			return err
+		}
+		return writeJSON(stdout, manifest)
+	case "verify":
+		flags := flag.NewFlagSet("release verify", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		directory := flags.String("directory", "dist", "closed release artifact directory")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 {
+			return fmt.Errorf("usage: dagrail release verify [--directory dist]")
+		}
+		report := dagrelease.Verify(*directory)
+		if err := writeJSON(stdout, report); err != nil {
+			return err
+		}
+		if !report.Verified {
+			return fmt.Errorf("release verification did not pass")
+		}
+		return nil
+	default:
+		return fmt.Errorf("usage: dagrail release <manifest|verify>")
+	}
 }
 
 func runDoctor(args []string, stdout, stderr io.Writer) error {

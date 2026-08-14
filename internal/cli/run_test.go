@@ -569,6 +569,34 @@ func TestQualifyReleaseCLIRejectsTrailingArguments(t *testing.T) {
 	}
 }
 
+func TestReleaseVerificationCLIEmitsPathFreeFailureEvidence(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "private-release-root")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	err := cli.Run([]string{"release", "verify", "--directory", root}, strings.NewReader(""), &out, &errOut)
+	if err == nil || !strings.Contains(out.String(), `"apiVersion":"dagrail.io/release-verification/v1alpha1"`) || !strings.Contains(out.String(), `"verified":false`) || strings.Contains(out.String(), root) || strings.Contains(out.String(), "private-release-root") {
+		t.Fatalf("unexpected release verification failure: err=%v output=%s", err, out.String())
+	}
+}
+
+func TestReleaseManifestCLIRejectsVersionDriftAndTrailingArguments(t *testing.T) {
+	var out, errOut bytes.Buffer
+	err := cli.Run([]string{"release", "manifest", "--version", "99.0.0", "--commit", "0123456789abcdef0123456789abcdef01234567", "--source-date-epoch", "1786665600"}, strings.NewReader(""), &out, &errOut)
+	if err == nil || out.Len() != 0 {
+		t.Fatalf("release version drift was accepted: err=%v output=%s", err, out.String())
+	}
+	err = cli.Run([]string{"release", "verify", "unexpected"}, strings.NewReader(""), &out, &errOut)
+	if err == nil {
+		t.Fatal("release CLI accepted a trailing argument")
+	}
+	err = cli.Run([]string{"release", "verify", "--commit", "0123456789abcdef0123456789abcdef01234567"}, strings.NewReader(""), &out, &errOut)
+	if err == nil {
+		t.Fatal("release verification accepted a manifest-only flag")
+	}
+}
+
 func TestObserveCLIRecordsOnlyAnIsolatedShadow(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("DAGRAIL_HOME", filepath.Join(root, "runtime-data"))

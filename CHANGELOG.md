@@ -2,6 +2,30 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.16.0 — 2026-08-14
+
+### Added
+
+- `release manifest|verify`, a bounded offline contract for exactly six platform
+  archives, six SPDX inventories, one sorted checksum set, and their source tag,
+  commit, and reproducible timestamp;
+- published ReleaseManifest v1beta1 and ReleaseVerification v1alpha1 schemas with
+  exact digests in `dagrail contract`;
+- adversarial archive, checksum, SPDX, manifest-key, file-set, mutation, and identity
+  tests across tar/gzip and ZIP release formats.
+
+### Changed
+
+- tag publication now generates and verifies `release-manifest.json` before creating a
+  GitHub release, then includes the manifest and checksums in provenance attestation;
+- SBOM generation uses the action's file-specific input and disables its implicit
+  artifact/release uploads so publication remains owned by the closed release job;
+- archive verification requires a closed three-file payload, deterministic timestamps,
+  root ownership metadata for tar files, an executable Unix binary, bounded expansion,
+  and readable ZIP content.
+- every push now assembles all six archives, generates six real SPDX inventories, and
+  verifies the aggregated manifest without publishing release assets.
+
 ## 0.15.0 — 2026-08-14
 
 ### Added

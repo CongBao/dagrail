@@ -108,7 +108,7 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 	surfaces := []contract.DocumentedSurface{
 		contractReport.UI, contractReport.Security, contractReport.JournalVerification,
 		contractReport.PluginConformance, contractReport.Support, contractReport.Recovery,
-		contractReport.ReleaseQualification,
+		contractReport.ReleaseQualification, contractReport.ReleaseManifest, contractReport.ReleaseVerification,
 	}
 	digestsOK := true
 	for _, surface := range surfaces {
@@ -140,8 +140,8 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 
 	ci, ciErr := readSourceFile(root, ".github/workflows/ci.yml")
 	release, releaseErr := readSourceFile(root, ".github/workflows/release.yml")
-	ciOK := ciErr == nil && validYAMLDocument(ci) && containsAll(string(ci), []string{"go test ./...", "go test -race ./...", "go vet ./...", "-fuzz", "govulncheck@", "go-licenses/v2@", "{goos: windows, goarch: arm64}", "{goos: darwin, goarch: arm64}", "{goos: linux, goarch: arm64}"})
-	releaseOK := releaseErr == nil && validYAMLDocument(release) && containsAll(string(release), []string{"Build twice and compare", "sbom-action@", "attest-build-provenance@", "checksums.txt", "go test -race ./...", "qualify release"})
+	ciOK := ciErr == nil && validYAMLDocument(ci) && containsAll(string(ci), []string{"go test ./...", "go test -race ./...", "go vet ./...", "-fuzz", "FuzzReleaseMetadataInputs", "release-artifact-rehearsal", "sbom-action@", "file: stage/dagrail", "upload-artifact: 'false'", "upload-release-assets: 'false'", "release manifest", "release verify", "govulncheck@", "go-licenses/v2@", "{goos: windows, goarch: arm64", "{goos: darwin, goarch: arm64", "{goos: linux, goarch: arm64"})
+	releaseOK := releaseErr == nil && validYAMLDocument(release) && containsAll(string(release), []string{"Build twice and compare", "sbom-action@", "file: stage-a/dagrail", "upload-artifact: 'false'", "upload-release-assets: 'false'", "attest-build-provenance@", "checksums.txt", "release manifest", "release verify", "release-manifest.json", "FuzzReleaseMetadataInputs", "go test -race ./...", "qualify release"})
 	add("ci-workflow", ciOK, chooseCode(ciOK, "continuous_gates_declared", "continuous_gate_missing"))
 	add("release-workflow", releaseOK, chooseCode(releaseOK, "tag_gates_declared", "release_gate_missing"))
 	pinsOK := ciErr == nil && releaseErr == nil && actionsPinned(string(ci)) && actionsPinned(string(release))
@@ -313,6 +313,7 @@ func releaseRequirements() []Requirement {
 		{ID: "vulnerability-and-license", Status: "automated", AutomatedBy: "ci+release"},
 		{ID: "reproducible-build", Status: "automated", AutomatedBy: "ci+release"},
 		{ID: "sbom-checksum-provenance", Status: "automated", AutomatedBy: "release"},
+		{ID: "closed-artifact-manifest", Status: "automated", AutomatedBy: "ci+release"},
 	}
 }
 

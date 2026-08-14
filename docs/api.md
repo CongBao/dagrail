@@ -22,7 +22,8 @@ human frontier output is the exception and can be replaced with `--format json`.
 The complete command inventory is returned by `dagrail contract`. Run a subcommand
 without arguments for its current usage. Exit status is nonzero when a typed report is
 emitted but its gate fails, including `doctor`, `recovery rehearse`, and
-`qualify release`.
+`qualify release`. `release manifest|verify` is the maintainer-facing, offline
+distribution contract; it never publishes or downloads an artifact.
 
 ## MCP
 
@@ -46,7 +47,9 @@ lease, Node/Attempt, provider set, and expiry.
 Published schemas live in `schemas/`. Current governed reports include the Explorer UI
 API, security audit, journal verification, plugin conformance, support report, recovery
 rehearsal, release qualification, and the compatibility contract itself. Reports use
-closed objects so misspelled or silently added fields fail validation.
+closed objects so misspelled or silently added fields fail validation. ReleaseManifest
+v1beta1 and ReleaseVerification v1alpha1 bind the complete distribution set separately
+from source qualification.
 
 ## Go provider SDK
 

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/release-verification-v1alpha1.schema.json",
+  "title": "DAGrail Release Verification v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "verified", "artifacts", "archives", "sboms", "checks"],
+  "properties": {
+    "apiVersion": {"const": "dagrail.io/release-verification/v1alpha1"},
+    "kind": {"const": "ReleaseVerification"},
+    "verified": {"type": "boolean"},
+    "version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "tag": {"type": "string", "minLength": 2, "maxLength": 129},
+    "commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+    "manifestSha256": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "artifacts": {"type": "integer", "minimum": 0, "maximum": 12},
+    "archives": {"type": "integer", "minimum": 0, "maximum": 6},
+    "sboms": {"type": "integer", "minimum": 0, "maximum": 6},
+    "checks": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": {"$ref": "#/$defs/check"}
+    }
+  },
+  "$defs": {
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "code"],
+      "properties": {
+        "id": {"enum": ["manifest", "file-set", "checksums", "artifacts", "archives", "sboms"]},
+        "status": {"enum": ["pass", "fail", "not_run"]},
+        "code": {
+          "enum": [
+            "manifest_valid",
+            "manifest_missing_or_invalid",
+            "manifest_schema_invalid",
+            "directory_invalid",
+            "file_set_closed",
+            "file_set_invalid",
+            "checksums_valid",
+            "checksums_invalid",
+            "artifacts_valid",
+            "artifact_manifest_invalid",
+            "archives_closed",
+            "archive_invalid",
+            "sboms_valid",
+            "sbom_invalid",
+            "prerequisite_not_met"
+          ]
+        }
+      }
+    }
+  }
+}

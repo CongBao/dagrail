@@ -29,6 +29,9 @@ digests, context budgets, and command inventory implemented by the current binar
   schema readability, projection rebuild, and logical projection equivalence.
 - ReleaseQualification v1alpha1 is an additive structural report. It never upgrades
   declared automation or source completeness into production-adoption evidence.
+- ReleaseManifest v1beta1 fixes the six target names and complete archive/SBOM/checksum
+  set. ReleaseVerification v1alpha1 is an additive, path-free offline report; neither
+  surface substitutes internal consistency for publisher identity or adoption evidence.
 
 ## Not promised
 

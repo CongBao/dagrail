@@ -72,6 +72,13 @@ entry. Runtime upgrades execute fresh-process probes and retain a digest-address
 rollback binary; this protects against accidental corruption, not a malicious process
 running as the same OS user.
 
+The release manifest independently closes the complete 12-payload distribution set.
+Offline verification rejects symlinks, path traversal, duplicate archive entries,
+unexpected files, excessive compressed expansion, unreadable ZIP members,
+non-deterministic archive timestamps, checksum drift, and incomplete SPDX envelopes.
+Manifest consistency is not a signature; publisher trust still depends on the GitHub
+provenance policy and trusted repository identity.
+
 Release binaries embed only the public plugin projection: host manifests, local
 marketplace catalogs, skills, hooks, and brand assets. Materialization verifies the
 exact linked file set and digest, uses relative local plugin sources, and rejects

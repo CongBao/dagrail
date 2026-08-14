@@ -47,7 +47,7 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 
 ## Status
 
-`v0.15.0` is a pre-1.0 release candidate: local-first and single-user, with one native Go
+`v0.16.0` is a pre-1.0 release candidate: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
 stdio MCP. Its operational surface adds explainable dependency blockers, incident
 circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
@@ -62,7 +62,12 @@ form the distribution-security baseline. `dagrail contract` exposes the exact be
 surfaces implemented by a binary, while `dagrail observe` can qualify an existing DAG
 through a separate, digest-bound shadow without modifying the source project.
 
-The v0.15 structural release report validates public source and automated gate
+The v0.16 distribution contract adds an offline-verifiable manifest for the complete
+six-platform release set: six closed binary archives, six SPDX inventories, sorted
+checksums, and exact tag/commit/source-date identity. Publication verifies that manifest
+before release and attests it together with the checksum set.
+
+The structural release report validates public source and automated gate
 declarations, but deliberately reports `productionValidated: false`. Independent
 external adoption, a long-running live DAG, real-host delivery receipts, and an operator
 backup/restore drill remain outstanding before a 1.0 claim.
@@ -193,6 +198,7 @@ dagrail security audit
 dagrail support preview
 dagrail recovery rehearse
 dagrail qualify release --source .
+dagrail release verify --directory dist
 ```
 
 Create and verify a portable journal backup with `dagrail backup create` and
