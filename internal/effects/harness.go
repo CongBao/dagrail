@@ -67,7 +67,18 @@ func (h HarnessDispatch) Dispatch(ctx context.Context, request sdk.EffectRequest
 	return h.Harness.Dispatch(ctx, forward)
 }
 
-func (h HarnessDispatch) Reconcile(_ context.Context, _ sdk.EffectRequest, _ sdk.PreparedEffect, evidence json.RawMessage) (sdk.EffectReceipt, error) {
+func (h HarnessDispatch) Reconcile(ctx context.Context, request sdk.EffectRequest, _ sdk.PreparedEffect, evidence json.RawMessage) (sdk.EffectReceipt, error) {
+	if emptyObject(evidence) {
+		var prior sdk.EffectReceipt
+		if len(request.PriorReceipt) > 0 {
+			if err := json.Unmarshal(request.PriorReceipt, &prior); err != nil {
+				return sdk.EffectReceipt{}, fmt.Errorf("decode prior harness receipt: %w", err)
+			}
+		}
+		if observer, ok := h.Harness.(sdk.HarnessObserver); ok && prior.ExternalID != "" {
+			return observer.Observe(ctx, prior.ExternalID, request)
+		}
+	}
 	var receipt sdk.EffectReceipt
 	if err := json.Unmarshal(evidence, &receipt); err != nil {
 		return receipt, fmt.Errorf("decode harness reconciliation receipt: %w", err)
@@ -81,4 +92,9 @@ func (h HarnessDispatch) Reconcile(_ context.Context, _ sdk.EffectRequest, _ sdk
 		}
 	}
 	return receipt, nil
+}
+
+func emptyObject(value json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(value))
+	return trimmed == "" || trimmed == "{}" || trimmed == "null"
 }

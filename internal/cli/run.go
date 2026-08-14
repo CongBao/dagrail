@@ -440,7 +440,7 @@ func runReconcile(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
 	action := flags.String("action", "", "effect action ID")
-	receipt := flags.String("receipt", "{}", "adapter reconciliation evidence JSON")
+	receipt := flags.String("receipt", "{}", "optional adapter evidence JSON; omit for native observation")
 	key := flags.String("idempotency-key", "", "idempotency key")
 	if err := flags.Parse(args); err != nil {
 		return err

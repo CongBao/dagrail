@@ -39,6 +39,7 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Resource lease**: ownership of bounded executor, browser, server, port, memory, disk, or another declared capacity.
 - **Dependency cut**: only the transitive graph region frozen by an unsatisfied failure path.
 - **Harness**: an agent host such as Codex, Claude Code, or GitHub Copilot CLI.
+- **Native harness receipt**: adapter observation binding a DAGrail action to exact host session, turn, and visible-message identities without promoting host completion into DAG acceptance.
 - **Provider**: compile-in extension returning pure decisions, proposals, or receipts without direct storage access.
 - **Provider Runtime**: bounded invocation boundary that validates schemas, deadlines,
   panics, output size, sensitive fields, and stable schema hashes before an application

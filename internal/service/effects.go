@@ -128,7 +128,7 @@ func (s *Service) ReconcileEffect(actionID string, evidence json.RawMessage, ide
 	if err := json.Unmarshal(effect.Prepared, &prepared); err != nil {
 		return domain.EffectAction{}, err
 	}
-	request := sdk.EffectRequest{ActionID: effect.ID, ProjectRoot: s.Project.Root, NodeID: effect.NodeID, AttemptID: effect.AttemptID, IdempotencyKey: effect.IdempotencyKey, Request: effect.Request}
+	request := sdk.EffectRequest{ActionID: effect.ID, ProjectRoot: s.Project.Root, NodeID: effect.NodeID, AttemptID: effect.AttemptID, IdempotencyKey: effect.IdempotencyKey, Request: effect.Request, PriorReceipt: effect.Receipt}
 	reconcilingAt := s.Now().UTC().Format(time.RFC3339Nano)
 	reconcilingRaw, _ := json.Marshal(map[string]string{"actionId": actionID, "reconcilingAt": reconcilingAt})
 	expectedHead := state.HeadHash

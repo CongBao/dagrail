@@ -7,7 +7,7 @@ description: Execute or resume one DAGrail task, gate, decision, or effect node.
 
 Work on only the assigned Role, Node, and Attempt.
 
-1. Bind the named Role to this harness session. Do not reuse a session already bound to another formal role.
+1. Bind the named Role to this harness session. Do not reuse a session already bound to another formal role. A replacement session must release the old lease or wait for expiry before takeover.
 2. Call `dag_context` with `view: worker`, the Role, and Node. Inspect referenced evidence only when needed.
 3. Start or resume using the returned allowed action. Never construct a lifecycle transition manually.
 4. Before yielding or after material progress, apply `attempt.checkpoint` with a short durable summary and digest-only evidence refs. Do not include prompts, secrets, or large artifacts.
@@ -15,4 +15,6 @@ Work on only the assigned Role, Node, and Attempt.
 6. Finish with one outcome declared by the NodeKind. If an effect is `unknown`, reconcile it instead of retrying.
 7. Run `dag_pre_wait` before becoming passive.
 
-The checkpoint must let a replacement session continue without chat history.
+The checkpoint must let a replacement session continue without chat history. A native
+harness resume is transport recovery; the Role lease and checkpoint remain DAGrail
+authority.

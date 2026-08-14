@@ -21,3 +21,9 @@ The v0.5 web UI is a local read-only projection. It refuses non-loopback binds, 
 only `GET` and `HEAD`, loads no third-party assets, emits restrictive browser security
 headers, and omits allowed-action references, controller tokens, event payloads, prompts,
 and artifact bodies. It is not a remotely deployable authenticated dashboard.
+
+The Codex native adapter talks only to the detected local executable through the
+harness-owned app-server daemon and stdio proxy. Receipt detail omits the generated work
+prompt. Capability probing does not start a thread, and automated tests use protocol
+fixtures rather than an account. The adapter does not auto-approve commands or treat
+Codex turn completion as a DAG semantic outcome.

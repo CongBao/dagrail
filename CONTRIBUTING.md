@@ -32,3 +32,8 @@ The local UI is a read model, not a control surface. New UI endpoints must remai
 `GET`/`HEAD` only, loopback-bound, bounded, free of action references and event payloads,
 and usable without a CDN or network-loaded asset. Lifecycle changes belong in the
 application service and must never be inferred from browser activity.
+
+Native harness changes require protocol fixtures for start, resume, mismatched delivery,
+and observation. A session or turn ID alone is insufficient: tests must bind the stable
+action/client-message ID and prove the recipient-visible receipt independently. Native
+tests must not require a developer account or create a real harness thread in CI.

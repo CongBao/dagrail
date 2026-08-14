@@ -23,6 +23,12 @@ func (fakeHarness) Resume(context.Context, string, sdk.EffectRequest) (sdk.Effec
 	return sdk.EffectReceipt{Status: "unknown", SessionStatus: "created", DeliveryStatus: "unknown"}, nil
 }
 
+type observableHarness struct{ fakeHarness }
+
+func (observableHarness) Observe(_ context.Context, externalID string, _ sdk.EffectRequest) (sdk.EffectReceipt, error) {
+	return sdk.EffectReceipt{Status: "confirmed", ExternalID: externalID, RecipientVisible: true, DeliveryStatus: "visible", AcceptanceStatus: "pending", CompletionStatus: "pending"}, nil
+}
+
 func TestHarnessDispatchDoesNotConflateTransportWithVisibleDelivery(t *testing.T) {
 	root := t.TempDir()
 	adapter := HarnessDispatch{Harness: fakeHarness{}}
@@ -44,5 +50,20 @@ func TestHarnessDispatchDoesNotConflateTransportWithVisibleDelivery(t *testing.T
 	}
 	if visible.Status != "confirmed" || visible.AcceptanceStatus != "pending" || visible.CompletionStatus != "pending" {
 		t.Fatalf("receipt states were collapsed: %#v", visible)
+	}
+}
+
+func TestHarnessReconcileUsesNativeObservationWhenEvidenceIsAbsent(t *testing.T) {
+	root := t.TempDir()
+	adapter := HarnessDispatch{Harness: observableHarness{}}
+	prior, _ := json.Marshal(sdk.EffectReceipt{Status: "unknown", ExternalID: "thread-1", DeliveryStatus: "unknown"})
+	request := sdk.EffectRequest{ProjectRoot: root, Request: json.RawMessage(`{"roleId":"worker","nodeId":"A"}`), PriorReceipt: prior}
+	prepared, err := adapter.Prepare(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := adapter.Reconcile(context.Background(), request, prepared, json.RawMessage(`{}`))
+	if err != nil || receipt.Status != "confirmed" || !receipt.RecipientVisible || receipt.CompletionStatus != "pending" {
+		t.Fatalf("native observation was not used safely: %+v %v", receipt, err)
 	}
 }

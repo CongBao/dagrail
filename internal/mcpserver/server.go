@@ -93,7 +93,7 @@ func New(svc *service.Service) *mcp.Server {
 		output, err := svc.ApplyGraphChange(path, input.Token, input.IdempotencyKey, input.ActorRole)
 		return nil, output, err
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "dag_reconcile", Title: "Reconcile effect", Description: "Classify one prepared or unknown external effect using adapter evidence.", InputSchema: schemaFor[ReconcileInput](), Annotations: &mcp.ToolAnnotations{Title: "Reconcile effect", ReadOnlyHint: false, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(_ context.Context, _ *mcp.CallToolRequest, input ReconcileInput) (*mcp.CallToolResult, domain.EffectAction, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_reconcile", Title: "Reconcile effect", Description: "Reconcile one prepared or unknown effect through native observation or typed adapter evidence.", InputSchema: schemaFor[ReconcileInput](), Annotations: &mcp.ToolAnnotations{Title: "Reconcile effect", ReadOnlyHint: false, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(_ context.Context, _ *mcp.CallToolRequest, input ReconcileInput) (*mcp.CallToolResult, domain.EffectAction, error) {
 		raw, _ := json.Marshal(input.Receipt)
 		output, err := svc.ReconcileEffect(input.ActionID, raw, input.IdempotencyKey)
 		return nil, output, err

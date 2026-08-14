@@ -2,6 +2,26 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.6.0 — 2026-08-14
+
+### Added
+
+- capability-gated Codex app-server daemon/proxy integration for native thread start
+  and resume;
+- stable action-to-user-message binding and recipient-visible delivery proof from an
+  exact completed `userMessage` notification;
+- read-only `thread/read` observation for evidence-free native reconciliation and turn
+  status receipts;
+- optional `HarnessObserver` SDK seam and prior-receipt binding for adapter-safe
+  reconciliation;
+- replacement-session qualification proving a new Role binding can continue an active
+  Attempt from its durable checkpoint.
+
+### Changed
+
+- Codex harness provider metadata advances to its v2 envelope contract; unsupported or
+  drifting native APIs continue to return manual or `unknown` receipts.
+
 ## 0.5.0 — 2026-08-14
 
 ### Added

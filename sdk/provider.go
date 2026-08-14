@@ -82,6 +82,7 @@ type EffectRequest struct {
 	AttemptID      string          `json:"attemptId"`
 	IdempotencyKey string          `json:"idempotencyKey"`
 	Request        json.RawMessage `json:"request"`
+	PriorReceipt   json.RawMessage `json:"priorReceipt,omitempty"`
 }
 
 type PreparedEffect struct {
@@ -122,6 +123,13 @@ type HarnessAdapter interface {
 	Probe(context.Context) (HarnessCapabilities, error)
 	Dispatch(context.Context, EffectRequest) (EffectReceipt, error)
 	Resume(context.Context, string, EffectRequest) (EffectReceipt, error)
+}
+
+// HarnessObserver is an optional extension for adapters that can inspect a
+// previously dispatched native session without relying on caller-supplied
+// evidence. Observation must not send a new user message or start a new turn.
+type HarnessObserver interface {
+	Observe(context.Context, string, EffectRequest) (EffectReceipt, error)
 }
 
 type GraphImporterProvider interface {
