@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -108,8 +110,19 @@ func (s *Store) database() (*sql.DB, error) {
 	if !s.readOnly {
 		return sql.Open("sqlite", s.path)
 	}
-	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(s.path), RawQuery: "mode=ro"}).String()
+	dsn := readOnlyDSN(s.path, runtime.GOOS)
 	return sql.Open("sqlite", dsn)
+}
+
+func readOnlyDSN(path, goos string) string {
+	uriPath := filepath.ToSlash(path)
+	if goos == "windows" {
+		uriPath = strings.ReplaceAll(uriPath, `\`, "/")
+		if len(uriPath) >= 2 && uriPath[1] == ':' {
+			uriPath = "/" + uriPath
+		}
+	}
+	return (&url.URL{Scheme: "file", Path: uriPath, RawQuery: "mode=ro"}).String()
 }
 
 func isTransientSQLiteError(err error) bool {

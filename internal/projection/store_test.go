@@ -228,6 +228,15 @@ func TestLogicalFingerprintMatchesIndependentRebuildAndDetectsChange(t *testing.
 	}
 }
 
+func TestReadOnlyProjectionDSNIsAPortableFileURI(t *testing.T) {
+	if observed := readOnlyDSN(`C:\Users\runner\DAG rail\projection.sqlite`, "windows"); observed != "file:///C:/Users/runner/DAG%20rail/projection.sqlite?mode=ro" {
+		t.Fatalf("Windows read-only DSN = %q", observed)
+	}
+	if observed := readOnlyDSN("/tmp/DAG rail/projection.sqlite", "linux"); observed != "file:///tmp/DAG%20rail/projection.sqlite?mode=ro" {
+		t.Fatalf("Unix read-only DSN = %q", observed)
+	}
+}
+
 func assertEvidenceProjectionCounts(t *testing.T, path string, packages, decisions, artifacts int) {
 	t.Helper()
 	db, err := sql.Open("sqlite", path)
