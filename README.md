@@ -47,7 +47,7 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 
 ## Status
 
-`v0.12.0` is a hardened beta candidate: local-first and single-user, with one native Go
+`v0.13.0` is an operable beta candidate: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
 stdio MCP. Its operational surface adds explainable dependency blockers, incident
 circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
@@ -72,6 +72,13 @@ audit schema. It closes public authority envelopes, bounds MCP frames and tool i
 verifies owner-only POSIX runtime state, and makes vulnerability and license checks CI
 gates. The boundary remains cooperative: another malicious process running as the same
 OS user is outside the guarantee.
+
+The v0.13 executable also contains an exact, digest-addressed local marketplace. A
+normal plugin install materializes that immutable bundle and installs all three hosts
+without fetching plugin content from a moving branch. `plugin conformance` reports the
+runtime, bundle, host, MCP, native receipt, and manual-fallback layers independently.
+`support preview|export` produces a schema-bound diagnostic with no authority payloads,
+absolute paths, prompts, artifact bodies, raw harness output, or private graph IDs.
 
 The reliability suite kills writer subprocesses on both sides of the journal rename
 commit point, contends independent writers, corrupts disposable and authoritative
@@ -138,7 +145,13 @@ After building the binary, install its shared runtime and selected harness proje
 dagrail plugin install --harness codex,claude-code,copilot-cli
 dagrail plugin status
 dagrail plugin runtime-status
+dagrail plugin bundle-status
+dagrail plugin conformance
 ```
+
+`dagrail plugin uninstall` removes the MCP registration, plugin, and its matching
+bundled marketplace registration. The verified runtime and immutable bundle are kept
+so rollback and support inspection remain possible.
 
 Runtime upgrades preserve one immutable, digest-addressed rollback candidate. Use
 `dagrail plugin rollback` only after inspecting `runtime-status`; rollback switches the
@@ -172,6 +185,7 @@ dagrail journal replay
 dagrail projection rebuild
 dagrail doctor
 dagrail security audit
+dagrail support preview
 ```
 
 Create and verify a portable journal backup with `dagrail backup create` and

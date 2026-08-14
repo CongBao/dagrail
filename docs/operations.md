@@ -101,6 +101,28 @@ validates every candidate in a fresh process. Rollback is reversible: the displa
 runtime becomes the next rollback candidate. This switches the stable DAGrail
 executable only; it does not restore older harness manifests or marketplace metadata.
 
+## Verify host integration and prepare support evidence
+
+```sh
+dagrail plugin bundle-status
+dagrail plugin conformance
+dagrail support preview --root .
+dagrail support export --root . --output dagrail-support.json
+```
+
+The default installer materializes a digest-addressed local marketplace from the
+running executable. `plugin conformance` never emits executable paths or raw host
+output; native dispatch may be unavailable while an explicit manual fallback remains
+valid. A support report contains no graph IDs, authority payloads, absolute paths,
+prompts, artifact bodies, or harness output. Export uses a new owner-only file and
+refuses overwrite, so inspect `preview` before choosing to share it.
+
+`dagrail plugin uninstall` removes the MCP registration, plugin, and the marketplace
+registration selected by the install plan. It intentionally retains the verified
+runtime and immutable bundle for rollback and support inspection. An explicitly
+configured legacy remote marketplace is never guessed at or removed by a default
+bundled uninstall.
+
 ## Repair projections
 
 ```sh

@@ -33,7 +33,7 @@ func (claudeCLIBackend) Probe(ctx context.Context, executable string) nativeCapa
 		result.Reason = "Claude Code executable not found"
 		return result
 	}
-	output, err := exec.CommandContext(ctx, executable, "--help").CombinedOutput()
+	output, err := boundedCombinedOutput(ctx, executable, "--help")
 	if err != nil {
 		result.Reason = boundedProtocolError(output, err)
 		return result

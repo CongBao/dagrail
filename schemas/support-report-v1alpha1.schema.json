@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/support-report-v1alpha1.schema.json",
+  "title": "DAGrail Support Report v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "shareable", "projectRef", "build", "privacy", "security", "journal", "doctor", "counts"],
+  "properties": {
+    "apiVersion": {"const": "dagrail.io/support/v1alpha1"},
+    "kind": {"const": "SupportReport"},
+    "shareable": {"const": true},
+    "projectRef": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "commit", "date"],
+      "properties": {
+        "version": {"type": "string", "maxLength": 64},
+        "commit": {"type": "string", "maxLength": 128},
+        "date": {"type": "string", "maxLength": 128}
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authorityPayloadsIncluded", "absolutePathsIncluded", "promptsIncluded", "artifactBodiesIncluded", "harnessOutputIncluded"],
+      "properties": {
+        "authorityPayloadsIncluded": {"const": false},
+        "absolutePathsIncluded": {"const": false},
+        "promptsIncluded": {"const": false},
+        "artifactBodiesIncluded": {"const": false},
+        "harnessOutputIncluded": {"const": false}
+      }
+    },
+    "security": {"type": "object"},
+    "journal": {"type": "object"},
+    "doctor": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "status"],
+        "properties": {
+          "name": {"type": "string", "maxLength": 256},
+          "status": {"enum": ["pass", "warn", "fail"]}
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodes", "attempts", "effects", "incidents", "ready", "blocked", "resourceBlocked", "dependencyCuts", "overdueIncidents", "expiredRoleLeases"],
+      "properties": {
+        "nodes": {"$ref": "#/$defs/countMap"},
+        "attempts": {"$ref": "#/$defs/countMap"},
+        "effects": {"$ref": "#/$defs/countMap"},
+        "incidents": {"$ref": "#/$defs/countMap"},
+        "ready": {"type": "integer", "minimum": 0},
+        "blocked": {"type": "integer", "minimum": 0},
+        "resourceBlocked": {"type": "integer", "minimum": 0},
+        "dependencyCuts": {"type": "integer", "minimum": 0},
+        "overdueIncidents": {"type": "integer", "minimum": 0},
+        "expiredRoleLeases": {"type": "integer", "minimum": 0}
+      }
+    }
+  },
+  "$defs": {
+    "countMap": {
+      "type": "object",
+      "propertyNames": {"type": "string", "maxLength": 128},
+      "additionalProperties": {"type": "integer", "minimum": 0},
+      "maxProperties": 128
+    }
+  }
+}

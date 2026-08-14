@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/plugin-conformance-v1alpha1.schema.json",
+  "title": "DAGrail Plugin Conformance v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "ready", "runtime", "bundle", "harnesses"],
+  "properties": {
+    "apiVersion": {"const": "dagrail.io/plugin-conformance/v1alpha1"},
+    "kind": {"const": "PluginConformance"},
+    "ready": {"type": "boolean"},
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verified"],
+      "properties": {
+        "verified": {"type": "boolean"},
+        "version": {"type": "string", "maxLength": 64},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verified", "version", "digest", "files"],
+      "properties": {
+        "verified": {"type": "boolean"},
+        "version": {"type": "string", "maxLength": 64},
+        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "files": {"type": "integer", "minimum": 1, "maximum": 10000}
+      }
+    },
+    "harnesses": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["harness", "ready", "detected", "pluginStatus", "mcpConfigured", "capabilities", "manualFallback"],
+        "properties": {
+          "harness": {"enum": ["codex", "claude-code", "copilot-cli"]},
+          "ready": {"type": "boolean"},
+          "detected": {"type": "boolean"},
+          "pluginStatus": {"type": "string", "maxLength": 64},
+          "mcpConfigured": {"type": "boolean"},
+          "version": {"type": "string", "maxLength": 256},
+          "capabilities": {"type": "object"},
+          "nativeMode": {"type": "string", "maxLength": 128},
+          "protocol": {"type": "string", "maxLength": 128},
+          "stability": {"type": "string", "maxLength": 64},
+          "execution": {"type": "string", "maxLength": 128},
+          "receiptProof": {"type": "array", "maxItems": 32, "items": {"type": "string", "maxLength": 128}},
+          "manualFallback": {"type": "boolean"},
+          "unavailableCodes": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9_]+$", "maxLength": 64}}
+        }
+      }
+    }
+  }
+}

@@ -84,6 +84,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runDoctor(args[1:], stdout, stderr)
 	case "security":
 		return runSecurity(args[1:], stdout, stderr)
+	case "support":
+		return runSupport(args[1:], stdout, stderr)
 	case "version":
 		return writeJSON(stdout, map[string]string{"version": version.Version, "commit": version.Commit, "date": version.Date})
 	default:
@@ -411,16 +413,30 @@ func runEvidence(args []string, stdout, stderr io.Writer) error {
 
 func runPlugin(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: dagrail plugin <install|status|runtime-status|rollback|uninstall>")
+		return fmt.Errorf("usage: dagrail plugin <install|status|conformance|materialize|bundle-status|runtime-status|rollback|uninstall>")
 	}
 	flags := flag.NewFlagSet("plugin "+args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	harnesses := flags.String("harness", "codex,claude-code,copilot-cli", "comma-separated harnesses")
-	source := flags.String("marketplace-source", install.DefaultMarketplaceSource, "local path or Git marketplace source")
+	source := flags.String("marketplace-source", "", "local path or Git marketplace source (default: linked offline bundle)")
 	runtimePath := flags.String("runtime", "", "absolute DAGrail runtime path")
 	dryRun := flags.Bool("dry-run", false, "show or validate without changing host configuration")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
+	}
+	if args[0] == "materialize" {
+		result, err := install.MaterializePluginBundle()
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, result)
+	}
+	if args[0] == "bundle-status" {
+		result, err := install.PluginBundleStatus()
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, result)
 	}
 	if *runtimePath == "" {
 		if args[0] == "install" && !*dryRun {
@@ -437,6 +453,23 @@ func runPlugin(args []string, stdout, stderr io.Writer) error {
 			*runtimePath = resolved
 		}
 	}
+	if *source == "" {
+		if args[0] == "install" || args[0] == "uninstall" {
+			var bundle install.BundleResult
+			var err error
+			if *dryRun || args[0] == "uninstall" {
+				bundle, err = install.PluginBundleStatus()
+			} else {
+				bundle, err = install.MaterializePluginBundle()
+			}
+			if err != nil {
+				return err
+			}
+			*source = bundle.Root
+		} else {
+			*source = install.DefaultMarketplaceSource
+		}
+	}
 	options := install.Options{Harnesses: []string{*harnesses}, RuntimePath: *runtimePath, MarketplaceSource: *source, DryRun: *dryRun}
 	switch args[0] {
 	case "install":
@@ -451,6 +484,12 @@ func runPlugin(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		return writeJSON(stdout, results)
+	case "conformance":
+		result, err := install.Conformance(options)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, result)
 	case "runtime-status":
 		result, err := install.RuntimeStatus()
 		if err != nil {
@@ -935,6 +974,36 @@ func runSecurity(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("security audit found failed checks")
 	}
 	return nil
+}
+
+func runSupport(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 || (args[0] != "preview" && args[0] != "export") {
+		return fmt.Errorf("usage: dagrail support <preview|export> [--root path] [--output file]")
+	}
+	flags := flag.NewFlagSet("support "+args[0], flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	root := flags.String("root", ".", "project root")
+	output := flags.String("output", "", "new support-report output file")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	s, err := service.Open(*root)
+	if err != nil {
+		return err
+	}
+	data, report, err := s.SupportBytes()
+	if err != nil {
+		return err
+	}
+	if args[0] == "export" {
+		if *output == "" {
+			return fmt.Errorf("support export requires --output")
+		}
+		if err := writeExclusive(*output, data, 0o600); err != nil {
+			return err
+		}
+	}
+	return writeJSON(stdout, report)
 }
 
 func runDoctor(args []string, stdout, stderr io.Writer) error {

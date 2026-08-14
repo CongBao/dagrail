@@ -31,6 +31,30 @@ func TestInstallPlanUsesOneAbsoluteRuntimeForAllThreeHarnesses(t *testing.T) {
 	}
 }
 
+func TestInstallPlanUsesBundledLocalMarketplaceWithoutRemoteRef(t *testing.T) {
+	root := t.TempDir()
+	runtime := filepath.Join(root, "bin", "dagrail")
+	marketplace := filepath.Join(root, "marketplace")
+	plans, err := install.Plan(install.Options{Harnesses: []string{"codex", "claude-code", "copilot-cli"}, RuntimePath: runtime, MarketplaceSource: marketplace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, plan := range plans {
+		if !strings.Contains(strings.Join(plan.PluginInstall, " "), "dagrail@dagrail-bundled") {
+			t.Fatalf("%s did not select the bundled marketplace: %#v", plan.Harness, plan)
+		}
+		if strings.Contains(strings.Join(plan.MarketplaceAdd, " "), "--ref") {
+			t.Fatalf("%s treated a local marketplace as a remote branch: %#v", plan.Harness, plan)
+		}
+		if !strings.Contains(strings.Join(plan.MarketplaceRemove, " "), install.BundledMarketplaceName) {
+			t.Fatalf("%s did not plan bundled marketplace cleanup: %#v", plan.Harness, plan)
+		}
+		if len(plan.PluginRemove) == 0 {
+			t.Fatalf("%s did not plan plugin removal: %#v", plan.Harness, plan)
+		}
+	}
+}
+
 func TestPublishedPluginMetadataMatchesRuntimeVersion(t *testing.T) {
 	for _, path := range []string{
 		"../../.codex-plugin/plugin.json",

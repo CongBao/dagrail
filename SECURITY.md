@@ -72,6 +72,19 @@ entry. Runtime upgrades execute fresh-process probes and retain a digest-address
 rollback binary; this protects against accidental corruption, not a malicious process
 running as the same OS user.
 
+Release binaries embed only the public plugin projection: host manifests, local
+marketplace catalogs, skills, hooks, and brand assets. Materialization verifies the
+exact linked file set and digest, uses relative local plugin sources, and rejects
+mutation or extra files. The bundle contains no runtime state, repository history,
+source code, credentials, or project authority. Host plugin installation remains an
+external operation under the cooperative OS-user boundary.
+
+Support reports are deliberately narrower than backups: they pseudonymize project
+identity and contain aggregate counts plus typed security, journal, and status-only
+doctor evidence. They exclude Graph and event payloads, identifiers, absolute paths,
+prompts, artifact bodies, and raw harness output. Export is owner-only and exclusive;
+operators should still preview the exact report before sharing it.
+
 Detached Ed25519 signatures are optional and cover the SHA-256 digest of exact file
 bytes with a DAGrail domain separator. Private keys must be protected separately and
 public keys must be distributed through a trusted channel. Export signatures neither

@@ -1,9 +1,11 @@
 package contract
 
 import (
+	"github.com/CongBao/dagrail/internal/install"
 	"github.com/CongBao/dagrail/internal/journal"
 	"github.com/CongBao/dagrail/internal/mcpserver"
 	"github.com/CongBao/dagrail/internal/projection"
+	"github.com/CongBao/dagrail/internal/service"
 	"github.com/CongBao/dagrail/internal/version"
 	"github.com/CongBao/dagrail/sdk"
 )
@@ -41,6 +43,8 @@ type Report struct {
 	UI                  DocumentedSurface        `json:"ui"`
 	Security            DocumentedSurface        `json:"security"`
 	JournalVerification DocumentedSurface        `json:"journalVerification"`
+	PluginConformance   DocumentedSurface        `json:"pluginConformance"`
+	Support             DocumentedSurface        `json:"support"`
 	Provider            VersionedSurface         `json:"providerSdk"`
 	Journal             JournalContract          `json:"journal"`
 	Projection          int                      `json:"projectionSchema"`
@@ -76,6 +80,18 @@ func Current() Report {
 			SchemaPath:   "schemas/journal-verification-v1alpha1.schema.json",
 			SchemaSHA256: "sha256:2a05bc82ce706e9744745fc2aee3a32f52498dc47971dc4131a416983c0782c4",
 		},
+		PluginConformance: DocumentedSurface{
+			APIVersion:   install.PluginConformanceAPIVersion,
+			Stability:    "additive-local-diagnostic",
+			SchemaPath:   "schemas/plugin-conformance-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:244b31c6daf83cd4451d15089c7a8db4027fd761f58aefc6c114ff9379ad829b",
+		},
+		Support: DocumentedSurface{
+			APIVersion:   service.SupportAPIVersion,
+			Stability:    "additive-shareable-diagnostic",
+			SchemaPath:   "schemas/support-report-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:d8cbae42d6387e8e0d63eea11c7b2980d9518498a03845ff8f8a05afc4dc9806",
+		},
 		Provider: VersionedSurface{APIVersion: sdk.APIVersion, Stability: "source-compatible"},
 		Journal: JournalContract{
 			ReadableSegmentSchemas: []int{journal.LegacySegmentSchemaVersion, journal.CurrentSegmentSchemaVersion},
@@ -90,7 +106,7 @@ func Current() Report {
 			{View: "worker", Bytes: 8192},
 		},
 		Commands: []string{
-			"action", "backup", "context", "contract", "doctor", "evidence", "frontier", "graph", "harness", "history", "hook", "incident", "init", "inspect", "journal", "mcp", "observe", "plugin", "pre-wait", "projection", "provider", "reconcile", "role", "security", "signature", "status", "ui", "version",
+			"action", "backup", "context", "contract", "doctor", "evidence", "frontier", "graph", "harness", "history", "hook", "incident", "init", "inspect", "journal", "mcp", "observe", "plugin", "pre-wait", "projection", "provider", "reconcile", "role", "security", "signature", "status", "support", "ui", "version",
 		},
 		Promises: []string{
 			"journal history is never rewritten by an upgrade",
@@ -100,6 +116,7 @@ func Current() Report {
 			"the v1beta1 explorer remains loopback-only and exposes no lifecycle mutation route",
 			"security audit diagnostics omit authority payloads and absolute project paths",
 			"the local security boundary does not claim malicious same-user or multi-tenant isolation",
+			"support reports contain no authority payloads, absolute paths, prompts, artifact bodies, or harness output",
 			"SQLite remains disposable and rebuildable from the verified journal",
 		},
 	}

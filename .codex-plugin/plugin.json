@@ -1,6 +1,6 @@
 {
   "name": "dagrail",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "Govern long-running multi-agent DAGs without keeping lifecycle state in chat.",
   "author": {
     "name": "CongBao",

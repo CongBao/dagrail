@@ -493,6 +493,44 @@ func TestContractCLIReportsTheClosedMCPBetaSurface(t *testing.T) {
 	}
 }
 
+func TestPluginBundleCanBeMaterializedWithoutAHostOrNetwork(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, "runtime-data"))
+	var out, errOut bytes.Buffer
+	if err := cli.Run([]string{"plugin", "materialize"}, strings.NewReader(""), &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"status":"materialized"`) || !strings.Contains(out.String(), `"digest":"sha256:`) {
+		t.Fatalf("unexpected bundle receipt: %s", out.String())
+	}
+	out.Reset()
+	if err := cli.Run([]string{"plugin", "bundle-status"}, strings.NewReader(""), &out, &errOut); err != nil || !strings.Contains(out.String(), `"status":"verified"`) {
+		t.Fatalf("bundle status: %v %s", err, out.String())
+	}
+}
+
+func TestSupportCLIExportsOnceWithoutPrivateAuthority(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, "private-runtime"))
+	var out, errOut bytes.Buffer
+	if err := cli.Run([]string{"init", "--root", root, "--name", "private-project"}, strings.NewReader(""), &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "support.json")
+	out.Reset()
+	args := []string{"support", "export", "--root", root, "--output", output}
+	if err := cli.Run(args, strings.NewReader(""), &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(output)
+	if err != nil || !strings.Contains(string(raw), `"apiVersion":"dagrail.io/support/v1alpha1"`) || strings.Contains(string(raw), root) || strings.Contains(string(raw), "private-project") {
+		t.Fatalf("unsafe support export: %v %s", err, raw)
+	}
+	if err := cli.Run(args, strings.NewReader(""), &out, &errOut); err == nil {
+		t.Fatal("support export overwrote an existing report")
+	}
+}
+
 func TestObserveCLIRecordsOnlyAnIsolatedShadow(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("DAGRAIL_HOME", filepath.Join(root, "runtime-data"))

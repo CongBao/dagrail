@@ -17,6 +17,8 @@ external side effect.
 | Scale/context | 2,048 simultaneously ready nodes | full frontier is inspectable; orchestrator, worker, and reviewer contexts stay in budget |
 | Structured inputs | graph, patch, segment, and receipt fuzz corpora | no panic, unsafe receipt promotion, or unbounded accepted input |
 | Trust boundary | duplicate/unknown/deep inputs, oversized MCP/hook/journal frames, permission drift | closed rejection and path-redacted audit evidence |
+| Plugin projection | linked bytes, relative marketplace sources, local materialization mutation, missing hosts | exact bundle verification and closed conformance reasons with manual fallback |
+| Support evidence | private roots, project/graph/Node/actor identities, repeat export | schema-valid aggregate report, no private values, and exclusive file creation |
 
 The rename is the logical commit point. A returned error after rename is deliberately
 ambiguous: callers reconcile by replaying the journal and repeating the stable

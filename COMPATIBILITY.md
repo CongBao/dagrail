@@ -21,6 +21,9 @@ digests, context budgets, and command inventory implemented by the current binar
 - SecurityAudit and JournalVerification v1alpha1 fields are governed by the schema
   paths and exact digests in `dagrail contract`. They are additive, read-only reports;
   they do not upgrade the local-user boundary into an authorization system.
+- PluginConformance and SupportReport v1alpha1 fields are governed by the schema paths
+  and exact digests in `dagrail contract`. Conformance diagnostics are path-free;
+  SupportReport remains aggregate and free of authority payloads and host output.
 
 ## Not promised
 

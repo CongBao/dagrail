@@ -2,6 +2,31 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.13.0 — 2026-08-14
+
+### Added
+
+- a digest-addressed offline marketplace linked into the static executable, with exact
+  Codex, Claude Code, and Copilot manifests, skills, hooks, and assets materialized
+  under a stable local root before host installation;
+- `plugin materialize`, `plugin bundle-status`, and a schema-bound `plugin conformance`
+  report that separates runtime, bundle, host detection, plugin registration, MCP,
+  native capability, receipt proof, and explicit manual fallback;
+- schema-bound `support preview|export` diagnostics containing only pseudonymous
+  project identity, build metadata, typed security/journal evidence, status-only doctor
+  checks, and aggregate lifecycle counts.
+
+### Changed
+
+- default host installation uses the immutable bundled marketplace rather than a moving
+  Git branch; an explicit `--marketplace-source` remains available for development;
+- default uninstall removes the matching MCP, plugin, and bundled marketplace
+  registrations while retaining verified runtime and bundle bytes for rollback;
+- harness command output used by installation is capped at 64 KiB, and conformance
+  omits executable paths, raw host reasons, and unsafe or unbounded version output;
+- support export creates an owner-only new file and refuses to overwrite existing
+  evidence.
+
 ## 0.12.0 — 2026-08-14
 
 ### Added

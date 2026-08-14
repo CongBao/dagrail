@@ -45,8 +45,7 @@ func (appServerBackend) Probe(ctx context.Context, executable string) nativeCapa
 		return result
 	}
 	for _, args := range [][]string{{"app-server", "daemon", "--help"}, {"app-server", "proxy", "--help"}} {
-		command := exec.CommandContext(ctx, executable, args...)
-		output, err := command.CombinedOutput()
+		output, err := boundedCombinedOutput(ctx, executable, args...)
 		if err != nil {
 			result.Reason = boundedProtocolError(output, err)
 			return result
@@ -175,8 +174,7 @@ func observeCodexSession(client *jsonRPCClient, sessionID string, prior sdk.Effe
 func (appServerBackend) withClient(ctx context.Context, executable string, operation func(*jsonRPCClient) (sdk.EffectReceipt, error)) (sdk.EffectReceipt, error) {
 	operationCtx, cancel := context.WithTimeout(ctx, codexOperationLimit)
 	defer cancel()
-	start := exec.CommandContext(operationCtx, executable, "app-server", "daemon", "start")
-	if output, err := start.CombinedOutput(); err != nil {
+	if output, err := boundedCombinedOutput(operationCtx, executable, "app-server", "daemon", "start"); err != nil {
 		return sdk.EffectReceipt{}, fmt.Errorf("start Codex app-server daemon: %s", boundedProtocolError(output, err))
 	}
 	processCtx, stopProcess := context.WithCancel(operationCtx)

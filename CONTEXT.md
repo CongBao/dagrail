@@ -66,6 +66,15 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Security audit**: path-redacted v1alpha1 evidence over the cooperative OS-user
   boundary, filesystem permissions, journal verification, and projection integrity;
   it is not an authorization decision.
+- **Bundled marketplace**: the digest-addressed, host-neutral plugin projection linked
+  into a DAGrail executable and materialized as a local marketplace with relative
+  plugin sources; it is separate from runtime authority.
+- **Plugin conformance**: path-free typed evidence that the linked runtime, bundled
+  marketplace, host registration, MCP launcher, optional native capability, receipt
+  proof, and manual fallback agree.
+- **Support report**: pseudonymous, aggregate, schema-bound diagnostics that explicitly
+  exclude authority payloads, absolute paths, prompts, artifact bodies, harness output,
+  and graph identifiers.
 
 ## Invariants
 
@@ -96,6 +105,10 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
     envelope is typed; no reducer consumes a journal segment before these checks.
 16. Roles do not isolate a malicious same-user process. Security diagnostics state
     this boundary and never expose authority payloads or absolute project paths.
+17. Default plugin installation uses bytes linked into the verified runtime; host
+    registration never turns plugin marketplace state into DAG authority.
+18. A support report contains only aggregate or pseudonymous diagnostics and is
+    previewable before an exclusive owner-only export.
 
 ## Bounded contexts
 
@@ -108,7 +121,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
   detail, payload-free timeline, and operational summaries with stable local deep links.
 - **Operational surface**: payload-free status/history, verified journal backup,
   runtime upgrade/rollback, optional portable-file signatures, local security audit,
-  and a local read-only UI derived from authority.
+  bundled-plugin conformance, shareable support diagnostics, and a local read-only UI
+  derived from authority.
 - **Migration observation**: bounded source digests, private locators, isolated shadow
   import, and repeatable drift verification without lifecycle control.
 

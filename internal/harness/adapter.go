@@ -79,7 +79,7 @@ func (a *Adapter) probeResult(ctx context.Context) ProbeResult {
 	result := ProbeResult{Harness: a.id, Detected: err == nil, Executable: path, Capabilities: sdk.HarnessCapabilities{ContextHook: true}, Fallback: "explicit launch envelope"}
 	if err != nil && a.id == "codex" {
 		for _, fallback := range []string{"/Applications/ChatGPT.app/Contents/Resources/codex", "/Applications/Codex.app/Contents/Resources/codex"} {
-			if output, runErr := exec.CommandContext(probeCtx, fallback, "--version").CombinedOutput(); runErr == nil {
+			if output, runErr := boundedCombinedOutput(probeCtx, fallback, "--version"); runErr == nil {
 				result.Detected = true
 				result.Executable = fallback
 				result.Version = strings.TrimSpace(string(output))
@@ -89,7 +89,7 @@ func (a *Adapter) probeResult(ctx context.Context) ProbeResult {
 		}
 	}
 	if err == nil {
-		if output, runErr := exec.CommandContext(probeCtx, path, "--version").CombinedOutput(); runErr == nil {
+		if output, runErr := boundedCombinedOutput(probeCtx, path, "--version"); runErr == nil {
 			result.Version = strings.TrimSpace(string(output))
 		}
 	}
@@ -121,6 +121,14 @@ func (a *Adapter) probeResult(ctx context.Context) ProbeResult {
 		result.Reason = "harness executable not found"
 	}
 	return result
+}
+
+func boundedCombinedOutput(ctx context.Context, executable string, args ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, executable, args...)
+	output := &limitedWriter{remaining: 64 * 1024}
+	command.Stdout, command.Stderr = output, output
+	err := command.Run()
+	return []byte(output.String()), err
 }
 
 func (a *Adapter) Envelope(root, roleID, nodeID, sessionID string) Envelope {

@@ -80,8 +80,8 @@ DAGrail advances through evidence-backed milestones. A version is complete only 
 
 ## v0.13.0 — Installation and host operability
 
-- release-artifact installation, upgrade, rollback, uninstall, and offline verification
-  across the six supported OS/architecture targets;
+- digest-addressed runtime upgrade/rollback plus an offline marketplace linked into
+  every release artifact across the six supported OS/architecture targets;
 - fresh-host Codex, Claude Code, and Copilot plugin conformance fixtures with capability
   reports and actionable fallback diagnostics;
 - support bundles that disclose their exact, secret-free contents before export.

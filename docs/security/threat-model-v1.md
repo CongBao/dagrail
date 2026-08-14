@@ -12,6 +12,11 @@ authority free of obvious credentials and unbounded inputs, and make tampering v
 after an LLM session or process is replaced. It does not protect one process from
 another malicious process running as the same OS user.
 
+The linked plugin marketplace is distribution material, not authority. It contains only
+public manifests, skills, hooks, and brand assets; its exact file set is digest-bound
+before a host command can install it. Support reports are a separate, aggregate
+diagnostic format and never contain journal payloads or graph identifiers.
+
 ## Assets and boundaries
 
 | Asset | Authority | Protection | Explicit residual risk |
@@ -52,6 +57,11 @@ proved by the portable binary.
   omitted entry-point check cannot silently persist recognized credential material.
 - Dynamic-graph impact tokens authorize one apply attempt and are removed before the
   resulting Graph Revision event is committed.
+- Plugin materialization uses a closed embedded file set, host-specific relative local
+  marketplace sources, a digest-addressed destination, and exact mutation detection.
+- Support output pseudonymizes project identity and excludes absolute paths, Graph and
+  event payloads, Node/Role IDs, prompts, artifacts, and raw harness output before an
+  owner-only exclusive export is allowed.
 
 ## Threats intentionally not solved
 

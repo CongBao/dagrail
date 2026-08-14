@@ -15,6 +15,8 @@ import (
 const (
 	MarketplaceName          = "dagrail"
 	PluginID                 = "dagrail@dagrail"
+	BundledMarketplaceName   = "dagrail-bundled"
+	MCPServerName            = "dagrail"
 	DefaultMarketplaceSource = "CongBao/dagrail"
 )
 
@@ -30,7 +32,9 @@ type PlanResult struct {
 	Executable        string   `json:"executable,omitempty"`
 	MarketplaceAdd    []string `json:"marketplaceAdd"`
 	MarketplaceUpdate []string `json:"marketplaceUpdate"`
+	MarketplaceRemove []string `json:"marketplaceRemove"`
 	PluginInstall     []string `json:"pluginInstall"`
+	PluginRemove      []string `json:"pluginRemove"`
 	MCPRemove         []string `json:"mcpRemove"`
 	MCPAdd            []string `json:"mcpAdd"`
 }
@@ -66,25 +70,40 @@ func Plan(options Options) ([]PlanResult, error) {
 	results := make([]PlanResult, 0, len(harnesses))
 	for _, harness := range harnesses {
 		plan := PlanResult{Harness: harness}
+		marketplaceName, pluginID := MarketplaceName, PluginID
+		localMarketplace := filepath.IsAbs(options.MarketplaceSource)
+		if localMarketplace {
+			marketplaceName, pluginID = BundledMarketplaceName, "dagrail@"+BundledMarketplaceName
+		}
 		switch harness {
 		case "codex":
-			plan.MarketplaceAdd = []string{"plugin", "marketplace", "add", options.MarketplaceSource, "--ref", "main", "--json"}
-			plan.MarketplaceUpdate = []string{"plugin", "marketplace", "upgrade", MarketplaceName, "--json"}
-			plan.PluginInstall = []string{"plugin", "add", PluginID, "--json"}
-			plan.MCPRemove = []string{"mcp", "remove", MarketplaceName}
-			plan.MCPAdd = []string{"mcp", "add", MarketplaceName, "--", options.RuntimePath, "mcp", "--stdio"}
+			plan.MarketplaceAdd = []string{"plugin", "marketplace", "add", options.MarketplaceSource}
+			if !localMarketplace {
+				plan.MarketplaceAdd = append(plan.MarketplaceAdd, "--ref", "main")
+			}
+			plan.MarketplaceAdd = append(plan.MarketplaceAdd, "--json")
+			plan.MarketplaceUpdate = []string{"plugin", "marketplace", "upgrade", marketplaceName, "--json"}
+			plan.MarketplaceRemove = []string{"plugin", "marketplace", "remove", marketplaceName, "--json"}
+			plan.PluginInstall = []string{"plugin", "add", pluginID, "--json"}
+			plan.PluginRemove = []string{"plugin", "remove", pluginID, "--json"}
+			plan.MCPRemove = []string{"mcp", "remove", MCPServerName}
+			plan.MCPAdd = []string{"mcp", "add", MCPServerName, "--", options.RuntimePath, "mcp", "--stdio"}
 		case "claude-code":
 			plan.MarketplaceAdd = []string{"plugin", "marketplace", "add", options.MarketplaceSource}
-			plan.MarketplaceUpdate = []string{"plugin", "marketplace", "update", MarketplaceName}
-			plan.PluginInstall = []string{"plugin", "install", PluginID, "--scope", "user"}
-			plan.MCPRemove = []string{"mcp", "remove", MarketplaceName}
-			plan.MCPAdd = []string{"mcp", "add", "--transport", "stdio", "--scope", "user", MarketplaceName, "--", options.RuntimePath, "mcp", "--stdio"}
+			plan.MarketplaceUpdate = []string{"plugin", "marketplace", "update", marketplaceName}
+			plan.MarketplaceRemove = []string{"plugin", "marketplace", "remove", marketplaceName}
+			plan.PluginInstall = []string{"plugin", "install", pluginID, "--scope", "user"}
+			plan.PluginRemove = []string{"plugin", "uninstall", pluginID, "--scope", "user"}
+			plan.MCPRemove = []string{"mcp", "remove", MCPServerName}
+			plan.MCPAdd = []string{"mcp", "add", "--transport", "stdio", "--scope", "user", MCPServerName, "--", options.RuntimePath, "mcp", "--stdio"}
 		case "copilot-cli":
 			plan.MarketplaceAdd = []string{"plugin", "marketplace", "add", options.MarketplaceSource}
-			plan.MarketplaceUpdate = []string{"plugin", "marketplace", "update", MarketplaceName}
-			plan.PluginInstall = []string{"plugin", "install", PluginID}
-			plan.MCPRemove = []string{"mcp", "remove", MarketplaceName}
-			plan.MCPAdd = []string{"mcp", "add", MarketplaceName, "--timeout", "10000", "--", options.RuntimePath, "mcp", "--stdio"}
+			plan.MarketplaceUpdate = []string{"plugin", "marketplace", "update", marketplaceName}
+			plan.MarketplaceRemove = []string{"plugin", "marketplace", "remove", marketplaceName}
+			plan.PluginInstall = []string{"plugin", "install", pluginID}
+			plan.PluginRemove = []string{"plugin", "uninstall", "dagrail"}
+			plan.MCPRemove = []string{"mcp", "remove", MCPServerName}
+			plan.MCPAdd = []string{"mcp", "add", MCPServerName, "--timeout", "10000", "--", options.RuntimePath, "mcp", "--stdio"}
 		}
 		results = append(results, plan)
 	}
@@ -193,18 +212,16 @@ func Uninstall(ctx context.Context, options Options) ([]Result, error) {
 			continue
 		}
 		_, _ = run(ctx, executable, plan.MCPRemove...)
-		var args []string
-		switch plan.Harness {
-		case "codex":
-			args = []string{"plugin", "remove", "dagrail"}
-		case "claude-code":
-			args = []string{"plugin", "uninstall", PluginID, "--scope", "user"}
-		case "copilot-cli":
-			args = []string{"plugin", "uninstall", "dagrail"}
-		}
-		if _, runErr := run(ctx, executable, args...); runErr != nil {
+		pluginOutput, runErr := run(ctx, executable, plan.PluginRemove...)
+		if runErr != nil && !alreadyAbsent(pluginOutput) {
 			failures = append(failures, runErr)
 			results = append(results, Result{Harness: plan.Harness, Status: "failed", Executable: executable, Message: runErr.Error()})
+			continue
+		}
+		marketplaceOutput, removeErr := run(ctx, executable, plan.MarketplaceRemove...)
+		if removeErr != nil && !alreadyAbsent(marketplaceOutput) {
+			failures = append(failures, removeErr)
+			results = append(results, Result{Harness: plan.Harness, Status: "uninstalled_marketplace_retained", Executable: executable, Message: removeErr.Error()})
 			continue
 		}
 		results = append(results, Result{Harness: plan.Harness, Status: "uninstalled", Executable: executable})
@@ -271,11 +288,13 @@ func findExecutable(harness string) string {
 }
 func run(ctx context.Context, name string, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, name, args...)
-	output, err := command.CombinedOutput()
+	output := &boundedBuffer{remaining: 64 * 1024}
+	command.Stdout, command.Stderr = output, output
+	err := command.Run()
 	if err != nil {
-		return string(output), fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+		return output.String(), fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(output.String()))
 	}
-	return string(output), nil
+	return output.String(), nil
 }
 func alreadyRegistered(output string) bool {
 	value := strings.ToLower(output)
@@ -290,4 +309,13 @@ func marketplaceAlreadyAdded(output string) bool {
 		AlreadyAdded bool `json:"alreadyAdded"`
 	}
 	return json.Unmarshal([]byte(output), &value) == nil && value.AlreadyAdded
+}
+
+func alreadyAbsent(output string) bool {
+	value := strings.ToLower(output)
+	return strings.Contains(value, "not found") ||
+		strings.Contains(value, "not installed") ||
+		strings.Contains(value, "not registered") ||
+		strings.Contains(value, "does not exist") ||
+		strings.Contains(value, "no such")
 }
