@@ -187,6 +187,47 @@ func TestEvidenceProjectionRebuildsFromMaterializedState(t *testing.T) {
 	assertEvidenceProjectionCounts(t, store.path, 1, 1, 2)
 }
 
+func TestLogicalFingerprintMatchesIndependentRebuildAndDetectsChange(t *testing.T) {
+	state := domain.NewState("project")
+	state.Incidents["incident"] = domain.Incident{ID: "incident", Status: "open"}
+	first, err := Open(filepath.Join(t.TempDir(), "first"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Open(filepath.Join(t.TempDir(), "second"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Sync(state, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Sync(state, nil); err != nil {
+		t.Fatal(err)
+	}
+	one, err := first.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := second.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one.Digest != two.Digest || one.Schema != CurrentSchemaVersion || one.Rows["incidents"] != 1 {
+		t.Fatalf("independent fingerprints differ: %+v %+v", one, two)
+	}
+	state.Incidents["incident"] = domain.Incident{ID: "incident", Status: "resolved"}
+	if err := second.Sync(state, nil); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := second.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.Digest == one.Digest {
+		t.Fatal("logical state change did not change the projection fingerprint")
+	}
+}
+
 func assertEvidenceProjectionCounts(t *testing.T, path string, packages, decisions, artifacts int) {
 	t.Helper()
 	db, err := sql.Open("sqlite", path)

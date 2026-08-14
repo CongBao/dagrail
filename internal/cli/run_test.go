@@ -531,6 +531,22 @@ func TestSupportCLIExportsOnceWithoutPrivateAuthority(t *testing.T) {
 	}
 }
 
+func TestRecoveryCLIEmitsSchemaBoundReadOnlyRehearsal(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, "runtime-data"))
+	var out, errOut bytes.Buffer
+	if err := cli.Run([]string{"init", "--root", root, "--name", "recovery"}, strings.NewReader(""), &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := cli.Run([]string{"recovery", "rehearse", "--root", root}, strings.NewReader(""), &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"apiVersion":"dagrail.io/recovery-rehearsal/v1alpha1"`) || !strings.Contains(out.String(), `"ready":true`) || !strings.Contains(out.String(), `"projectionEquivalent":true`) {
+		t.Fatalf("unexpected recovery rehearsal: %s", out.String())
+	}
+}
+
 func TestObserveCLIRecordsOnlyAnIsolatedShadow(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("DAGRAIL_HOME", filepath.Join(root, "runtime-data"))

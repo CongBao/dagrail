@@ -32,6 +32,16 @@ type Service struct {
 }
 
 func Open(root string) (*Service, error) {
+	return open(root, false)
+}
+
+// OpenForRecovery opens existing authority and projection state without automatic
+// node settlement, projection migration, repair, or synchronization.
+func OpenForRecovery(root string) (*Service, error) {
+	return open(root, true)
+}
+
+func open(root string, recoveryInspection bool) (*Service, error) {
 	p, err := project.Open(root)
 	if err != nil {
 		return nil, err
@@ -40,7 +50,12 @@ func Open(root string) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	projectionStore, err := projection.Open(p.DataDir)
+	var projectionStore *projection.Store
+	if recoveryInspection {
+		projectionStore, err = projection.Inspect(p.DataDir)
+	} else {
+		projectionStore, err = projection.Open(p.DataDir)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +101,9 @@ func Open(root string) (*Service, error) {
 		}
 	}
 	service := &Service{Project: p, Journal: j, Projection: projectionStore, Providers: registry, ProviderRuntime: internalproviders.NewRuntime(registry), Now: time.Now}
+	if recoveryInspection {
+		return service, nil
+	}
 	if err := service.settleAutomatic(); err != nil {
 		return nil, err
 	}

@@ -85,6 +85,11 @@ doctor evidence. They exclude Graph and event payloads, identifiers, absolute pa
 prompts, artifact bodies, and raw harness output. Export is owner-only and exclusive;
 operators should still preview the exact report before sharing it.
 
+Recovery rehearsal copies a verified immutable journal prefix only into a fresh
+disposable directory, replays it, and rebuilds a separate SQLite projection. It never
+replaces live files. Its state and projection fingerprints are digests, not signatures;
+they prove deterministic local equivalence but do not establish an external identity.
+
 Detached Ed25519 signatures are optional and cover the SHA-256 digest of exact file
 bytes with a DAGrail domain separator. Private keys must be protected separately and
 public keys must be distributed through a trusted channel. Export signatures neither

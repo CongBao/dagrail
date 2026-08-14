@@ -2,10 +2,14 @@ package projection
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -18,7 +22,18 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-type Store struct{ path string }
+type Store struct {
+	path     string
+	readOnly bool
+}
+
+type LogicalFingerprint struct {
+	Digest       string         `json:"digest"`
+	Schema       int            `json:"schema"`
+	HeadSequence uint64         `json:"headSequence"`
+	HeadHash     string         `json:"headHash,omitempty"`
+	Rows         map[string]int `json:"rows"`
+}
 
 const MaxProjectionBytes int64 = 16 << 30
 
@@ -71,6 +86,30 @@ func Open(dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("harden rebuilt projection permissions: %w", err)
 	}
 	return store, nil
+}
+
+// Inspect returns a projection handle without creating, migrating, repairing,
+// chmodding, or synchronizing the database. It is used by recovery rehearsal so a
+// missing or corrupt live projection remains evidence rather than being repaired on
+// open.
+func Inspect(dataDir string) (*Store, error) {
+	path := filepath.Join(dataDir, "projection.sqlite")
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > MaxProjectionBytes {
+			return nil, fmt.Errorf("projection must be a regular non-symlink file no larger than %d bytes", MaxProjectionBytes)
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	return &Store{path: path, readOnly: true}, nil
+}
+
+func (s *Store) database() (*sql.DB, error) {
+	if !s.readOnly {
+		return sql.Open("sqlite", s.path)
+	}
+	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(s.path), RawQuery: "mode=ro"}).String()
+	return sql.Open("sqlite", dsn)
 }
 
 func isTransientSQLiteError(err error) bool {
@@ -169,7 +208,7 @@ PRAGMA user_version=3;
 `
 
 func (s *Store) SchemaVersion() (int, error) {
-	db, err := sql.Open("sqlite", s.path)
+	db, err := s.database()
 	if err != nil {
 		return 0, err
 	}
@@ -190,7 +229,10 @@ func (s *Store) SchemaVersion() (int, error) {
 }
 
 func (s *Store) Sync(state domain.State, segments []journal.Segment) error {
-	db, err := sql.Open("sqlite", s.path)
+	if s.readOnly {
+		return fmt.Errorf("read-only projection cannot be synchronized")
+	}
+	db, err := s.database()
 	if err != nil {
 		return err
 	}
@@ -315,6 +357,9 @@ func (s *Store) Sync(state domain.State, segments []journal.Segment) error {
 }
 
 func (s *Store) Rebuild(state domain.State, segments []journal.Segment) error {
+	if s.readOnly {
+		return fmt.Errorf("read-only projection cannot be rebuilt")
+	}
 	if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -328,7 +373,7 @@ func (s *Store) Rebuild(state domain.State, segments []journal.Segment) error {
 }
 
 func (s *Store) Integrity() error {
-	db, err := sql.Open("sqlite", s.path)
+	db, err := s.database()
 	if err != nil {
 		return err
 	}
@@ -343,6 +388,137 @@ func (s *Store) Integrity() error {
 	if result != "ok" {
 		return fmt.Errorf("SQLite integrity check returned %s", result)
 	}
+	return nil
+}
+
+// Fingerprint hashes the complete logical projection in a stable table and row
+// order. It deliberately ignores SQLite pages, WAL layout, and filesystem paths,
+// so an independently rebuilt database can be compared with the live projection.
+func (s *Store) Fingerprint() (LogicalFingerprint, error) {
+	db, err := s.database()
+	if err != nil {
+		return LogicalFingerprint{}, err
+	}
+	defer db.Close()
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		return LogicalFingerprint{}, err
+	}
+	tx, err := db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return LogicalFingerprint{}, err
+	}
+	defer tx.Rollback()
+	var schema int
+	if err := tx.QueryRow("PRAGMA user_version").Scan(&schema); err != nil {
+		return LogicalFingerprint{}, err
+	}
+	tables := []struct {
+		name  string
+		query string
+	}{
+		{"metadata", "SELECT key,value FROM metadata ORDER BY key"},
+		{"applied_segments", "SELECT sequence,hash,segment_schema FROM applied_segments ORDER BY sequence"},
+		{"graph_revisions", "SELECT revision,graph_json,sequence FROM graph_revisions ORDER BY revision"},
+		{"nodes", "SELECT node_id,kind,role_id,status,outcome FROM nodes ORDER BY node_id"},
+		{"edges", "SELECT edge_id,source_id,target_id,predicate_json FROM edges ORDER BY edge_id"},
+		{"roles", "SELECT role_id,capabilities_json FROM roles ORDER BY role_id"},
+		{"attempts", "SELECT attempt_id,node_id,status,outcome,checkpoint_id FROM attempts ORDER BY attempt_id"},
+		{"role_leases", "SELECT role_id,binding_json,expires_at FROM role_leases ORDER BY role_id"},
+		{"checkpoints", "SELECT checkpoint_id,attempt_id,payload_json FROM checkpoints ORDER BY checkpoint_id"},
+		{"evidence_packages", "SELECT package_id,attempt_id,node_id,core_digest,package_json,sequence FROM evidence_packages ORDER BY package_id"},
+		{"reuse_decisions", "SELECT decision_id,package_id,result,decision_json,sequence FROM reuse_decisions ORDER BY decision_id"},
+		{"actions", "SELECT action_id,payload_json,status FROM actions ORDER BY action_id"},
+		{"outbox", "SELECT action_id,effect_json,status FROM outbox ORDER BY action_id"},
+		{"incidents", "SELECT incident_id,payload_json,status FROM incidents ORDER BY incident_id"},
+		{"resources", "SELECT resource_id,lease_json,status FROM resources ORDER BY resource_id"},
+		{"evidence_index", "SELECT digest,metadata_json FROM evidence_index ORDER BY digest"},
+	}
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("dagrail-projection-logical-v1\x00"))
+	if err := writeFingerprintValue(hash, int64(schema)); err != nil {
+		return LogicalFingerprint{}, err
+	}
+	result := LogicalFingerprint{Schema: schema, Rows: map[string]int{}}
+	for _, table := range tables {
+		if err := writeFingerprintValue(hash, table.name); err != nil {
+			return LogicalFingerprint{}, err
+		}
+		rows, err := tx.Query(table.query)
+		if err != nil {
+			return LogicalFingerprint{}, fmt.Errorf("fingerprint projection table %s: %w", table.name, err)
+		}
+		columns, err := rows.Columns()
+		if err != nil {
+			_ = rows.Close()
+			return LogicalFingerprint{}, err
+		}
+		for rows.Next() {
+			values := make([]any, len(columns))
+			destinations := make([]any, len(columns))
+			for index := range values {
+				destinations[index] = &values[index]
+			}
+			if err := rows.Scan(destinations...); err != nil {
+				_ = rows.Close()
+				return LogicalFingerprint{}, err
+			}
+			if err := writeFingerprintValue(hash, int64(len(values))); err != nil {
+				_ = rows.Close()
+				return LogicalFingerprint{}, err
+			}
+			for _, value := range values {
+				if err := writeFingerprintValue(hash, value); err != nil {
+					_ = rows.Close()
+					return LogicalFingerprint{}, err
+				}
+			}
+			result.Rows[table.name]++
+			if table.name == "applied_segments" {
+				if sequence, ok := values[0].(int64); ok {
+					result.HeadSequence = uint64(sequence)
+				}
+				if head, ok := values[1].(string); ok {
+					result.HeadHash = head
+				}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return LogicalFingerprint{}, err
+		}
+		if err := rows.Close(); err != nil {
+			return LogicalFingerprint{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return LogicalFingerprint{}, err
+	}
+	result.Digest = "sha256:" + hex.EncodeToString(hash.Sum(nil))
+	return result, nil
+}
+
+func writeFingerprintValue(hash interface{ Write([]byte) (int, error) }, value any) error {
+	var tag byte
+	var data []byte
+	switch typed := value.(type) {
+	case nil:
+		tag = 0
+	case int64:
+		tag = 1
+		data = make([]byte, 8)
+		binary.BigEndian.PutUint64(data, uint64(typed))
+	case string:
+		tag, data = 2, []byte(typed)
+	case []byte:
+		tag, data = 3, typed
+	default:
+		return fmt.Errorf("unsupported projection fingerprint value type %T", value)
+	}
+	_, _ = hash.Write([]byte{tag})
+	length := make([]byte, 8)
+	binary.BigEndian.PutUint64(length, uint64(len(data)))
+	_, _ = hash.Write(length)
+	_, _ = hash.Write(data)
 	return nil
 }
 

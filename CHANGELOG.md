@@ -2,6 +2,25 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.14.0 — 2026-08-14
+
+### Added
+
+- `recovery rehearse`, a schema-bound read-only disaster-recovery proof that captures a
+  verified journal head, restores the exact prefix into disposable storage, replays the
+  reducer, and rebuilds an independent SQLite projection;
+- stable logical projection fingerprints over every materialized table, independent of
+  SQLite pages, WAL layout, data-root path, or filesystem metadata;
+- recovery qualification for legacy event upcasting, stale projection detection,
+  post-rebuild equivalence, and proof that rehearsal does not mutate the live project.
+
+### Changed
+
+- journal compatibility can now be evaluated against a captured immutable segment set,
+  avoiding a second read that could drift from the recovery snapshot;
+- the compatibility contract now publishes the RecoveryRehearsal v1alpha1 schema and
+  guarantees that rehearsal writes only to disposable storage.
+
 ## 0.13.0 — 2026-08-14
 
 ### Added

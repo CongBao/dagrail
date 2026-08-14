@@ -19,6 +19,7 @@ external side effect.
 | Trust boundary | duplicate/unknown/deep inputs, oversized MCP/hook/journal frames, permission drift | closed rejection and path-redacted audit evidence |
 | Plugin projection | linked bytes, relative marketplace sources, local materialization mutation, missing hosts | exact bundle verification and closed conformance reasons with manual fallback |
 | Support evidence | private roots, project/graph/Node/actor identities, repeat export | schema-valid aggregate report, no private values, and exclusive file creation |
+| Disaster recovery | exact-prefix restore, legacy upcast, stale/deleted projection, independent rebuild | identical state and logical projection fingerprints without live mutation |
 
 The rename is the logical commit point. A returned error after rename is deliberately
 ambiguous: callers reconcile by replaying the journal and repeating the stable

@@ -62,6 +62,9 @@ proved by the portable binary.
 - Support output pseudonymizes project identity and excludes absolute paths, Graph and
   event payloads, Node/Role IDs, prompts, artifacts, and raw harness output before an
   owner-only exclusive export is allowed.
+- Recovery rehearsal binds all checks to one captured journal head, restores only into
+  disposable storage, and compares a stable logical-table fingerprint rather than
+  SQLite page bytes. It cannot overwrite or truncate the live journal.
 
 ## Threats intentionally not solved
 

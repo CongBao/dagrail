@@ -45,6 +45,7 @@ type Report struct {
 	JournalVerification DocumentedSurface        `json:"journalVerification"`
 	PluginConformance   DocumentedSurface        `json:"pluginConformance"`
 	Support             DocumentedSurface        `json:"support"`
+	Recovery            DocumentedSurface        `json:"recovery"`
 	Provider            VersionedSurface         `json:"providerSdk"`
 	Journal             JournalContract          `json:"journal"`
 	Projection          int                      `json:"projectionSchema"`
@@ -92,6 +93,12 @@ func Current() Report {
 			SchemaPath:   "schemas/support-report-v1alpha1.schema.json",
 			SchemaSHA256: "sha256:d8cbae42d6387e8e0d63eea11c7b2980d9518498a03845ff8f8a05afc4dc9806",
 		},
+		Recovery: DocumentedSurface{
+			APIVersion:   service.RecoveryAPIVersion,
+			Stability:    "additive-read-only-rehearsal",
+			SchemaPath:   "schemas/recovery-rehearsal-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:8a465d234f701ee98247117021f92657f603161aeb16f00a3ae3c1537e58b514",
+		},
 		Provider: VersionedSurface{APIVersion: sdk.APIVersion, Stability: "source-compatible"},
 		Journal: JournalContract{
 			ReadableSegmentSchemas: []int{journal.LegacySegmentSchemaVersion, journal.CurrentSegmentSchemaVersion},
@@ -106,7 +113,7 @@ func Current() Report {
 			{View: "worker", Bytes: 8192},
 		},
 		Commands: []string{
-			"action", "backup", "context", "contract", "doctor", "evidence", "frontier", "graph", "harness", "history", "hook", "incident", "init", "inspect", "journal", "mcp", "observe", "plugin", "pre-wait", "projection", "provider", "reconcile", "role", "security", "signature", "status", "support", "ui", "version",
+			"action", "backup", "context", "contract", "doctor", "evidence", "frontier", "graph", "harness", "history", "hook", "incident", "init", "inspect", "journal", "mcp", "observe", "plugin", "pre-wait", "projection", "provider", "reconcile", "recovery", "role", "security", "signature", "status", "support", "ui", "version",
 		},
 		Promises: []string{
 			"journal history is never rewritten by an upgrade",
@@ -117,6 +124,7 @@ func Current() Report {
 			"security audit diagnostics omit authority payloads and absolute project paths",
 			"the local security boundary does not claim malicious same-user or multi-tenant isolation",
 			"support reports contain no authority payloads, absolute paths, prompts, artifact bodies, or harness output",
+			"recovery rehearsal writes only to disposable storage and binds replay and projection evidence to one immutable journal head",
 			"SQLite remains disposable and rebuildable from the verified journal",
 		},
 	}

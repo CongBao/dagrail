@@ -126,11 +126,18 @@ bundled uninstall.
 ## Repair projections
 
 ```sh
+dagrail recovery rehearse --root .
 dagrail journal verify --root .
 dagrail journal compatibility --root .
 dagrail journal replay --root .
 dagrail projection rebuild --root .
 dagrail doctor --root .
 ```
+
+Run the rehearsal before deleting or replacing anything. A passing report binds schema
+compatibility, exact-prefix journal restore, reducer replay, disposable projection
+rebuild, and live/rebuilt logical fingerprints to one head. If only SQLite is damaged,
+`projection rebuild` is sufficient; journal restore is reserved for a verified backup
+whose prefix does not diverge. See `docs/recovery.md` for the bounded runbook.
 
 Verify authority before repair. Projection rebuild never edits journal segments.

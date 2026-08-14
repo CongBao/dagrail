@@ -132,4 +132,8 @@ func TestServiceReplaysLegacyGraphEventIntoCurrentProjection(t *testing.T) {
 	if compatibility.Journal.UpcastedEventCount != 1 || compatibility.ProjectionSchemaVersion != 3 {
 		t.Fatalf("unexpected compatibility after replay: %#v", compatibility)
 	}
+	recovery, err := service.RehearseRecovery()
+	if err != nil || !recovery.Ready || recovery.Compatibility.LegacySegmentCount != 1 || recovery.Compatibility.UpcastedEventCount != 1 {
+		t.Fatalf("legacy journal did not pass a full recovery rehearsal: %#v %v", recovery, err)
+	}
 }

@@ -56,6 +56,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runPreWait(args[1:], stdout, stderr)
 	case "reconcile":
 		return runReconcile(args[1:], stdout, stderr)
+	case "recovery":
+		return runRecovery(args[1:], stdout, stderr)
 	case "mcp":
 		return runMCP(args[1:], stderr)
 	case "observe":
@@ -1004,6 +1006,33 @@ func runSupport(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 	return writeJSON(stdout, report)
+}
+
+func runRecovery(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 || args[0] != "rehearse" {
+		return fmt.Errorf("usage: dagrail recovery rehearse [--root path]")
+	}
+	flags := flag.NewFlagSet("recovery rehearse", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	root := flags.String("root", ".", "project root")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	s, err := service.OpenForRecovery(*root)
+	if err != nil {
+		return err
+	}
+	report, err := s.RehearseRecovery()
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(stdout, report); err != nil {
+		return err
+	}
+	if !report.Ready {
+		return fmt.Errorf("recovery rehearsal did not pass")
+	}
+	return nil
 }
 
 func runDoctor(args []string, stdout, stderr io.Writer) error {

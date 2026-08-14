@@ -350,6 +350,13 @@ func (s *Store) Compatibility() (CompatibilityReport, error) {
 	if err != nil {
 		return CompatibilityReport{}, err
 	}
+	return CompatibilityForSegments(segments)
+}
+
+// CompatibilityForSegments analyzes a previously verified immutable snapshot.
+// It avoids racing a second journal read while a recovery rehearsal is bound to
+// a specific head.
+func CompatibilityForSegments(segments []Segment) (CompatibilityReport, error) {
 	report := CompatibilityReport{
 		Compatible:              true,
 		SegmentCount:            len(segments),

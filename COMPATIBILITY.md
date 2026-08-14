@@ -24,6 +24,9 @@ digests, context budgets, and command inventory implemented by the current binar
 - PluginConformance and SupportReport v1alpha1 fields are governed by the schema paths
   and exact digests in `dagrail contract`. Conformance diagnostics are path-free;
   SupportReport remains aggregate and free of authority payloads and host output.
+- RecoveryRehearsal v1alpha1 is a read-only, additive report bound to one immutable
+  journal head. A passing rehearsal proves exact-prefix restore, reducer replay, current
+  schema readability, projection rebuild, and logical projection equivalence.
 
 ## Not promised
 

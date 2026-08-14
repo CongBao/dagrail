@@ -47,7 +47,7 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 
 ## Status
 
-`v0.13.0` is an operable beta candidate: local-first and single-user, with one native Go
+`v0.14.0` is a recoverable beta candidate: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
 stdio MCP. Its operational surface adds explainable dependency blockers, incident
 circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
@@ -73,7 +73,7 @@ verifies owner-only POSIX runtime state, and makes vulnerability and license che
 gates. The boundary remains cooperative: another malicious process running as the same
 OS user is outside the guarantee.
 
-The v0.13 executable also contains an exact, digest-addressed local marketplace. A
+The executable also contains an exact, digest-addressed local marketplace. A
 normal plugin install materializes that immutable bundle and installs all three hosts
 without fetching plugin content from a moving branch. `plugin conformance` reports the
 runtime, bundle, host, MCP, native receipt, and manual-fallback layers independently.
@@ -186,11 +186,15 @@ dagrail projection rebuild
 dagrail doctor
 dagrail security audit
 dagrail support preview
+dagrail recovery rehearse
 ```
 
 Create and verify a portable journal backup with `dagrail backup create` and
 `dagrail backup verify`. Restore is exact-prefix-only and rebuilds SQLite automatically.
-See [`docs/operations.md`](docs/operations.md) for status, history, incident, backup, and
+`recovery rehearse` restores the captured journal into disposable storage, replays the
+reducer, rebuilds SQLite, and compares logical projection fingerprints without mutating
+the live project. See [`docs/recovery.md`](docs/recovery.md) for the incident runbook and
+[`docs/operations.md`](docs/operations.md) for status, history, incident, backup, and
 read-only UI workflows, and [`docs/ui.md`](docs/ui.md) for Explorer bounds and deep
 links.
 

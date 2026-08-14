@@ -75,6 +75,9 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Support report**: pseudonymous, aggregate, schema-bound diagnostics that explicitly
   exclude authority payloads, absolute paths, prompts, artifact bodies, harness output,
   and graph identifiers.
+- **Recovery rehearsal**: a read-only proof bound to one journal head that restores its
+  exact prefix in disposable storage, replays the reducer, rebuilds SQLite, and compares
+  logical projection fingerprints.
 
 ## Invariants
 
@@ -109,6 +112,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
     registration never turns plugin marketplace state into DAG authority.
 18. A support report contains only aggregate or pseudonymous diagnostics and is
     previewable before an exclusive owner-only export.
+19. Recovery rehearsal never replaces live authority or projection files; every restore
+    and rebuild write is confined to disposable storage and compared by stable digest.
 
 ## Bounded contexts
 

@@ -4,7 +4,7 @@
   "title": "DAGrail Compatibility Contract v1beta1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiVersion", "kind", "version", "stability", "graph", "cli", "ui", "security", "journalVerification", "pluginConformance", "support", "providerSdk", "journal", "projectionSchema", "mcpTools", "contextBudgets", "topLevelCommands", "compatibilityPromises"],
+  "required": ["apiVersion", "kind", "version", "stability", "graph", "cli", "ui", "security", "journalVerification", "pluginConformance", "support", "recovery", "providerSdk", "journal", "projectionSchema", "mcpTools", "contextBudgets", "topLevelCommands", "compatibilityPromises"],
   "properties": {
     "apiVersion": {"const": "dagrail.io/v1beta1"},
     "kind": {"const": "CompatibilityContract"},
@@ -17,6 +17,7 @@
     "journalVerification": {"$ref": "#/$defs/documentedSurface"},
     "pluginConformance": {"$ref": "#/$defs/documentedSurface"},
     "support": {"$ref": "#/$defs/documentedSurface"},
+    "recovery": {"$ref": "#/$defs/documentedSurface"},
     "providerSdk": {"$ref": "#/$defs/surface"},
     "journal": {
       "type": "object",
