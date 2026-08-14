@@ -70,6 +70,7 @@ var commands = []Command{
 	{Name: "projection", Summary: "Rebuild or render derived projections", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"rebuild", "render"}},
 	{Name: "provider", Summary: "List, check, or invoke compiled providers", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"check", "invoke", "list"}},
 	{Name: "qualify", Summary: "Evaluate structural release qualification", Effect: "read", Project: "optional", Output: "json", Subcommands: []string{"release"}},
+	{Name: "readiness", Summary: "Aggregate pre-1.0 evidence without inferring adoption", Effect: "read", Project: "optional", Output: "json", Subcommands: []string{}},
 	{Name: "reconcile", Summary: "Reconcile an uncertain external effect", Effect: "write", Project: "required", Output: "json", Subcommands: []string{}},
 	{Name: "recovery", Summary: "Rehearse disposable recovery", Effect: "read", Project: "required", Output: "json", Subcommands: []string{"rehearse"}},
 	{Name: "release", Summary: "Create or verify a closed release manifest", Effect: "mixed", Project: "none", Output: "json", Subcommands: []string{"manifest", "verify"}},

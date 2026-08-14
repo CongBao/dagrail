@@ -51,6 +51,13 @@ external-reference URLs, and artifact bodies. Every collection and response, inc
 the legacy snapshot route, has a fixed bound; `HEAD` performs the same validation as
 `GET`. It is not a remotely deployable authenticated dashboard.
 
+Loopback is a network bind restriction, not a browser-origin boundary. The Explorer
+rejects non-loopback and DNS-rebinding Host values, and an explicit Origin must match
+the exact HTTP Host including port. Cross-port localhost requests are rejected, CORS is
+never enabled, and same-origin resource/opener policies are emitted. This limits
+browser-mediated cross-origin reads; it does not isolate another malicious process
+running under the same OS account.
+
 The Codex native adapter talks only to the detected local executable through the
 harness-owned app-server daemon and stdio proxy. Receipt detail omits the generated work
 prompt. Capability probing does not start a thread, and automated tests use protocol
@@ -109,6 +116,11 @@ emits closed status codes rather than source or project paths. Optional project 
 uses inspection-only security and recovery checks. Structural qualification never
 claims that CI actually ran for a particular tag or that production adoption occurred;
 the tag workflow supplies build evidence and the report leaves adoption gaps explicit.
+
+The historical compatibility job builds exact commit-pinned v0.10–v0.17 sources in
+temporary directories. Source archives reject traversal, links, unsupported entry
+types, excessive entries, and excessive expanded bytes. Readiness reports cite the
+manifest digest but cannot turn this CI evidence into production validation.
 
 Detached Ed25519 signatures are optional and cover the SHA-256 digest of exact file
 bytes with a DAGrail domain separator. Private keys must be protected separately and

@@ -101,6 +101,50 @@ func TestUIServerRejectsNonLoopbackBinding(t *testing.T) {
 	}
 }
 
+func TestExplorerRejectsDNSRebindingAndCrossPortOrigins(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := service.Init(root, "origin-boundary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(ui.Handler(svc))
+	defer server.Close()
+
+	maliciousHost, _ := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+	maliciousHost.Host = "rebound.example.invalid"
+	response, err := http.DefaultClient.Do(maliciousHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusMisdirectedRequest {
+		t.Fatalf("DNS-rebinding Host was accepted: %d", response.StatusCode)
+	}
+
+	crossPort, _ := http.NewRequest(http.MethodGet, server.URL+"/api/v1/overview", nil)
+	crossPort.Header.Set("Origin", "http://127.0.0.1:6553")
+	response, err = http.DefaultClient.Do(crossPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusForbidden || response.Header.Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("cross-port Origin was accepted or CORS-enabled: %d %+v", response.StatusCode, response.Header)
+	}
+
+	sameOrigin, _ := http.NewRequest(http.MethodGet, server.URL+"/api/v1/overview", nil)
+	sameOrigin.Header.Set("Origin", server.URL)
+	response, err = http.DefaultClient.Do(sameOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || response.Header.Get("Cross-Origin-Resource-Policy") != "same-origin" || response.Header.Get("Cross-Origin-Opener-Policy") != "same-origin" {
+		t.Fatalf("same-origin response lacks isolation headers: %d %+v", response.StatusCode, response.Header)
+	}
+}
+
 func TestExplorerAPIsAreFilteredBoundedAndPayloadFree(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))

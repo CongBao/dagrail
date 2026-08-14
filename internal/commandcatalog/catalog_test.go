@@ -12,7 +12,7 @@ import (
 
 func TestCatalogIsClosedSortedAndDeterministic(t *testing.T) {
 	report := Current("0.17.0")
-	if report.APIVersion != APIVersion || report.Kind != "CommandCatalog" || len(report.Commands) != 34 {
+	if report.APIVersion != APIVersion || report.Kind != "CommandCatalog" || len(report.Commands) != 35 {
 		t.Fatalf("unexpected catalog: %#v", report)
 	}
 	previous := ""

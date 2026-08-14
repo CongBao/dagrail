@@ -27,7 +27,7 @@ func TestBetaContractIsDeterministicAndNamesExactlySixMCPTools(t *testing.T) {
 	if first.APIVersion != "dagrail.io/v1beta1" || first.Kind != "CompatibilityContract" || first.UI.APIVersion != "dagrail.io/ui/v1beta1" || len(first.MCP) != 6 {
 		t.Fatalf("unexpected beta contract: %#v", first)
 	}
-	for name, surface := range map[string]DocumentedSurface{"command catalog": first.CommandCatalog, "CLI error": first.CLIError, "installation diagnostic": first.Installation, "ui": first.UI, "security": first.Security, "journal verification": first.JournalVerification, "plugin conformance": first.PluginConformance, "support": first.Support, "recovery": first.Recovery, "release qualification": first.ReleaseQualification, "release manifest": first.ReleaseManifest, "release verification": first.ReleaseVerification} {
+	for name, surface := range map[string]DocumentedSurface{"command catalog": first.CommandCatalog, "CLI error": first.CLIError, "installation diagnostic": first.Installation, "historical binary matrix": first.HistoricalMatrix, "readiness decision": first.Readiness, "ui": first.UI, "security": first.Security, "journal verification": first.JournalVerification, "plugin conformance": first.PluginConformance, "support": first.Support, "recovery": first.Recovery, "release qualification": first.ReleaseQualification, "release manifest": first.ReleaseManifest, "release verification": first.ReleaseVerification} {
 		schemaRaw, err := os.ReadFile("../../" + surface.SchemaPath)
 		if err != nil {
 			t.Fatal(err)

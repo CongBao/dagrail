@@ -37,6 +37,13 @@ digests, context budgets, and command inventory implemented by the current binar
   additive in-version; the four broad error classes and their exit codes remain stable
   through the beta line. Completion is generated from the catalog, not an independent
   authority. Installation diagnostics remain path-free and omit raw host output.
+- HistoricalBinaryMatrix v1alpha1 closes the v0.10–v0.17 input window by exact commit.
+  ReadinessDecision v1alpha1 may declare external-validation readiness but cannot set
+  production validation or 1.0 readiness. Changing a pinned historical commit or
+  weakening an adoption gap requires a new contract version and explicit rationale.
+- Explorer requests accept only loopback/localhost Host values. An explicit Origin must
+  match the exact HTTP Host including port; cross-port localhost callers receive no
+  CORS access. These checks are additive to the loopback bind and read-only routes.
 
 ## Not promised
 

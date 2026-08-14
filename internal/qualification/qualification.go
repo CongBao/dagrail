@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/CongBao/dagrail/internal/compatibility"
 	"github.com/CongBao/dagrail/internal/contract"
 	"github.com/CongBao/dagrail/internal/install"
 	"github.com/CongBao/dagrail/internal/service"
@@ -90,8 +91,9 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 	required := []string{
 		"LICENSE", "README.md", "SECURITY.md", "SUPPORT.md", "GOVERNANCE.md",
 		"CODE_OF_CONDUCT.md", "CONTRIBUTING.md", "COMPATIBILITY.md", "CONTEXT.md",
-		"CHANGELOG.md", "docs/api.md", "docs/tutorial.md", "docs/release.md",
+		"CHANGELOG.md", "docs/api.md", "docs/tutorial.md", "docs/release.md", "docs/readiness.md",
 		"docs/qualification.md", "docs/recovery.md", "schemas/compatibility-contract-v1beta1.schema.json",
+		"internal/compatibility/beta-window.json",
 	}
 	layoutOK := true
 	for _, path := range required {
@@ -106,7 +108,7 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 	add("compatibility-contract", contractOK, chooseCode(contractOK, "contract_schema_valid", "contract_schema_invalid"))
 
 	surfaces := []contract.DocumentedSurface{
-		contractReport.CommandCatalog, contractReport.CLIError, contractReport.Installation,
+		contractReport.CommandCatalog, contractReport.CLIError, contractReport.Installation, contractReport.HistoricalMatrix, contractReport.Readiness,
 		contractReport.UI, contractReport.Security, contractReport.JournalVerification,
 		contractReport.PluginConformance, contractReport.Support, contractReport.Recovery,
 		contractReport.ReleaseQualification, contractReport.ReleaseManifest, contractReport.ReleaseVerification,
@@ -147,6 +149,14 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 	add("release-workflow", releaseOK, chooseCode(releaseOK, "tag_gates_declared", "release_gate_missing"))
 	pinsOK := ciErr == nil && releaseErr == nil && actionsPinned(string(ci)) && actionsPinned(string(release))
 	add("workflow-action-pins", pinsOK, chooseCode(pinsOK, "all_actions_commit_pinned", "unpinned_action"))
+	matrix, matrixErr := readSourceFile(root, "internal/compatibility/beta-window.json")
+	_, decodeMatrixErr := compatibility.Decode(matrix, version.Version)
+	historicalOK := matrixErr == nil && decodeMatrixErr == nil && containsAll(string(ci), []string{"historical-binary-compatibility", "fetch-depth: 0", "-tags=historical", "TestHistoricalBinaryCompatibilityWindow"}) && containsAll(string(release), []string{"historical-binary-compatibility", "fetch-depth: 0", "-tags=historical", "TestHistoricalBinaryCompatibilityWindow"})
+	add("historical-compatibility", historicalOK, chooseCode(historicalOK, "historical_binary_window_declared", "historical_binary_window_missing"))
+	uiServer, uiServerErr := readSourceFile(root, "internal/ui/server.go")
+	uiTests, uiTestsErr := readSourceFile(root, "internal/ui/server_test.go")
+	originBoundaryOK := uiServerErr == nil && uiTestsErr == nil && containsAll(string(uiServer), []string{"validUIHost", "validUIOrigin", "Cross-Origin-Resource-Policy", "Cross-Origin-Opener-Policy"}) && containsAll(string(uiTests), []string{"TestExplorerRejectsDNSRebindingAndCrossPortOrigins", "rebound.example.invalid", "Origin"})
+	add("localhost-origin-boundary", originBoundaryOK, chooseCode(originBoundaryOK, "localhost_origin_boundary_declared", "localhost_origin_boundary_missing"))
 
 	if strings.TrimSpace(projectRoot) == "" {
 		addOptional("project-security", "optional_project_not_supplied")
@@ -315,6 +325,7 @@ func releaseRequirements() []Requirement {
 		{ID: "reproducible-build", Status: "automated", AutomatedBy: "ci+release"},
 		{ID: "sbom-checksum-provenance", Status: "automated", AutomatedBy: "release"},
 		{ID: "closed-artifact-manifest", Status: "automated", AutomatedBy: "ci+release"},
+		{ID: "historical-binary-window", Status: "automated", AutomatedBy: "ci+release"},
 	}
 }
 

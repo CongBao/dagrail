@@ -49,7 +49,7 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 
 ## Status
 
-`v0.17.0` is a pre-1.0 release candidate: local-first and single-user, with one native Go
+`v0.18.0` is a pre-1.0 release candidate: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
 stdio MCP. Its operational surface adds explainable dependency blockers, incident
 circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
@@ -74,6 +74,13 @@ Bash, Zsh, Fish, and PowerShell, opt-in bounded JSON errors with stable broad ex
 classes, cancellation propagation into slow host/provider/UI/MCP work, and a path-free
 `dagrail doctor install` report. Use `--errors=json` before the command, or set
 `DAGRAIL_ERROR_FORMAT=json`, when an automation needs the error envelope.
+
+The v0.18 readiness surface pins and builds the complete v0.10–v0.17 beta binary
+window, tests adjacent runtime upgrades and reversible rollbacks, and proves the current
+binary can verify and recover a journal created by v0.10. `dagrail readiness` aggregates
+that structural evidence without overstating it: the current decision is
+`ready_for_external_validation`, while `oneDotZeroReady` and `productionValidated`
+remain false. See the [readiness and external-validation runbook](docs/readiness.md).
 
 The structural release report validates public source and automated gate
 declarations, but deliberately reports `productionValidated: false`. Independent

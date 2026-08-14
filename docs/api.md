@@ -42,6 +42,12 @@ two-minute ceiling and a 64-KiB combined-output cap.
 plugin bundle, selected harness registrations, and MCP launchers. It reports closed
 status codes without including executable paths or raw host output.
 
+`dagrail readiness` returns ReadinessDecision v1alpha1. It combines source
+qualification with the closed beta compatibility window and optional project or local
+installation checks. A successful process exit means `externalValidationReady`, not
+production validation or 1.0 readiness. The v1alpha1 schema deliberately fixes both of
+those stronger booleans to false and always carries the outstanding adoption gaps.
+
 ## MCP
 
 The stdio server exposes only these high-level tools:

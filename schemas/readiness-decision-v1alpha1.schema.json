@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/readiness-decision-v1alpha1.schema.json",
+  "title": "DAGrail Readiness Decision v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "version", "decision", "structuralCandidate", "externalValidationReady", "oneDotZeroReady", "productionValidated", "compatibility", "evidence", "adoptionGaps"],
+  "properties": {
+    "apiVersion": {"const": "dagrail.io/readiness-decision/v1alpha1"},
+    "kind": {"const": "ReadinessDecision"},
+    "version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "decision": {"enum": ["not_ready", "ready_for_external_validation"]},
+    "structuralCandidate": {"type": "boolean"},
+    "externalValidationReady": {"type": "boolean"},
+    "oneDotZeroReady": {"const": false},
+    "productionValidated": {"const": false},
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fromVersion", "currentVersion", "historical", "digest"],
+      "properties": {
+        "fromVersion": {"const": "0.10.0"},
+        "currentVersion": {"const": "0.18.0"},
+        "historical": {"const": 8},
+        "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "code", "source"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,127}$"},
+          "status": {"enum": ["pass", "fail", "not_run"]},
+          "code": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,127}$"},
+          "source": {"enum": ["source-inspection", "project-inspection", "local-installation"]}
+        }
+      }
+    },
+    "adoptionGaps": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "requiredFor"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,127}$"},
+          "status": {"const": "outstanding"},
+          "requiredFor": {"const": "production_validation"}
+        }
+      }
+    }
+  }
+}

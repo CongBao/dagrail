@@ -4,6 +4,13 @@
 The Explorer never owns scheduling and exposes no transition, action, reconcile, graph
 change, or effect-dispatch route.
 
+Loopback binding is not treated as browser authentication. The server accepts only
+`localhost` or loopback-IP Host values, rejects DNS-rebinding hostnames, and rejects an
+explicit Origin unless its HTTP host and port exactly match the request Host. Responses
+set same-origin resource/opener policies and never emit CORS access. This prevents a
+page served from another localhost port from reading Explorer data; it does not protect
+against another malicious process running as the same OS user.
+
 ## Views and deep links
 
 - **Topology** renders at most 200 Nodes by default. Selecting a Node replaces the full

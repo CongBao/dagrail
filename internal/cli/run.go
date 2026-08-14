@@ -20,6 +20,7 @@ import (
 	"github.com/CongBao/dagrail/internal/observe"
 	internalproviders "github.com/CongBao/dagrail/internal/providers"
 	"github.com/CongBao/dagrail/internal/qualification"
+	"github.com/CongBao/dagrail/internal/readiness"
 	dagrelease "github.com/CongBao/dagrail/internal/release"
 	"github.com/CongBao/dagrail/internal/service"
 	"github.com/CongBao/dagrail/internal/signing"
@@ -123,6 +124,8 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 		return runProjection(ctx, args[1:], stdout, stderr)
 	case "qualify":
 		return runQualify(args[1:], stdout, stderr)
+	case "readiness":
+		return runReadiness(ctx, args[1:], stdout, stderr)
 	case "release":
 		return runRelease(args[1:], stdout, stderr)
 	case "doctor":
@@ -1102,6 +1105,35 @@ func runQualify(args []string, stdout, stderr io.Writer) error {
 	}
 	if !report.StructuralCandidate {
 		return fmt.Errorf("release qualification did not pass")
+	}
+	return nil
+}
+
+func runReadiness(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("readiness", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	sourceRoot := flags.String("source", ".", "DAGrail source checkout")
+	projectRoot := flags.String("project", "", "optional DAGrail project for security and recovery evidence")
+	installation := flags.Bool("installation", false, "include local runtime and harness installation evidence")
+	harnesses := flags.String("harness", "codex,claude-code,copilot-cli", "comma-separated harnesses for installation evidence")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return usagef("usage: dagrail readiness [--source path] [--project path] [--installation] [--harness list]")
+	}
+	report, err := readiness.Evaluate(ctx, readiness.Options{
+		SourceRoot: *sourceRoot, ProjectRoot: *projectRoot, Installation: *installation,
+		InstallationOptions: install.Options{Harnesses: []string{*harnesses}},
+	})
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(stdout, report); err != nil {
+		return err
+	}
+	if !report.ExternalValidationReady {
+		return diagnosticError(fmt.Errorf("readiness checks did not reach external-validation readiness"))
 	}
 	return nil
 }

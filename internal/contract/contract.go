@@ -2,6 +2,7 @@ package contract
 
 import (
 	"github.com/CongBao/dagrail/internal/commandcatalog"
+	"github.com/CongBao/dagrail/internal/compatibility"
 	"github.com/CongBao/dagrail/internal/install"
 	"github.com/CongBao/dagrail/internal/journal"
 	"github.com/CongBao/dagrail/internal/mcpserver"
@@ -45,6 +46,8 @@ type Report struct {
 	CommandCatalog       DocumentedSurface        `json:"commandCatalog"`
 	CLIError             DocumentedSurface        `json:"cliError"`
 	Installation         DocumentedSurface        `json:"installationDiagnostic"`
+	HistoricalMatrix     DocumentedSurface        `json:"historicalBinaryMatrix"`
+	Readiness            DocumentedSurface        `json:"readinessDecision"`
 	UI                   DocumentedSurface        `json:"ui"`
 	Security             DocumentedSurface        `json:"security"`
 	JournalVerification  DocumentedSurface        `json:"journalVerification"`
@@ -89,6 +92,18 @@ func Current() Report {
 			SchemaPath:   "schemas/installation-diagnostic-v1alpha1.schema.json",
 			SchemaSHA256: "sha256:575f4d580dacc1b81c8ab5787d0d4c2e1904927beb5449a850d3ce35e60a3942",
 		},
+		HistoricalMatrix: DocumentedSurface{
+			APIVersion:   compatibility.APIVersion,
+			Stability:    "closed-beta-window",
+			SchemaPath:   "schemas/historical-binary-matrix-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:843b23c21f592ef9386c57a91b41e9c00bbfca9b2ed63936694993815d5e97cb",
+		},
+		Readiness: DocumentedSurface{
+			APIVersion:   "dagrail.io/readiness-decision/v1alpha1",
+			Stability:    "additive-structural-decision",
+			SchemaPath:   "schemas/readiness-decision-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:ce64b76b6d90a465284a005002dae3c9a0dadb28989908c563a92d9fdb36da36",
+		},
 		UI: DocumentedSurface{
 			APIVersion:   "dagrail.io/ui/v1beta1",
 			Stability:    "additive-read-only",
@@ -129,7 +144,7 @@ func Current() Report {
 			APIVersion:   "dagrail.io/release-qualification/v1alpha1",
 			Stability:    "additive-structural-candidate",
 			SchemaPath:   "schemas/release-qualification-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:3933ef967b58b4ee462a7416123bed42a46c74af44a6a0db2c11e8e03e079d51",
+			SchemaSHA256: "sha256:e67bd9429f5d0376028f081aa8d4bf19084851d33a1ecfbe147e62002ddeb4a9",
 		},
 		ReleaseManifest: DocumentedSurface{
 			APIVersion:   dagrelease.ManifestAPIVersion,
@@ -172,6 +187,9 @@ func Current() Report {
 			"command discovery and completion are generated from one bounded catalog",
 			"opt-in CLI error envelopes keep stable broad exit classes and preserve interruption",
 			"host plugin commands are output-bounded, time-bounded, and cancellation-aware",
+			"the v0.10 through v0.17 beta binaries are immutable inputs to the v0.18 upgrade and rollback matrix",
+			"readiness can declare external-validation readiness but cannot infer production validation or 1.0 readiness",
+			"the loopback explorer rejects non-loopback Host values and cross-port Origin values without exposing CORS access",
 			"SQLite remains disposable and rebuildable from the verified journal",
 		},
 	}

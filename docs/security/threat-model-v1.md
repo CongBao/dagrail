@@ -1,6 +1,6 @@
 # Threat model v1
 
-This model applies to DAGrail v0.12's local CLI, stdio MCP server, compile-in
+This model applies to DAGrail v0.18's local CLI, stdio MCP server, compile-in
 providers, harness subprocesses, loopback Explorer, immutable journal, SQLite
 projection, portable exports, and plugin runtime. It is versioned because changing a
 trust boundary is an architecture change, not a documentation edit.
@@ -71,6 +71,12 @@ proved by the portable binary.
 - Release verification accepts one closed top-level artifact set, streams bounded
   digests, inspects archive members without extraction, validates SPDX structure, and
   emits no local paths. Its manifest is integrity metadata, not a publisher credential.
+- Explorer requests reject non-loopback/DNS-rebinding Host values. An explicit Origin
+  must match the request's exact HTTP host and port; no CORS capability is granted
+  between localhost ports.
+- Historical compatibility extracts only bounded regular files/directories from exact
+  commit archives, builds each old binary, and keeps its results structural rather than
+  treating CI as real adoption.
 
 ## Threats intentionally not solved
 

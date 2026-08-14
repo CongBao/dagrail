@@ -128,3 +128,6 @@ an unstable taxonomy of process exit codes.
   API, documentation, and release-policy evidence;
 - a formal 1.0 readiness decision that continues to list missing real-world adoption
   evidence instead of synthesizing it from CI.
+
+Delivered in v0.18.0 as an engineering-complete external-validation candidate. A 1.0
+tag remains blocked on the four real-world evidence items in `docs/readiness.md`.

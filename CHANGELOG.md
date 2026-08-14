@@ -2,6 +2,36 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.18.0 — 2026-08-14
+
+### Added
+
+- a closed HistoricalBinaryMatrix v1alpha1 manifest pinning every v0.10–v0.17 beta
+  release commit as immutable compatibility input;
+- a dedicated CI and tag-release matrix that builds all pinned binaries plus the
+  candidate, exercises every adjacent runtime upgrade/rollback/re-forward pair, and
+  recovers a v0.10-created journal with the candidate;
+- `readiness`, a schema-bound aggregate decision over source qualification,
+  distribution, API/docs, historical compatibility, browser origin isolation, and
+  optional project/installation evidence;
+- a public 1.0 external-validation runbook that keeps four real adoption requirements
+  separate from structural CI evidence.
+
+### Security
+
+- the Explorer now rejects non-loopback Host values, DNS-rebinding hostnames, and
+  cross-port Origin values, emits same-origin opener/resource policy headers, and never
+  enables CORS;
+- qualification includes explicit localhost origin-boundary evidence rather than
+  treating a loopback bind as sufficient browser isolation.
+
+### Changed
+
+- the readiness decision can reach `ready_for_external_validation`, but its v1alpha1
+  schema fixes `oneDotZeroReady` and `productionValidated` to false until independent
+  adoption, a long-running live DAG, real-host receipts, and an operator restore drill
+  are observed.
+
 ## 0.17.0 — 2026-08-14
 
 ### Added

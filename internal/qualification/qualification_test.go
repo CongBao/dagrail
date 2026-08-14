@@ -16,7 +16,7 @@ func TestSourceQualificationIsStructuralAndExplicitlyNotProductionValidation(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !report.StructuralCandidate || report.ProductionValidated || report.ProjectEvidence || len(report.Checks) != 10 || len(report.ExternalGates) != 9 || len(report.AdoptionGaps) != 4 {
+	if !report.StructuralCandidate || report.ProductionValidated || report.ProjectEvidence || len(report.Checks) != 12 || len(report.ExternalGates) != 10 || len(report.AdoptionGaps) != 4 {
 		t.Fatalf("unexpected release qualification: %+v", report)
 	}
 	for _, gap := range report.AdoptionGaps {

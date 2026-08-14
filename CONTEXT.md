@@ -93,6 +93,10 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
   domain reports.
 - **Installation diagnostic**: path-free local evidence over the verified runtime,
   linked plugin bundle, selected harness registrations, and MCP launcher state.
+- **Historical binary matrix**: a closed manifest of exact beta release commits used to
+  build real old binaries and test adjacent runtime upgrade and rollback paths.
+- **Readiness decision**: an aggregate structural verdict that may allow external
+  validation to begin but cannot self-assert production validation or 1.0 readiness.
 
 ## Invariants
 
@@ -135,6 +139,11 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
     consistency never substitutes for provenance or publisher trust.
 22. Command discovery, compatibility inventory, and completion share one closed
     catalog; process interruption is never collapsed into a generic failure exit.
+23. Historical compatibility evidence builds the pinned commits; replacing a fixture
+    with current code is not an acceptable substitute for an old binary.
+24. A loopback UI request must also pass Host and exact-Origin checks; localhost ports
+    are separate browser origins and receive no implicit capability sharing.
+25. Structural readiness cannot set production validation or close adoption gaps.
 
 ## Bounded contexts
 
@@ -151,6 +160,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
   support diagnostics, and a local read-only UI derived from authority.
 - **Migration observation**: bounded source digests, private locators, isolated shadow
   import, and repeatable drift verification without lifecycle control.
+- **Release readiness**: closed historical binary inputs, source qualification,
+  optional project/install evidence, and explicitly outstanding adoption evidence.
 
 ## Current non-goals
 

@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"runtime"
 	"sort"
@@ -81,6 +82,14 @@ func Handler(svc *service.Service) http.Handler {
 	registerExplorerAPI(mux, svc)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setSecurityHeaders(w.Header())
+		if !validUIHost(r.Host) {
+			http.Error(w, "invalid UI host", http.StatusMisdirectedRequest)
+			return
+		}
+		if !validUIOrigin(r) {
+			http.Error(w, "cross-origin UI request rejected", http.StatusForbidden)
+			return
+		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
 			http.Error(w, "read-only UI", http.StatusMethodNotAllowed)
@@ -191,9 +200,41 @@ func setSecurityHeaders(header http.Header) {
 	header.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 	header.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
 	header.Set("Referrer-Policy", "no-referrer")
+	header.Set("Cross-Origin-Opener-Policy", "same-origin")
+	header.Set("Cross-Origin-Resource-Policy", "same-origin")
 	header.Set("X-Content-Type-Options", "nosniff")
 	header.Set("X-Frame-Options", "DENY")
 	header.Set("X-DAGrail-Read-Only", "true")
+}
+
+func validUIHost(authority string) bool {
+	authority = strings.TrimSpace(authority)
+	if authority == "" {
+		return false
+	}
+	host := authority
+	if parsedHost, _, err := net.SplitHostPort(authority); err == nil {
+		host = parsedHost
+	} else if strings.Contains(authority, ":") {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func validUIOrigin(request *http.Request) bool {
+	origin := strings.TrimSpace(request.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme != "http" || parsed.User != nil || parsed.Host == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	return strings.EqualFold(parsed.Host, request.Host)
 }
 
 func openBrowser(url string) error {

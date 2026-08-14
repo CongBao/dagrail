@@ -101,6 +101,12 @@ validates every candidate in a fresh process. Rollback is reversible: the displa
 runtime becomes the next rollback candidate. This switches the stable DAGrail
 executable only; it does not restore older harness manifests or marketplace metadata.
 
+Before recruiting an external adopter, run `dagrail readiness --source .`. Add
+`--project` only for a project the operator intends to inspect, and add `--installation`
+when local host registrations should be release-blocking. A passing report means the
+candidate is ready to begin external validation; follow `docs/readiness.md` before any
+1.0 decision.
+
 ## Verify host integration and prepare support evidence
 
 ```sh

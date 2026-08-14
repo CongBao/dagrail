@@ -23,6 +23,12 @@ Completion and the compatibility command inventory must never be maintained as
 independent lists. Error-envelope changes require schema, byte-budget, and exit-code
 tests.
 
+The commits in `internal/compatibility/beta-window.json` are immutable release inputs.
+Do not refresh them to a newer implementation when a historical build fails; diagnose
+the compatibility regression or explicitly version the promised window. Run the tagged
+historical test before changing runtime receipts, projection migration, or journal
+readers.
+
 Changes to graph, journal, provider, MCP, or receipt contracts require a compatibility test and an ADR when they are difficult to reverse. Never add a second authority beside the journal. New provider implementations must be deterministic or explicitly return an external receipt; they cannot receive storage handles.
 
 Journal readers must verify the exact stored bytes and hash chain before applying an

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/historical-binary-matrix-v1alpha1.schema.json",
+  "title": "DAGrail Historical Binary Matrix v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "fromVersion", "currentVersion", "entries"],
+  "properties": {
+    "apiVersion": {"const": "dagrail.io/historical-binary-matrix/v1alpha1"},
+    "kind": {"const": "HistoricalBinaryMatrix"},
+    "fromVersion": {"const": "0.10.0"},
+    "currentVersion": {"const": "0.18.0"},
+    "entries": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["version", "commit"],
+        "properties": {
+          "version": {"type": "string", "pattern": "^0\\.(1[0-7])\\.0$"},
+          "commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"}
+        }
+      }
+    }
+  }
+}

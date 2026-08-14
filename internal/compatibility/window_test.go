@@ -1,0 +1,67 @@
+package compatibility
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/CongBao/dagrail/internal/version"
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
+)
+
+func TestEmbeddedBetaWindowIsClosedAndSchemaValid(t *testing.T) {
+	window, evidence, err := Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if window.CurrentVersion != version.Version || evidence.Historical != 8 || !strings.HasPrefix(evidence.Digest, "sha256:") {
+		t.Fatalf("unexpected compatibility evidence: %#v %#v", window, evidence)
+	}
+	raw, err := json.Marshal(window)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaRaw, err := os.ReadFile(filepath.Join("..", "..", "schemas", "historical-binary-matrix-v1alpha1.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document, instance any
+	if err := json.Unmarshal(schemaRaw, &document); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &instance); err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	if err := compiler.AddResource("urn:dagrail:historical-binary-matrix", document); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile("urn:dagrail:historical-binary-matrix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(instance); err != nil {
+		t.Fatalf("matrix does not match schema: %v", err)
+	}
+}
+
+func TestBetaWindowRejectsMutationAndOmission(t *testing.T) {
+	raw, err := windowFiles.ReadFile("beta-window.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, mutation := range map[string]string{
+		"wrong candidate": strings.Replace(string(raw), `"currentVersion": "0.18.0"`, `"currentVersion": "1.0.0"`, 1),
+		"duplicate key":   strings.Replace(string(raw), `"kind": "HistoricalBinaryMatrix"`, `"kind": "HistoricalBinaryMatrix", "kind": "HistoricalBinaryMatrix"`, 1),
+		"missing release": strings.Replace(string(raw), `    {"version": "0.17.0", "commit": "932fcea45b1d2fb5010822517a3b0596e921dce5"}`, "", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode([]byte(mutation), version.Version); err == nil {
+				t.Fatal("mutated compatibility window was accepted")
+			}
+		})
+	}
+}
