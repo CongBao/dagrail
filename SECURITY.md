@@ -26,10 +26,13 @@ Execution Packages accept only digest metadata and bounded absolute artifact URI
 userinfo, query strings, fragments, and data schemes are rejected because they commonly
 carry credentials or inline artifact bodies.
 
-The v0.5 web UI is a local read-only projection. It refuses non-loopback binds, accepts
-only `GET` and `HEAD`, loads no third-party assets, emits restrictive browser security
-headers, and omits allowed-action references, controller tokens, event payloads, prompts,
-and artifact bodies. It is not a remotely deployable authenticated dashboard.
+The v0.11 Explorer is a local read-only projection. It refuses non-loopback binds,
+accepts only `GET` and `HEAD`, loads no third-party assets, emits restrictive browser
+security and Permissions Policy headers, and omits allowed-action references,
+controller tokens, event payloads, effect requests, prompts, Graph metadata,
+external-reference URLs, and artifact bodies. Every collection and response, including
+the legacy snapshot route, has a fixed bound; `HEAD` performs the same validation as
+`GET`. It is not a remotely deployable authenticated dashboard.
 
 The Codex native adapter talks only to the detected local executable through the
 harness-owned app-server daemon and stdio proxy. Receipt detail omits the generated work

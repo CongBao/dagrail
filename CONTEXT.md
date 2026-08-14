@@ -60,6 +60,9 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
   authority set and imported Graph Revision; it contains no absolute source locator.
 - **Shadow project**: isolated DAGrail state used to qualify an existing DAG without
   writing to, controlling, or migrating the source project.
+- **DAG Explorer**: loopback-only, mutation-free browser projection over bounded,
+  deterministic v1beta1 query APIs. A selected Node deep link is a view locator, never
+  a lifecycle capability.
 
 ## Invariants
 
@@ -82,6 +85,10 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
     outside the journal.
 13. Beta API drift is explicit: additive fields stay in-version, while incompatible
     semantics select a new API version and migration path.
+14. Explorer routes accept only `GET` and `HEAD`; collections, queries, responses, and
+    graph neighborhoods are bounded, `HEAD` shares GET validation, focused truncation
+    preserves the selected Node, and no raw event/effect payload or action ref is
+    returned.
 
 ## Bounded contexts
 
@@ -90,6 +97,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Effect control**: allowed action, outbox, prepared effect, dispatch, receipt, reconcile.
 - **Harness integration**: capability probe, plugin manifest, hooks, launch/resume envelope.
 - **Read model**: SQLite projection, context envelope, cursor delta, inspect ref, dashboard-ready queries.
+- **Explorer projection**: bounded overview, Node inventory, focused topology, Node
+  detail, payload-free timeline, and operational summaries with stable local deep links.
 - **Operational surface**: payload-free status/history, verified journal backup,
   runtime upgrade/rollback, optional portable-file signatures, and a local read-only
   UI derived from authority.

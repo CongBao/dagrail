@@ -39,13 +39,13 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 - recoverable external effects with explicit `unknown` and `reconcile` states;
 - an immutable RFC 8785 journal with disposable SQLite projections;
 - explainable readiness, owned incidents, bounded history, verified backups, and a
-  browser-opened read-only DAG UI.
+  browser-opened read-only DAG Explorer with focused topology and deep links.
 - executable crash/ambiguity, cross-process contention, corruption, fuzz, and
   large-graph qualification suites.
 
 ## Status
 
-`v0.10.0` is a beta candidate: local-first and single-user, with one native Go
+`v0.11.0` is a beta candidate: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
 stdio MCP. Its operational surface adds explainable dependency blockers, incident
 circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
@@ -59,6 +59,11 @@ provenance, digest-verified runtime upgrade/rollback, and optional detached sign
 form the distribution-security baseline. `dagrail contract` exposes the exact beta
 surfaces implemented by a binary, while `dagrail observe` can qualify an existing DAG
 through a separate, digest-bound shadow without modifying the source project.
+
+The v1beta1 Explorer adds bounded Topology, Nodes, Timeline, and Operations views. It
+supports search, filters, stable local deep links, focused graph neighborhoods, and
+payload-free Node inspection while retaining a closed `GET`/`HEAD`-only HTTP surface.
+Its response/error schema and exact digest are published through `dagrail contract`.
 
 The reliability suite kills writer subprocesses on both sides of the journal rename
 commit point, contends independent writers, corrupts disposable and authoritative
@@ -161,7 +166,8 @@ dagrail doctor
 Create and verify a portable journal backup with `dagrail backup create` and
 `dagrail backup verify`. Restore is exact-prefix-only and rebuilds SQLite automatically.
 See [`docs/operations.md`](docs/operations.md) for status, history, incident, backup, and
-read-only UI workflows.
+read-only UI workflows, and [`docs/ui.md`](docs/ui.md) for Explorer bounds and deep
+links.
 
 For a larger executable walkthrough, see
 [`examples/beta-project`](examples/beta-project) and the

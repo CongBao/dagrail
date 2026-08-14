@@ -1,7 +1,9 @@
 package contract
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
 	"testing"
@@ -22,8 +24,16 @@ func TestBetaContractIsDeterministicAndNamesExactlySixMCPTools(t *testing.T) {
 	if !reflect.DeepEqual(firstRaw, secondRaw) {
 		t.Fatal("compatibility contract is not deterministic")
 	}
-	if first.APIVersion != "dagrail.io/v1beta1" || first.Kind != "CompatibilityContract" || len(first.MCP) != 6 {
+	if first.APIVersion != "dagrail.io/v1beta1" || first.Kind != "CompatibilityContract" || first.UI.APIVersion != "dagrail.io/ui/v1beta1" || len(first.MCP) != 6 {
 		t.Fatalf("unexpected beta contract: %#v", first)
+	}
+	uiSchema, err := os.ReadFile("../../" + first.UI.SchemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(uiSchema)
+	if got := "sha256:" + fmt.Sprintf("%x", digest); got != first.UI.SchemaSHA256 {
+		t.Fatalf("UI schema digest drift: contract=%s file=%s", first.UI.SchemaSHA256, got)
 	}
 	want := []string{"dag_context", "dag_inspect", "dag_apply", "dag_graph_change", "dag_reconcile", "dag_pre_wait"}
 	for index, tool := range first.MCP {

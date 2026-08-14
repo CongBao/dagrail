@@ -12,6 +12,7 @@
     "stability": {"const": "beta"},
     "graph": {"$ref": "#/$defs/surface"},
     "cli": {"$ref": "#/$defs/surface"},
+    "ui": {"$ref": "#/$defs/documentedSurface"},
     "providerSdk": {"$ref": "#/$defs/surface"},
     "journal": {
       "type": "object",
@@ -58,6 +59,17 @@
       "additionalProperties": false,
       "required": ["apiVersion", "stability"],
       "properties": {"apiVersion": {"type": "string", "minLength": 1}, "stability": {"type": "string", "minLength": 1}}
+    },
+    "documentedSurface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "stability", "schemaPath", "schemaSha256"],
+      "properties": {
+        "apiVersion": {"type": "string", "minLength": 1},
+        "stability": {"type": "string", "minLength": 1},
+        "schemaPath": {"type": "string", "minLength": 1},
+        "schemaSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
     }
   }
 }

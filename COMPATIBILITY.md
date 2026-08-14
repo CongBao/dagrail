@@ -12,6 +12,9 @@ digests, context budgets, and command inventory implemented by the current binar
   additive unless a new API version is selected.
 - Stable provider contracts remain source-compatible. Additions use new optional
   interfaces or types; existing Go interfaces do not gain required methods.
+- Explorer v1beta1 response/error fields are governed by the schema path and exact
+  digest in `dagrail contract`; fields are additive and its documented deep-link query
+  keys remain accepted. The Explorer remains loopback-only and has no mutation route.
 - Graph Definition v1alpha1 remains importable. A future graph format uses another
   `apiVersion` rather than silently changing existing semantics.
 - SQLite is never portable authority and may be rebuilt from the verified journal.

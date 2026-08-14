@@ -1,0 +1,280 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/ui-api-v1beta1.schema.json",
+  "title": "DAGrail read-only Explorer API v1beta1 responses",
+  "description": "Response and error envelopes for the six bounded /api/v1 Explorer endpoints. The legacy /api/v1/snapshot compatibility route is not part of this versioned schema.",
+  "oneOf": [
+    {"$ref": "#/$defs/overview"},
+    {"$ref": "#/$defs/nodePage"},
+    {"$ref": "#/$defs/topologyPage"},
+    {"$ref": "#/$defs/nodeDetail"},
+    {"$ref": "#/$defs/history"},
+    {"$ref": "#/$defs/operations"},
+    {"$ref": "#/$defs/error"}
+  ],
+  "$defs": {
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {"id": {"type": "string"}, "name": {"type": "string"}}
+    },
+    "counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+    "stringMap": {"type": "object", "additionalProperties": {"type": "string"}},
+    "frontier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ready", "readyCount", "readyTruncated", "blockedCount", "resourceBlockedCount", "dependencyCutCount"],
+      "properties": {
+        "ready": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
+        "readyCount": {"type": "integer", "minimum": 0},
+        "readyTruncated": {"type": "boolean"},
+        "blockedCount": {"type": "integer", "minimum": 0},
+        "resourceBlockedCount": {"type": "integer", "minimum": 0},
+        "dependencyCutCount": {"type": "integer", "minimum": 0}
+      }
+    },
+    "overview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "readOnly", "project", "headSequence", "counts", "frontier", "facets"],
+      "properties": {
+        "apiVersion": {"const": "dagrail.io/ui/v1beta1"},
+        "readOnly": {"const": true},
+        "project": {"$ref": "#/$defs/project"},
+        "graphRevision": {"type": "string"},
+        "headSequence": {"type": "integer", "minimum": 0},
+        "counts": {"$ref": "#/$defs/counts"},
+        "frontier": {"$ref": "#/$defs/frontier"},
+        "facets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["statuses", "kinds", "roles"],
+          "properties": {
+            "statuses": {"type": "array", "items": {"type": "string"}},
+            "kinds": {"type": "array", "items": {"type": "string"}},
+            "roles": {"type": "array", "items": {"type": "string"}}
+          }
+        }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cursor", "limit", "total", "truncated"],
+      "properties": {
+        "cursor": {"type": "integer", "minimum": 0},
+        "limit": {"type": "integer", "minimum": 1},
+        "total": {"type": "integer", "minimum": 0},
+        "nextCursor": {"type": "integer", "minimum": 0},
+        "truncated": {"type": "boolean"}
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "kind", "status"],
+      "properties": {
+        "id": {"type": "string"}, "title": {"type": "string"}, "kind": {"type": "string"},
+        "role": {"type": "string"}, "parent": {"type": "string"}, "status": {"type": "string"},
+        "readiness": {"type": "string"}, "outcome": {"type": "string"}
+      }
+    },
+    "nodePage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "graphRevision", "headSequence", "page", "nodes"],
+      "properties": {
+        "apiVersion": {"const": "dagrail.io/ui/v1beta1"}, "graphRevision": {"type": "string"},
+        "headSequence": {"type": "integer", "minimum": 0}, "page": {"$ref": "#/$defs/page"},
+        "nodes": {"type": "array", "items": {"$ref": "#/$defs/node"}, "maxItems": 200}
+      }
+    },
+    "predicate": {"type": "object"},
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from", "to", "when"],
+      "properties": {
+        "id": {"type": "string"}, "from": {"type": "string"}, "to": {"type": "string"},
+        "when": {"$ref": "#/$defs/predicate"}
+      }
+    },
+    "topologyPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "graphRevision", "headSequence", "depth", "page", "nodes", "edges"],
+      "properties": {
+        "apiVersion": {"const": "dagrail.io/ui/v1beta1"}, "graphRevision": {"type": "string"},
+        "headSequence": {"type": "integer", "minimum": 0}, "focus": {"type": "string"},
+        "depth": {"type": "integer", "minimum": 0, "maximum": 4}, "page": {"$ref": "#/$defs/page"},
+        "nodes": {"type": "array", "items": {"$ref": "#/$defs/node"}, "maxItems": 500},
+        "edges": {"type": "array", "items": {"$ref": "#/$defs/edge"}}
+      }
+    },
+    "outcome": {
+      "type": "object", "additionalProperties": false, "required": ["id", "class"],
+      "properties": {"id": {"type": "string"}, "class": {"enum": ["success", "retryable", "failure", "cancelled"]}}
+    },
+    "resourceRequest": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "quantity"],
+      "properties": {"kind": {"type": "string"}, "quantity": {"type": "integer", "minimum": 1}}
+    },
+    "nodeContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "kind", "outcomes", "retryBudget", "resources", "inputBytes"],
+      "properties": {
+        "id": {"type": "string"}, "title": {"type": "string"}, "kind": {"type": "string"},
+        "role": {"type": "string"}, "objective": {"type": "string"}, "parent": {"type": "string"},
+        "supersedes": {"type": "string"}, "outcomes": {"type": "array", "items": {"$ref": "#/$defs/outcome"}},
+        "retryBudget": {"type": "integer", "minimum": 0}, "resources": {"type": "array", "items": {"$ref": "#/$defs/resourceRequest"}},
+        "inputBytes": {"type": "integer", "minimum": 0}, "inputSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {"type": "string"}, "outcome": {"type": "string"}, "outcomeClass": {"type": "string"},
+        "facts": {
+          "type": "object", "additionalProperties": false,
+          "properties": {"decision": {"$ref": "#/$defs/stringMap"}, "evidence": {"$ref": "#/$defs/stringMap"}, "policy": {"$ref": "#/$defs/stringMap"}}
+        }
+      }
+    },
+    "reason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code"],
+      "properties": {
+        "code": {"type": "string"}, "edgeId": {"type": "string"}, "sourceNodeId": {"type": "string"},
+        "predicatePath": {"type": "string"}, "expected": {"type": "string"}, "actual": {"type": "string"},
+        "resourceKind": {"type": "string"}, "required": {"type": "integer"}, "available": {"type": "integer"}
+      }
+    },
+    "readiness": {
+      "type": "object", "additionalProperties": false, "required": ["nodeId", "state"],
+      "properties": {"nodeId": {"type": "string"}, "state": {"type": "string"}, "reasons": {"type": "array", "items": {"$ref": "#/$defs/reason"}}}
+    },
+    "attempt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "nodeId", "roleId", "number", "status", "startedAt", "updatedAt"],
+      "properties": {
+        "id": {"type": "string"}, "nodeId": {"type": "string"}, "roleId": {"type": "string"},
+        "number": {"type": "integer", "minimum": 1}, "status": {"type": "string"}, "outcome": {"type": "string"},
+        "checkpointId": {"type": "string"}, "startedAt": {"type": "string"}, "updatedAt": {"type": "string"}
+      }
+    },
+    "evidenceRef": {
+      "type": "object", "additionalProperties": false, "required": ["digest", "type", "size"],
+      "properties": {"digest": {"type": "string"}, "type": {"type": "string"}, "size": {"type": "integer", "minimum": 0}, "uri": {"type": "string"}}
+    },
+    "checkpoint": {
+      "type": "object", "additionalProperties": false, "required": ["id", "attemptId", "summary", "createdAt"],
+      "properties": {
+        "id": {"type": "string"}, "attemptId": {"type": "string"}, "summary": {"type": "string"},
+        "evidenceRefs": {"type": "array", "items": {"$ref": "#/$defs/evidenceRef"}}, "createdAt": {"type": "string"}
+      }
+    },
+    "evidence": {
+      "type": "object", "additionalProperties": false, "required": ["id", "attemptId", "coreDigest", "createdAt"],
+      "properties": {"id": {"type": "string"}, "attemptId": {"type": "string"}, "coreDigest": {"type": "string"}, "createdAt": {"type": "string"}}
+    },
+    "lease": {
+      "type": "object", "additionalProperties": false, "required": ["roleId", "harness", "sessionId", "boundAt", "expiresAt", "active"],
+      "properties": {
+        "roleId": {"type": "string"}, "harness": {"type": "string"}, "sessionId": {"type": "string"},
+        "boundAt": {"type": "string"}, "expiresAt": {"type": "string"}, "active": {"type": "boolean"}
+      }
+    },
+    "incident": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "sourceType", "sourceId", "status", "classification", "attemptBudget", "attempts", "openedAt", "updatedAt"],
+      "properties": {
+        "id": {"type": "string"}, "sourceType": {"type": "string"}, "sourceId": {"type": "string"},
+        "nodeId": {"type": "string"}, "ownerRole": {"type": "string"}, "status": {"type": "string"},
+        "classification": {"type": "string"}, "deadline": {"type": "string"}, "attemptBudget": {"type": "integer"},
+        "attempts": {"type": "integer"}, "noProgressAttempts": {"type": "integer"}, "progressMetric": {"type": "string"},
+        "lastProgress": {"type": "string"}, "lastProgressAt": {"type": "string"}, "circuitReason": {"type": "string"},
+        "resolution": {"type": "string"}, "dependencyCut": {"type": "array", "items": {"type": "string"}},
+        "openedAt": {"type": "string"}, "updatedAt": {"type": "string"}
+      }
+    },
+    "resource": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "quantity", "nodeId", "attemptId", "status", "leasedAt"],
+      "properties": {
+        "id": {"type": "string"}, "kind": {"type": "string"}, "quantity": {"type": "integer", "minimum": 1},
+        "nodeId": {"type": "string"}, "attemptId": {"type": "string"}, "roleId": {"type": "string"},
+        "status": {"type": "string"}, "leasedAt": {"type": "string"}, "releasedAt": {"type": "string"}
+      }
+    },
+    "effect": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "nodeId", "attemptId", "adapterId", "status", "preparedAt", "updatedAt"],
+      "properties": {
+        "id": {"type": "string"}, "nodeId": {"type": "string"}, "attemptId": {"type": "string"},
+        "adapterId": {"type": "string"}, "ownerRole": {"type": "string"}, "status": {"type": "string"},
+        "transportStatus": {"type": "string"}, "sessionStatus": {"type": "string"}, "deliveryStatus": {"type": "string"},
+        "acceptanceStatus": {"type": "string"}, "completionStatus": {"type": "string"},
+        "preparedAt": {"type": "string"}, "updatedAt": {"type": "string"}
+      }
+    },
+    "nodeDetail": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "graphRevision", "headSequence", "contract", "runtime", "incoming", "outgoing", "attempts", "checkpoints", "evidence", "incidents", "resources", "effects"],
+      "properties": {
+        "apiVersion": {"const": "dagrail.io/ui/v1beta1"}, "graphRevision": {"type": "string"}, "headSequence": {"type": "integer", "minimum": 0},
+        "contract": {"$ref": "#/$defs/nodeContract"}, "runtime": {"$ref": "#/$defs/runtime"}, "readiness": {"$ref": "#/$defs/readiness"},
+        "incoming": {"type": "array", "items": {"$ref": "#/$defs/edge"}}, "outgoing": {"type": "array", "items": {"$ref": "#/$defs/edge"}},
+        "attempts": {"type": "array", "items": {"$ref": "#/$defs/attempt"}}, "checkpoints": {"type": "array", "items": {"$ref": "#/$defs/checkpoint"}},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}, "incidents": {"type": "array", "items": {"$ref": "#/$defs/incident"}},
+        "resources": {"type": "array", "items": {"$ref": "#/$defs/resource"}}, "effects": {"type": "array", "items": {"$ref": "#/$defs/effect"}}
+      }
+    },
+    "historyEntry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sequence", "commandKind", "eventTypes", "committedAt", "segmentHash"],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 1}, "commandKind": {"type": "string"}, "actorRole": {"type": "string"},
+        "eventTypes": {"type": "array", "items": {"type": "string"}}, "committedAt": {"type": "string"}, "segmentHash": {"type": "string"}
+      }
+    },
+    "historyPage": {
+      "type": "object", "additionalProperties": false, "required": ["after", "nextCursor", "truncated", "entries"],
+      "properties": {
+        "after": {"type": "integer", "minimum": 0}, "nextCursor": {"type": "integer", "minimum": 0}, "truncated": {"type": "boolean"},
+        "entries": {"type": "array", "items": {"$ref": "#/$defs/historyEntry"}, "maxItems": 100}
+      }
+    },
+    "history": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "graphRevision", "headSequence", "before", "page"],
+      "properties": {
+        "apiVersion": {"const": "dagrail.io/ui/v1beta1"}, "graphRevision": {"type": "string"}, "headSequence": {"type": "integer", "minimum": 0},
+        "before": {"type": "integer", "minimum": 1}, "olderBefore": {"type": "integer", "minimum": 1}, "newerBefore": {"type": "integer", "minimum": 1},
+        "page": {"$ref": "#/$defs/historyPage"}
+      }
+    },
+    "operations": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "graphRevision", "headSequence", "limit", "counts", "truncated", "attempts", "leases", "incidents", "resources", "effects"],
+      "properties": {
+        "apiVersion": {"const": "dagrail.io/ui/v1beta1"}, "graphRevision": {"type": "string"}, "headSequence": {"type": "integer", "minimum": 0},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 200}, "counts": {"$ref": "#/$defs/counts"},
+        "truncated": {"type": "object", "additionalProperties": {"type": "boolean"}},
+        "attempts": {"type": "array", "items": {"$ref": "#/$defs/attempt"}, "maxItems": 200},
+        "leases": {"type": "array", "items": {"$ref": "#/$defs/lease"}, "maxItems": 200},
+        "incidents": {"type": "array", "items": {"$ref": "#/$defs/incident"}, "maxItems": 200},
+        "resources": {"type": "array", "items": {"$ref": "#/$defs/resource"}, "maxItems": 200},
+        "effects": {"type": "array", "items": {"$ref": "#/$defs/effect"}, "maxItems": 200}
+      }
+    },
+    "error": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "error", "status"],
+      "properties": {"apiVersion": {"const": "dagrail.io/ui/v1beta1"}, "error": {"type": "string"}, "status": {"type": "integer", "minimum": 400, "maximum": 599}}
+    }
+  }
+}

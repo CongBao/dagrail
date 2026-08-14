@@ -17,8 +17,9 @@ dagrail ui --root .
 `status` includes journal head, lifecycle counts, expired leases, overdue incidents,
 and the explainable frontier. `history` returns payload-free command metadata in pages
 of at most 100 entries. `ui` starts a foreground, loopback-only, strictly read-only web
-view and opens the default browser; use `--open=false` when automatic launch is not
-wanted.
+Explorer and opens the default browser; use `--open=false` when automatic launch is not
+wanted. See [`ui.md`](ui.md) for bounded APIs, deep links, filtering, and large-graph
+behavior.
 
 ## Manage incidents
 

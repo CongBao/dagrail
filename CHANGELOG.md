@@ -2,6 +2,31 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.11.0 — 2026-08-14
+
+### Added
+
+- a full loopback-only DAG Explorer with Topology, Nodes, Timeline, and Operations
+  views, URL deep links, search, status/kind/Role filters, pagination, and a detailed
+  payload-free Node inspector;
+- deterministic bounded v1beta1 APIs for overview, Nodes, focused topology, Node
+  details, non-overlapping history navigation, and operational objects, with a public
+  response/error schema bound into `dagrail contract` by SHA-256;
+- focused one-to-four-hop graph neighborhoods, keyboard navigation, zoom controls,
+  modal focus preservation, responsive layouts, and automatic refresh without
+  background control actions;
+- a 2,048-Node Explorer performance fixture plus high-fanout focus, bidirectional
+  history, query, response-size, escaping, endpoint, schema, accessibility shell, and
+  legacy-snapshot compatibility tests.
+
+### Security
+
+- every Explorer collection and JSON response has a fixed upper bound; unknown,
+  duplicate, oversized, and out-of-range query inputs fail closed;
+- Node input and effect receipt bodies are reduced to safe digests or typed states;
+  metadata and external-reference URLs are omitted; `HEAD` shares GET validation; the
+  embedded asset allowlist is closed; and browser permissions are disabled.
+
 ## 0.10.0 — 2026-08-14
 
 ### Added

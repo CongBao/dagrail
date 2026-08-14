@@ -44,3 +44,23 @@ go test ./internal/harness -run '^$' -fuzz '^FuzzNativeReceiptConformance$' -fuz
 GitHub CI runs every seed corpus as part of normal tests and performs a bounded fuzz
 smoke for each target on every push. Longer fuzz runs are an investigation tool, not a
 claim that all possible failures have been proven absent.
+
+## Explorer qualification
+
+The v0.11 Explorer suite imports a 2,048-Node chain and verifies deterministic 200-Node
+pages, a capped topology, five-Node focused neighborhoods, sub-2-MiB responses, and a
+five-second local query budget. A 600-neighbor star proves the focus survives truncation;
+108 journal segments prove older/newer history navigation is non-overlapping and
+reversible. Additional tests reject malformed and unknown GET/HEAD queries, validate all
+v1beta1 response/error envelopes against the published schema, exercise Node detail
+escaping and payload omission, bound the v0.10 snapshot route, and prove that all HTTP
+mutation methods remain unavailable.
+
+A second observe-only qualification converted an external 58-Stage roadmap plus four
+typed gates into a 62-Node, 142-edge shadow. Seven caller-selected authority files were
+digest-bound, the full Explorer was exercised from an isolated runtime, and source
+HEAD/status/content digests were unchanged for the duration of that snapshot. This is a
+static topology, isolation, and UI-capacity result only: lifecycle events were not
+migrated, so the shadow frontier is not claimed to equal the source project's live
+frontier. Verification remains bound to the recorded source snapshot and correctly
+reports drift if that independently active source advances later.

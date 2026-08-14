@@ -3,7 +3,6 @@ package ui
 import (
 	"context"
 	"embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,13 +23,14 @@ import (
 var staticFiles embed.FS
 
 type NodeView struct {
-	ID      string `json:"id"`
-	Title   string `json:"title"`
-	Kind    string `json:"kind"`
-	Role    string `json:"role,omitempty"`
-	Parent  string `json:"parent,omitempty"`
-	Status  string `json:"status"`
-	Outcome string `json:"outcome,omitempty"`
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Kind      string `json:"kind"`
+	Role      string `json:"role,omitempty"`
+	Parent    string `json:"parent,omitempty"`
+	Status    string `json:"status"`
+	Readiness string `json:"readiness,omitempty"`
+	Outcome   string `json:"outcome,omitempty"`
 }
 
 type Snapshot struct {
@@ -50,7 +50,6 @@ type Snapshot struct {
 func Handler(svc *service.Service) http.Handler {
 	mux := http.NewServeMux()
 	assets, _ := fs.Sub(staticFiles, "static")
-	assetHandler := http.FileServer(http.FS(assets))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -63,21 +62,23 @@ func Handler(svc *service.Service) http.Handler {
 		}
 		serveAsset(w, r, assets, "index.html", "text/html; charset=utf-8")
 	})
-	mux.Handle("/assets/", http.StripPrefix("/assets/", assetHandler))
-	mux.HandleFunc("/api/v1/snapshot", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			return
+	mux.HandleFunc("/assets/app.css", func(w http.ResponseWriter, r *http.Request) {
+		serveAsset(w, r, assets, "app.css", "text/css; charset=utf-8")
+	})
+	mux.HandleFunc("/assets/app.js", func(w http.ResponseWriter, r *http.Request) {
+		serveAsset(w, r, assets, "app.js", "text/javascript; charset=utf-8")
+	})
+	mux.HandleFunc("/api/v1/snapshot", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
+		if err := requireQuery(r, nil); err != nil {
+			return err
 		}
 		snapshot, err := buildSnapshot(svc)
 		if err != nil {
-			http.Error(w, "snapshot unavailable", http.StatusInternalServerError)
-			return
+			return err
 		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(w).Encode(snapshot)
-	})
+		return writeAPIResult(w, snapshot, nil)
+	}))
+	registerExplorerAPI(mux, svc)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setSecurityHeaders(w.Header())
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -187,10 +188,12 @@ func serveAsset(w http.ResponseWriter, r *http.Request, assets fs.FS, name, cont
 
 func setSecurityHeaders(header http.Header) {
 	header.Set("Cache-Control", "no-store")
-	header.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+	header.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+	header.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
 	header.Set("Referrer-Policy", "no-referrer")
 	header.Set("X-Content-Type-Options", "nosniff")
 	header.Set("X-Frame-Options", "DENY")
+	header.Set("X-DAGrail-Read-Only", "true")
 }
 
 func openBrowser(url string) error {

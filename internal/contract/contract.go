@@ -13,6 +13,13 @@ type VersionedSurface struct {
 	Stability  string `json:"stability"`
 }
 
+type DocumentedSurface struct {
+	APIVersion   string `json:"apiVersion"`
+	Stability    string `json:"stability"`
+	SchemaPath   string `json:"schemaPath"`
+	SchemaSHA256 string `json:"schemaSha256"`
+}
+
 type JournalContract struct {
 	ReadableSegmentSchemas []int `json:"readableSegmentSchemas"`
 	WriteSegmentSchema     int   `json:"writeSegmentSchema"`
@@ -31,6 +38,7 @@ type Report struct {
 	Stability  string                   `json:"stability"`
 	Graph      VersionedSurface         `json:"graph"`
 	CLI        VersionedSurface         `json:"cli"`
+	UI         DocumentedSurface        `json:"ui"`
 	Provider   VersionedSurface         `json:"providerSdk"`
 	Journal    JournalContract          `json:"journal"`
 	Projection int                      `json:"projectionSchema"`
@@ -48,7 +56,13 @@ func Current() Report {
 		Stability:  "beta",
 		Graph:      VersionedSurface{APIVersion: "dagrail.io/v1alpha1", Stability: "additive"},
 		CLI:        VersionedSurface{APIVersion: "dagrail.io/cli/v1beta1", Stability: "additive"},
-		Provider:   VersionedSurface{APIVersion: sdk.APIVersion, Stability: "source-compatible"},
+		UI: DocumentedSurface{
+			APIVersion:   "dagrail.io/ui/v1beta1",
+			Stability:    "additive-read-only",
+			SchemaPath:   "schemas/ui-api-v1beta1.schema.json",
+			SchemaSHA256: "sha256:8831e13abdd73698f75e0f97b406f0cfba96c055a31223494272b6d69f0dd5d4",
+		},
+		Provider: VersionedSurface{APIVersion: sdk.APIVersion, Stability: "source-compatible"},
 		Journal: JournalContract{
 			ReadableSegmentSchemas: []int{journal.LegacySegmentSchemaVersion, journal.CurrentSegmentSchemaVersion},
 			WriteSegmentSchema:     journal.CurrentSegmentSchemaVersion,
@@ -69,6 +83,7 @@ func Current() Report {
 			"the six MCP tool names remain stable through the v0.x beta line",
 			"stable provider interfaces receive only source-compatible additions through the v0.x beta line",
 			"documented JSON fields are additive unless a new API version is selected",
+			"the v1beta1 explorer remains loopback-only and exposes no lifecycle mutation route",
 			"SQLite remains disposable and rebuildable from the verified journal",
 		},
 	}
