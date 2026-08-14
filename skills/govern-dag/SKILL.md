@@ -12,6 +12,7 @@ Treat DAGrail, not chat, as runtime authority.
 3. Select only an `allowedActions[].ref` returned by the current context and pass a stable idempotency key to `dag_apply`.
 4. Use `dag_graph_change` preview before apply. Do not edit active contracts or rewrite terminal nodes.
 5. Reconcile every `unknown` effect before retrying. Transport acceptance is not recipient-visible delivery.
-6. Call `dag_pre_wait` before yielding, waiting, or declaring blocked. Resolve every reported ready, submitted, expired, or unreconciled item.
+6. Follow `evidence-package:` and `reuse-decision:` refs instead of loading artifact bodies. A `reuse_execution` decision permits policy reevaluation without execution; it is not policy approval.
+7. Call `dag_pre_wait` before yielding, waiting, or declaring blocked. Resolve every reported ready, submitted, expired, or unreconciled item.
 
 Never edit journal, SQLite, or generated projections directly. Keep semantic review in its assigned node; the control role performs only the action authorized by that node's contract.

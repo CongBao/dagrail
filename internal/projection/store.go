@@ -22,7 +22,7 @@ type Store struct{ path string }
 
 var ErrFutureSchema = errors.New("projection schema was created by a newer DAGrail version")
 
-const CurrentSchemaVersion = 2
+const CurrentSchemaVersion = 3
 
 var projectionOpenLocks sync.Map
 
@@ -110,6 +110,12 @@ func (s *Store) initialize() error {
 		if _, err := connection.ExecContext(context.Background(), migrateV1ToV2); err != nil {
 			return fmt.Errorf("migrate projection schema v1 to v2: %w", err)
 		}
+		schemaVersion = 2
+	}
+	if schemaVersion == 2 {
+		if _, err := connection.ExecContext(context.Background(), migrateV2ToV3); err != nil {
+			return fmt.Errorf("migrate projection schema v2 to v3: %w", err)
+		}
 	}
 	if _, err := connection.ExecContext(context.Background(), "COMMIT"); err != nil {
 		return fmt.Errorf("commit projection schema migration: %w", err)
@@ -141,14 +147,28 @@ ALTER TABLE applied_segments ADD COLUMN segment_schema INTEGER NOT NULL DEFAULT 
 PRAGMA user_version=2;
 `
 
+const migrateV2ToV3 = `
+CREATE TABLE IF NOT EXISTS evidence_packages (package_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, node_id TEXT NOT NULL, core_digest TEXT NOT NULL, package_json BLOB NOT NULL, sequence INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS reuse_decisions (decision_id TEXT PRIMARY KEY, package_id TEXT NOT NULL, result TEXT NOT NULL, decision_json BLOB NOT NULL, sequence INTEGER NOT NULL);
+PRAGMA user_version=3;
+`
+
 func (s *Store) SchemaVersion() (int, error) {
 	db, err := sql.Open("sqlite", s.path)
 	if err != nil {
 		return 0, err
 	}
 	defer db.Close()
+	connection, err := db.Conn(context.Background())
+	if err != nil {
+		return 0, err
+	}
+	defer connection.Close()
+	if _, err := connection.ExecContext(context.Background(), "PRAGMA busy_timeout=5000"); err != nil {
+		return 0, err
+	}
 	var version int
-	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+	if err := connection.QueryRowContext(context.Background(), "PRAGMA user_version").Scan(&version); err != nil {
 		return 0, err
 	}
 	return version, nil
@@ -168,7 +188,7 @@ func (s *Store) Sync(state domain.State, segments []journal.Segment) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, table := range []string{"metadata", "applied_segments", "graph_revisions", "nodes", "edges", "roles", "attempts", "role_leases", "checkpoints", "actions", "outbox", "incidents", "resources", "evidence_index"} {
+	for _, table := range []string{"metadata", "applied_segments", "graph_revisions", "nodes", "edges", "roles", "attempts", "role_leases", "checkpoints", "evidence_packages", "reuse_decisions", "actions", "outbox", "incidents", "resources", "evidence_index"} {
 		if _, err := tx.Exec("DELETE FROM " + table); err != nil {
 			return err
 		}
@@ -222,6 +242,25 @@ func (s *Store) Sync(state domain.State, segments []journal.Segment) error {
 			if _, err := tx.Exec("INSERT OR REPLACE INTO evidence_index(digest,metadata_json) VALUES(?,?)", evidence.Digest, value); err != nil {
 				return err
 			}
+		}
+	}
+	for _, pack := range state.EvidencePackages {
+		value, _ := json.Marshal(pack)
+		if _, err := tx.Exec("INSERT INTO evidence_packages(package_id,attempt_id,node_id,core_digest,package_json,sequence) VALUES(?,?,?,?,?,?)", pack.ID, pack.AttemptID, pack.NodeID, pack.CoreDigest, value, pack.Sequence); err != nil {
+			return err
+		}
+		artifacts := append([]domain.ArtifactRef{pack.Candidate, pack.ProspectiveTree}, pack.Artifacts...)
+		for _, artifact := range artifacts {
+			metadata, _ := json.Marshal(artifact)
+			if _, err := tx.Exec("INSERT OR REPLACE INTO evidence_index(digest,metadata_json) VALUES(?,?)", artifact.Digest, metadata); err != nil {
+				return err
+			}
+		}
+	}
+	for _, decision := range state.ReuseDecisions {
+		value, _ := json.Marshal(decision)
+		if _, err := tx.Exec("INSERT INTO reuse_decisions(decision_id,package_id,result,decision_json,sequence) VALUES(?,?,?,?,?)", decision.ID, decision.PackageID, decision.Result, value, decision.Sequence); err != nil {
+			return err
 		}
 	}
 	for _, action := range state.Actions {

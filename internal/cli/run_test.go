@@ -58,7 +58,7 @@ func TestUserCanInitializeImportGraphAndReadFrontier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("journal compatibility: %v", err)
 	}
-	if !strings.Contains(compatibility, `"currentWriteSegmentSchema":2`) || !strings.Contains(compatibility, `"projectionSchemaVersion":2`) {
+	if !strings.Contains(compatibility, `"currentWriteSegmentSchema":2`) || !strings.Contains(compatibility, `"projectionSchemaVersion":3`) {
 		t.Fatalf("compatibility report lacks current schemas: %s", compatibility)
 	}
 }
@@ -129,6 +129,101 @@ func TestWorkerCanBindStartCheckpointFinishAndUnlockDependentNode(t *testing.T) 
 	}
 }
 
+func TestExecutionEvidenceCanBePublishedInspectedAndReusedAcrossPolicyChanges(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".test-data"))
+	graphPath := filepath.Join(root, "graph.json")
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"evidence"},"spec":{"roles":[{"id":"developer","capabilities":["node.run"]}],"nodes":[{"id":"A","kind":"task","role":"developer","title":"A","objective":"build","outcomes":[{"id":"success","class":"success"}]}],"edges":[]}}`
+	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) (string, error) {
+		var out, errOut bytes.Buffer
+		err := cli.Run(args, strings.NewReader(""), &out, &errOut)
+		return out.String(), err
+	}
+	if _, err := run("init", "--root", root, "--name", "evidence"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("graph", "import", "--root", root, "--file", graphPath, "--idempotency-key", "graph"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("role", "bind", "--root", root, "--role", "developer", "--harness", "codex", "--session", "session-A", "--idempotency-key", "bind"); err != nil {
+		t.Fatal(err)
+	}
+	startRef := allowedActionRef(t, run, root, "developer", "A", "node.start")
+	if _, err := run("action", "apply", "--root", root, "--ref", startRef, "--idempotency-key", "start"); err != nil {
+		t.Fatal(err)
+	}
+	protected := []map[string]string{{"name": "toolchain", "digest": cliDigest("d")}, {"name": "fixture", "digest": cliDigest("c")}}
+	artifact := func(digest, artifactType string) map[string]any {
+		return map[string]any{"digest": digest, "type": artifactType, "size": 12, "provenance": map[string]string{"producer": "codex", "revision": "1"}}
+	}
+	packageInput, _ := json.Marshal(map[string]any{
+		"candidate": artifact(cliDigest("a"), "candidate"), "prospectiveTree": artifact(cliDigest("b"), "git-tree"),
+		"commandGraphDigest": cliDigest("e"), "protectedInputs": protected,
+		"observations": map[string]bool{"exact": true, "clean": true, "depthComplete": true, "sourceUnmodified": true, "resourcesClosed": true},
+		"artifacts":    []map[string]any{artifact(cliDigest("f"), "test-report")},
+	})
+	publishRef := allowedActionRef(t, run, root, "developer", "A", "evidence.publish")
+	published, err := run("action", "apply", "--root", root, "--ref", publishRef, "--input", string(packageInput), "--idempotency-key", "publish-package")
+	if err != nil {
+		t.Fatalf("publish evidence: %v", err)
+	}
+	var publishResult struct {
+		ObjectRef string `json:"objectRef"`
+	}
+	if err := json.Unmarshal([]byte(published), &publishResult); err != nil || !strings.HasPrefix(publishResult.ObjectRef, "evidence-package:epkg_") {
+		t.Fatalf("publish result lacks package ref: %v %s", err, published)
+	}
+	packageID := strings.TrimPrefix(publishResult.ObjectRef, "evidence-package:")
+	listed, err := run("evidence", "list", "--root", root, "--node", "A")
+	if err != nil || !strings.Contains(listed, packageID) {
+		t.Fatalf("evidence index missing package: %v %s", err, listed)
+	}
+	inspectedPackage, err := run("inspect", "--root", root, publishResult.ObjectRef)
+	if err != nil || !strings.Contains(inspectedPackage, cliDigest("a")) || strings.Contains(inspectedPackage, "prompt") {
+		t.Fatalf("inspect package is incomplete or leaked forbidden content: %v %s", err, inspectedPackage)
+	}
+
+	reuseInput, _ := json.Marshal(map[string]any{
+		"packageId": packageID, "policy": map[string]string{"id": "validator", "version": "2.0.0", "schemaHash": cliDigest("1")},
+		"candidateDigest": cliDigest("a"), "prospectiveTreeDigest": cliDigest("b"), "commandGraphDigest": cliDigest("e"), "protectedInputs": protected,
+	})
+	reuseRef := allowedActionRef(t, run, root, "developer", "A", "evidence.assess-reuse")
+	reused, err := run("action", "apply", "--root", root, "--ref", reuseRef, "--input", string(reuseInput), "--idempotency-key", "reuse-policy-v2")
+	if err != nil {
+		t.Fatalf("assess reuse: %v", err)
+	}
+	var reuseResult struct {
+		ObjectRef string `json:"objectRef"`
+	}
+	if err := json.Unmarshal([]byte(reused), &reuseResult); err != nil || !strings.HasPrefix(reuseResult.ObjectRef, "reuse-decision:reuse_") {
+		t.Fatalf("reuse result lacks decision ref: %v %s", err, reused)
+	}
+	decision, err := run("inspect", "--root", root, reuseResult.ObjectRef)
+	if err != nil || !strings.Contains(decision, `"result":"reuse_execution"`) || !strings.Contains(decision, `"protected_core_unchanged"`) {
+		t.Fatalf("policy-only change should reuse execution: %v %s", err, decision)
+	}
+
+	changedInput, _ := json.Marshal(map[string]any{
+		"packageId": packageID, "policy": map[string]string{"id": "validator", "version": "3.0.0", "schemaHash": cliDigest("2")},
+		"candidateDigest": cliDigest("9"), "prospectiveTreeDigest": cliDigest("b"), "commandGraphDigest": cliDigest("e"), "protectedInputs": protected,
+	})
+	changedRef := allowedActionRef(t, run, root, "developer", "A", "evidence.assess-reuse")
+	changed, err := run("action", "apply", "--root", root, "--ref", changedRef, "--input", string(changedInput), "--idempotency-key", "reuse-policy-v3-changed-core")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(changed, `"objectRef":"reuse-decision:`) {
+		t.Fatalf("changed-core decision ref missing: %s", changed)
+	}
+	context, err := run("context", "--root", root, "--view", "worker", "--role", "developer", "--node", "A", "--budget-bytes", "8192")
+	if err != nil || !strings.Contains(context, `"result":"rerun_required"`) {
+		t.Fatalf("worker context lacks latest reuse decision: %v %s", err, context)
+	}
+}
+
 func allowedActionRef(t *testing.T, run func(...string) (string, error), root, role, node, kind string) string {
 	t.Helper()
 	out, err := run("action", "list", "--root", root, "--role", role, "--node", node)
@@ -149,6 +244,8 @@ func allowedActionRef(t *testing.T, run func(...string) (string, error), root, r
 	t.Fatalf("action %s not found in %s", kind, out)
 	return ""
 }
+
+func cliDigest(character string) string { return "sha256:" + strings.Repeat(character, 64) }
 
 func TestGraphChangeRequiresImpactTokenAndProtectsActiveNodes(t *testing.T) {
 	root := t.TempDir()

@@ -22,6 +22,15 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Normalized event**: the current in-memory representation produced from a verified Stored event.
 - **Upcast**: a deterministic, side-effect-free conversion from a verified older event version to the current Normalized event; it never rewrites history.
 - **Compatibility window**: the closed set of historical segment and event versions a DAGrail release promises to read.
+- **Execution package**: an immutable manifest binding one Attempt to candidate,
+  prospective tree, command graph, protected inputs, observations, artifacts, and
+  provenance by digest; artifact bodies remain external.
+- **Protected core**: the candidate, prospective tree, command graph, Node contract,
+  and declared execution inputs whose combined digest decides whether execution
+  evidence can be reused.
+- **Reuse decision**: a deterministic, policy-bound comparison that states whether
+  an Execution package may be reused or execution must rerun; it is not a semantic
+  approval or policy outcome.
 - **Projection**: disposable SQLite or human-facing data rebuilt from journal segments.
 - **Effect**: an external side effect managed as a saga, never represented as an ACID transaction.
 - **Receipt**: typed observation of transport, session creation, visible delivery, acceptance, and completion. These states are not interchangeable.

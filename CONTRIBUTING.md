@@ -17,4 +17,8 @@ Journal readers must verify the exact stored bytes and hash chain before applyin
 in-memory upcast. Historical segments and fixtures are immutable. Projection schema
 changes require a forward migration test and a rebuild-from-journal test.
 
+Evidence changes must keep execution observations separate from semantic policy
+outcomes. Reuse tests need both an unchanged protected core and at least one changed-core
+reason; a reuse decision must remain replay-verifiable from journal data alone.
+
 Keep control-plane transactions short. Add focused tests first, converge locally, then run the full race and cross-build gates once.

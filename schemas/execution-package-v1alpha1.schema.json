@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/execution-package-v1alpha1.schema.json",
+  "title": "DAGrail Execution Package v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "id", "projectId", "graphRevision", "nodeId", "attemptId", "nodeContractDigest", "candidate", "prospectiveTree", "commandGraphDigest", "protectedInputs", "observations", "artifacts", "coreDigest", "createdAt"],
+  "properties": {
+    "apiVersion": {"const": "dagrail.io/v1alpha1"},
+    "kind": {"const": "ExecutionPackage"},
+    "id": {"type": "string", "pattern": "^epkg_[a-f0-9]{64}$"},
+    "projectId": {"type": "string", "format": "uuid"},
+    "graphRevision": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "nodeId": {"type": "string", "minLength": 1},
+    "attemptId": {"type": "string", "format": "uuid"},
+    "nodeContractDigest": {"$ref": "#/$defs/digest"},
+    "candidate": {"$ref": "#/$defs/artifact"},
+    "prospectiveTree": {"$ref": "#/$defs/artifact"},
+    "commandGraphDigest": {"$ref": "#/$defs/digest"},
+    "protectedInputs": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"$ref": "#/$defs/protectedInput"}},
+    "observations": {"$ref": "#/$defs/observations"},
+    "artifacts": {"type": "array", "maxItems": 256, "items": {"$ref": "#/$defs/artifact"}},
+    "coreDigest": {"$ref": "#/$defs/digest"},
+    "createdAt": {"type": "string", "format": "date-time"},
+    "sequence": {"type": "integer", "minimum": 1}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "provenance": {
+      "type": "object", "additionalProperties": false, "required": ["producer"],
+      "properties": {"producer": {"type": "string", "minLength": 1, "maxLength": 256}, "revision": {"type": "string", "maxLength": 256}, "invocationDigest": {"$ref": "#/$defs/digest"}}
+    },
+    "artifact": {
+      "type": "object", "additionalProperties": false, "required": ["digest", "type", "size", "provenance"],
+      "properties": {"digest": {"$ref": "#/$defs/digest"}, "type": {"type": "string", "minLength": 1, "maxLength": 128}, "size": {"type": "integer", "minimum": 0}, "uri": {"type": "string", "maxLength": 2048}, "provenance": {"$ref": "#/$defs/provenance"}}
+    },
+    "protectedInput": {
+      "type": "object", "additionalProperties": false, "required": ["name", "digest"],
+      "properties": {"name": {"type": "string", "minLength": 1, "maxLength": 128}, "digest": {"$ref": "#/$defs/digest"}}
+    },
+    "observations": {
+      "type": "object", "additionalProperties": false,
+      "required": ["exact", "clean", "depthComplete", "sourceUnmodified", "resourcesClosed"],
+      "properties": {"exact": {"type": "boolean"}, "clean": {"type": "boolean"}, "depthComplete": {"type": "boolean"}, "sourceUnmodified": {"type": "boolean"}, "resourcesClosed": {"type": "boolean"}}
+    }
+  }
+}

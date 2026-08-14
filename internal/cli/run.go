@@ -52,6 +52,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runPlugin(args[1:], stdout, stderr)
 	case "journal":
 		return runJournal(args[1:], stdout, stderr)
+	case "evidence":
+		return runEvidence(args[1:], stdout, stderr)
 	case "projection":
 		return runProjection(args[1:], stdout, stderr)
 	case "doctor":
@@ -61,6 +63,29 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runEvidence(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 || args[0] != "list" {
+		return fmt.Errorf("usage: dagrail evidence list [--node ID] [--attempt ID]")
+	}
+	flags := flag.NewFlagSet("evidence list", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	root := flags.String("root", ".", "project root")
+	nodeID := flags.String("node", "", "filter by node ID")
+	attemptID := flags.String("attempt", "", "filter by attempt ID")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	s, err := service.Open(*root)
+	if err != nil {
+		return err
+	}
+	result, err := s.ListEvidence(*nodeID, *attemptID)
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, result)
 }
 
 func runPlugin(args []string, stdout, stderr io.Writer) error {

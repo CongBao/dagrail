@@ -7,3 +7,7 @@ Please report vulnerabilities privately through GitHub Security Advisories for t
 DAGrail is currently a cooperative single-user local tool. Role capabilities prevent accidental collisions; they are not an authorization boundary against another local process running as the same OS user. Journal hashes detect mutation but do not prove an actor identity. External URIs and receipts may reveal metadata and should use least-privilege stores.
 
 The controller rejects secret-like fields in effect requests and never intentionally stores prompts or chat transcripts. Operators remain responsible for keeping secrets outside Graph Definitions, checkpoints, journal exports, and evidence metadata.
+
+Execution Packages accept only digest metadata and bounded absolute artifact URIs. URI
+userinfo, query strings, fragments, and data schemes are rejected because they commonly
+carry credentials or inline artifact bodies.

@@ -92,6 +92,21 @@ func (s *Service) ContextSince(view, roleID, nodeID string, budget int, cursor u
 				data["checkpoint"] = checkpoint
 				refs = append(refs, "checkpoint:"+checkpoint.ID)
 			}
+			if packageIDs := state.AttemptPackages[attempt.ID]; len(packageIDs) > 0 {
+				packageRefs := make([]string, 0, len(packageIDs))
+				for _, packageID := range packageIDs {
+					packageRef := "evidence-package:" + packageID
+					packageRefs = append(packageRefs, packageRef)
+					refs = append(refs, packageRef)
+				}
+				data["executionPackageRefs"] = packageRefs
+				latestPackageID := packageIDs[len(packageIDs)-1]
+				if decisionIDs := state.PackageDecisions[latestPackageID]; len(decisionIDs) > 0 {
+					latest := state.ReuseDecisions[decisionIDs[len(decisionIDs)-1]]
+					data["latestReuseDecision"] = ReuseDecisionSummary{ID: latest.ID, PackageID: latest.PackageID, PolicyID: latest.Policy.ID, Result: latest.Result, CreatedAt: latest.CreatedAt}
+					refs = append(refs, "reuse-decision:"+latest.ID)
+				}
+			}
 		}
 	}
 	if roleID != "" && nodeID != "" {

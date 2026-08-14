@@ -62,7 +62,7 @@ func New(svc *service.Service) *mcp.Server {
 		err = json.Unmarshal(raw, &output)
 		return nil, output, err
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "dag_inspect", Title: "Inspect DAG object", Description: "Resolve one opaque node, attempt, evidence, effect, incident, resource, or history ref.", InputSchema: schemaFor[InspectInput](), Annotations: &mcp.ToolAnnotations{Title: "Inspect DAG object", ReadOnlyHint: true, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(_ context.Context, _ *mcp.CallToolRequest, input InspectInput) (*mcp.CallToolResult, InspectOutput, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_inspect", Title: "Inspect DAG object", Description: "Resolve one opaque node, attempt, execution package, reuse decision, artifact, effect, incident, resource, or history ref.", InputSchema: schemaFor[InspectInput](), Annotations: &mcp.ToolAnnotations{Title: "Inspect DAG object", ReadOnlyHint: true, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(_ context.Context, _ *mcp.CallToolRequest, input InspectInput) (*mcp.CallToolResult, InspectOutput, error) {
 		value, err := svc.Inspect(input.Ref)
 		return nil, InspectOutput{Value: value}, err
 	})

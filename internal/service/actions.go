@@ -35,6 +35,7 @@ type ActionResult struct {
 	Kind      string `json:"kind"`
 	NodeID    string `json:"nodeId"`
 	AttemptID string `json:"attemptId,omitempty"`
+	ObjectRef string `json:"objectRef,omitempty"`
 	Status    string `json:"status"`
 	Sequence  uint64 `json:"sequence"`
 }
@@ -193,6 +194,12 @@ func (s *Service) ListActions(roleID, nodeID string) (ActionList, error) {
 		case "submitted":
 			kinds = []string{"attempt.checkpoint", "attempt.finish"}
 		}
+		if attempt.Status == "running" || attempt.Status == "waiting" || attempt.Status == "submitted" {
+			kinds = append(kinds, "evidence.publish")
+			if len(state.EvidencePackages) > 0 {
+				kinds = append(kinds, "evidence.assess-reuse")
+			}
+		}
 	}
 	sort.Strings(kinds)
 	secret, err := s.actionSecret()
@@ -241,15 +248,7 @@ func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey 
 		return ActionResult{}, err
 	}
 	if command, ok := state.Commands[idempotencyKey]; ok {
-		for _, action := range state.Actions {
-			if action.Sequence == command.Sequence {
-				if effect, exists := state.Effects[action.ID]; exists {
-					return ActionResult{ActionID: action.ID, Kind: action.Kind, NodeID: action.NodeID, AttemptID: action.AttemptID, Status: effect.Status, Sequence: effect.Sequence}, nil
-				}
-				return ActionResult{ActionID: action.ID, Kind: action.Kind, NodeID: action.NodeID, AttemptID: action.AttemptID, Status: action.Status, Sequence: action.Sequence}, nil
-			}
-		}
-		return ActionResult{}, fmt.Errorf("idempotency key belongs to another command")
+		return actionResultForSequence(state, command.Sequence)
 	}
 	if payload.ProjectID != state.ProjectID || payload.GraphRevision != state.GraphRevision || payload.ProviderSet != providerFingerprint(state.Graph) || payload.HeadHash != state.HeadHash {
 		return ActionResult{}, fmt.Errorf("action reference is stale")
@@ -275,6 +274,7 @@ func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey 
 	now := s.Now().UTC().Format(time.RFC3339Nano)
 	events := make([]journal.Event, 0, 2)
 	attemptID := payload.AttemptID
+	actionInput := input
 	switch payload.Kind {
 	case "node.start":
 		if state.Nodes[node.ID].Status != "planned" || !contains(domain.ComputeFrontier(state).Ready, node.ID) {
@@ -314,6 +314,36 @@ func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey 
 		checkpoint := domain.Checkpoint{ID: uuid.NewString(), AttemptID: attempt.ID, Summary: value.Summary, EvidenceRefs: value.EvidenceRefs, CreatedAt: now}
 		raw, _ := json.Marshal(checkpoint)
 		events = append(events, journal.Event{Type: "attempt.checkpointed", Payload: raw})
+	case "evidence.publish":
+		attempt, err := activeAttempt(state, payload)
+		if err != nil {
+			return ActionResult{}, err
+		}
+		pack, err := s.buildExecutionPackage(state, node, attempt, input, s.Now())
+		if err != nil {
+			return ActionResult{}, err
+		}
+		if _, exists := state.EvidencePackages[pack.ID]; exists {
+			return ActionResult{}, fmt.Errorf("execution package %s is already published", pack.ID)
+		}
+		raw, _ := json.Marshal(pack)
+		events = append(events, journal.Event{Type: "evidence.package-published", Payload: raw})
+		actionInput, _ = json.Marshal(map[string]string{"packageId": pack.ID})
+	case "evidence.assess-reuse":
+		attempt, err := activeAttempt(state, payload)
+		if err != nil {
+			return ActionResult{}, err
+		}
+		decision, err := s.buildReuseDecision(state, attempt, input, s.Now())
+		if err != nil {
+			return ActionResult{}, err
+		}
+		if _, exists := state.ReuseDecisions[decision.ID]; exists {
+			return ActionResult{}, fmt.Errorf("reuse decision %s is already recorded", decision.ID)
+		}
+		raw, _ := json.Marshal(decision)
+		events = append(events, journal.Event{Type: "evidence.reuse-assessed", Payload: raw})
+		actionInput, _ = json.Marshal(map[string]string{"decisionId": decision.ID})
 	case "attempt.wait", "attempt.resume", "attempt.submit":
 		attempt, err := activeAttempt(state, payload)
 		if err != nil {
@@ -378,7 +408,7 @@ func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey 
 	default:
 		return ActionResult{}, fmt.Errorf("unsupported action kind %s", payload.Kind)
 	}
-	action := domain.ActionRecord{ID: payload.ActionID, Kind: payload.Kind, NodeID: payload.NodeID, AttemptID: attemptID, Status: "confirmed", Input: input}
+	action := domain.ActionRecord{ID: payload.ActionID, Kind: payload.Kind, NodeID: payload.NodeID, AttemptID: attemptID, Status: "confirmed", Input: actionInput}
 	actionRaw, _ := json.Marshal(action)
 	events = append(events, journal.Event{Type: "action.applied", Payload: actionRaw})
 	expectedHead := payload.HeadHash
@@ -400,7 +430,7 @@ func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey 
 	if !ok || actionRecord.Sequence != segment.Sequence {
 		return actionResultForSequence(state, segment.Sequence)
 	}
-	return ActionResult{ActionID: actionRecord.ID, Kind: actionRecord.Kind, NodeID: actionRecord.NodeID, AttemptID: actionRecord.AttemptID, Status: actionRecord.Status, Sequence: actionRecord.Sequence}, nil
+	return ActionResult{ActionID: actionRecord.ID, Kind: actionRecord.Kind, NodeID: actionRecord.NodeID, AttemptID: actionRecord.AttemptID, ObjectRef: objectRefForSequence(state, actionRecord.Sequence), Status: actionRecord.Status, Sequence: actionRecord.Sequence}, nil
 }
 
 func actionResultForSequence(state domain.State, sequence uint64) (ActionResult, error) {
@@ -412,9 +442,23 @@ func actionResultForSequence(state domain.State, sequence uint64) (ActionResult,
 		if effect, ok := state.Effects[action.ID]; ok {
 			status, resultSequence = effect.Status, effect.Sequence
 		}
-		return ActionResult{ActionID: action.ID, Kind: action.Kind, NodeID: action.NodeID, AttemptID: action.AttemptID, Status: status, Sequence: resultSequence}, nil
+		return ActionResult{ActionID: action.ID, Kind: action.Kind, NodeID: action.NodeID, AttemptID: action.AttemptID, ObjectRef: objectRefForSequence(state, sequence), Status: status, Sequence: resultSequence}, nil
 	}
 	return ActionResult{}, fmt.Errorf("journal command at sequence %d has no action result", sequence)
+}
+
+func objectRefForSequence(state domain.State, sequence uint64) string {
+	for _, pack := range state.EvidencePackages {
+		if pack.Sequence == sequence {
+			return "evidence-package:" + pack.ID
+		}
+	}
+	for _, decision := range state.ReuseDecisions {
+		if decision.Sequence == sequence {
+			return "reuse-decision:" + decision.ID
+		}
+	}
+	return ""
 }
 
 func (s *Service) validLease(state domain.State, roleID string) (domain.RoleLease, error) {
@@ -518,6 +562,10 @@ func verifyActionRef(ref string, secret []byte) (actionRefPayload, error) {
 }
 
 func actionInputSchema(kind string, node domain.NodeDefinition) map[string]any {
+	digest := map[string]any{"type": "string", "pattern": `^sha256:[a-f0-9]{64}$`}
+	provenance := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"producer"}, "properties": map[string]any{"producer": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}, "revision": map[string]any{"type": "string", "maxLength": 256}, "invocationDigest": digest}}
+	artifact := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"digest", "type", "size", "provenance"}, "properties": map[string]any{"digest": digest, "type": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "size": map[string]any{"type": "integer", "minimum": 0}, "uri": map[string]any{"type": "string", "maxLength": 2048}, "provenance": provenance}}
+	protectedInput := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"name", "digest"}, "properties": map[string]any{"name": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "digest": digest}}
 	switch kind {
 	case "attempt.checkpoint":
 		return map[string]any{"type": "object", "required": []string{"summary"}, "properties": map[string]any{"summary": map[string]any{"type": "string", "maxLength": 2048}, "evidenceRefs": map[string]any{"type": "array"}}}
@@ -529,6 +577,12 @@ func actionInputSchema(kind string, node domain.NodeDefinition) map[string]any {
 		factMap := map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}
 		facts := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"decision": factMap, "evidence": factMap, "policy": factMap}}
 		return map[string]any{"type": "object", "required": []string{"outcome"}, "additionalProperties": false, "properties": map[string]any{"outcome": map[string]any{"type": "string", "enum": outcomes}, "facts": facts}}
+	case "evidence.publish":
+		observations := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"exact", "clean", "depthComplete", "sourceUnmodified", "resourcesClosed"}, "properties": map[string]any{"exact": map[string]any{"type": "boolean"}, "clean": map[string]any{"type": "boolean"}, "depthComplete": map[string]any{"type": "boolean"}, "sourceUnmodified": map[string]any{"type": "boolean"}, "resourcesClosed": map[string]any{"type": "boolean"}}}
+		return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"candidate", "prospectiveTree", "commandGraphDigest", "protectedInputs", "observations", "artifacts"}, "properties": map[string]any{"candidate": artifact, "prospectiveTree": artifact, "commandGraphDigest": digest, "protectedInputs": map[string]any{"type": "array", "minItems": 1, "maxItems": 128, "items": protectedInput}, "observations": observations, "artifacts": map[string]any{"type": "array", "maxItems": 256, "items": artifact}}}
+	case "evidence.assess-reuse":
+		policy := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"id", "version", "schemaHash"}, "properties": map[string]any{"id": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "version": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "schemaHash": digest}}
+		return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"packageId", "policy", "candidateDigest", "prospectiveTreeDigest", "commandGraphDigest", "protectedInputs"}, "properties": map[string]any{"packageId": map[string]any{"type": "string", "pattern": `^epkg_[a-f0-9]{64}$`}, "policy": policy, "candidateDigest": digest, "prospectiveTreeDigest": digest, "commandGraphDigest": digest, "protectedInputs": map[string]any{"type": "array", "minItems": 1, "maxItems": 128, "items": protectedInput}}}
 	default:
 		return map[string]any{"type": "object", "additionalProperties": false}
 	}

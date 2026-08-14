@@ -287,6 +287,50 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 				attempt.CheckpointID = checkpoint.ID
 				attempt.UpdatedAt = checkpoint.CreatedAt
 				state.Attempts[attempt.ID] = attempt
+			case "evidence.package-published":
+				var pack domain.ExecutionPackage
+				if err := json.Unmarshal(event.Payload, &pack); err != nil {
+					return domain.State{}, nil, err
+				}
+				attempt, ok := state.Attempts[pack.AttemptID]
+				node, nodeExists := state.NodeDefinition(pack.NodeID)
+				if !ok || !nodeExists || attempt.NodeID != pack.NodeID || pack.ProjectID != state.ProjectID || pack.GraphRevision != state.GraphRevision {
+					return domain.State{}, nil, fmt.Errorf("execution package %s references an invalid attempt", pack.ID)
+				}
+				if err := validateExecutionPackageRecord(pack, node); err != nil {
+					return domain.State{}, nil, fmt.Errorf("execution package %s: %w", pack.ID, err)
+				}
+				if _, exists := state.EvidencePackages[pack.ID]; exists {
+					return domain.State{}, nil, fmt.Errorf("execution package %s is duplicated", pack.ID)
+				}
+				pack.Sequence = segment.Sequence
+				state.EvidencePackages[pack.ID] = pack
+				state.AttemptPackages[pack.AttemptID] = append(state.AttemptPackages[pack.AttemptID], pack.ID)
+			case "evidence.reuse-assessed":
+				var decision domain.ReuseDecision
+				if err := json.Unmarshal(event.Payload, &decision); err != nil {
+					return domain.State{}, nil, err
+				}
+				if _, exists := state.EvidencePackages[decision.PackageID]; !exists {
+					return domain.State{}, nil, fmt.Errorf("reuse decision %s references unknown package %s", decision.ID, decision.PackageID)
+				}
+				if _, exists := state.Attempts[decision.AssessedByAttempt]; !exists {
+					return domain.State{}, nil, fmt.Errorf("reuse decision %s references unknown assessor attempt", decision.ID)
+				}
+				pack := state.EvidencePackages[decision.PackageID]
+				node, exists := state.NodeDefinition(pack.NodeID)
+				if !exists {
+					return domain.State{}, nil, fmt.Errorf("reuse decision %s references an unavailable package node", decision.ID)
+				}
+				if err := validateReuseDecisionRecord(decision, pack, node); err != nil {
+					return domain.State{}, nil, fmt.Errorf("reuse decision %s: %w", decision.ID, err)
+				}
+				if _, exists := state.ReuseDecisions[decision.ID]; exists {
+					return domain.State{}, nil, fmt.Errorf("reuse decision %s is duplicated", decision.ID)
+				}
+				decision.Sequence = segment.Sequence
+				state.ReuseDecisions[decision.ID] = decision
+				state.PackageDecisions[decision.PackageID] = append(state.PackageDecisions[decision.PackageID], decision.ID)
 			case "attempt.status-changed":
 				var payload struct {
 					AttemptID string `json:"attemptId"`

@@ -26,6 +26,52 @@ type PreWaitAudit struct {
 	Reasons           []string `json:"reasons,omitempty"`
 }
 
+type EvidenceIndex struct {
+	Packages  []EvidencePackageSummary `json:"packages"`
+	Decisions []ReuseDecisionSummary   `json:"reuseDecisions"`
+}
+
+type EvidencePackageSummary struct {
+	ID         string `json:"id"`
+	NodeID     string `json:"nodeId"`
+	AttemptID  string `json:"attemptId"`
+	CoreDigest string `json:"coreDigest"`
+	CreatedAt  string `json:"createdAt"`
+}
+
+type ReuseDecisionSummary struct {
+	ID        string `json:"id"`
+	PackageID string `json:"packageId"`
+	PolicyID  string `json:"policyId"`
+	Result    string `json:"result"`
+	CreatedAt string `json:"createdAt"`
+}
+
+func (s *Service) ListEvidence(nodeID, attemptID string) (EvidenceIndex, error) {
+	state, _, err := s.load()
+	if err != nil {
+		return EvidenceIndex{}, err
+	}
+	result := EvidenceIndex{}
+	packageIDs := map[string]bool{}
+	for _, pack := range state.EvidencePackages {
+		if (nodeID != "" && pack.NodeID != nodeID) || (attemptID != "" && pack.AttemptID != attemptID) {
+			continue
+		}
+		packageIDs[pack.ID] = true
+		result.Packages = append(result.Packages, EvidencePackageSummary{ID: pack.ID, NodeID: pack.NodeID, AttemptID: pack.AttemptID, CoreDigest: pack.CoreDigest, CreatedAt: pack.CreatedAt})
+	}
+	for _, decision := range state.ReuseDecisions {
+		if (nodeID != "" || attemptID != "") && !packageIDs[decision.PackageID] {
+			continue
+		}
+		result.Decisions = append(result.Decisions, ReuseDecisionSummary{ID: decision.ID, PackageID: decision.PackageID, PolicyID: decision.Policy.ID, Result: decision.Result, CreatedAt: decision.CreatedAt})
+	}
+	sort.Slice(result.Packages, func(i, j int) bool { return result.Packages[i].ID < result.Packages[j].ID })
+	sort.Slice(result.Decisions, func(i, j int) bool { return result.Decisions[i].ID < result.Decisions[j].ID })
+	return result, nil
+}
+
 func (s *Service) PreWait() (PreWaitAudit, error) {
 	state, _, err := s.load()
 	if err != nil {
@@ -159,11 +205,31 @@ func (s *Service) Inspect(ref string) (any, error) {
 			return nil, fmt.Errorf("unknown checkpoint %s", id)
 		}
 		return value, nil
+	case "evidence-package":
+		value, found := state.EvidencePackages[id]
+		if !found {
+			return nil, fmt.Errorf("unknown execution package %s", id)
+		}
+		return value, nil
+	case "reuse-decision":
+		value, found := state.ReuseDecisions[id]
+		if !found {
+			return nil, fmt.Errorf("unknown reuse decision %s", id)
+		}
+		return value, nil
 	case "evidence":
 		for _, checkpoint := range state.Checkpoints {
 			for _, evidence := range checkpoint.EvidenceRefs {
 				if evidence.Digest == id {
 					return map[string]any{"evidence": evidence, "checkpointId": checkpoint.ID, "attemptId": checkpoint.AttemptID}, nil
+				}
+			}
+		}
+		for _, pack := range state.EvidencePackages {
+			artifacts := append([]domain.ArtifactRef{pack.Candidate, pack.ProspectiveTree}, pack.Artifacts...)
+			for _, artifact := range artifacts {
+				if artifact.Digest == id {
+					return map[string]any{"artifact": artifact, "packageId": pack.ID, "attemptId": pack.AttemptID}, nil
 				}
 			}
 		}

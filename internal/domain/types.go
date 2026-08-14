@@ -512,21 +512,25 @@ type Incident struct {
 }
 
 type State struct {
-	ProjectID     string                   `json:"projectId"`
-	Graph         *GraphDefinition         `json:"graph,omitempty"`
-	GraphRevision string                   `json:"graphRevision,omitempty"`
-	HeadSequence  uint64                   `json:"headSequence"`
-	HeadHash      string                   `json:"headHash,omitempty"`
-	Nodes         map[string]NodeRuntime   `json:"nodes"`
-	Attempts      map[string]Attempt       `json:"attempts"`
-	NodeAttempts  map[string][]string      `json:"nodeAttempts"`
-	Leases        map[string]RoleLease     `json:"leases"`
-	Checkpoints   map[string]Checkpoint    `json:"checkpoints"`
-	Actions       map[string]ActionRecord  `json:"actions"`
-	Effects       map[string]EffectAction  `json:"effects"`
-	Resources     map[string]ResourceLease `json:"resources"`
-	Incidents     map[string]Incident      `json:"incidents"`
-	Commands      map[string]CommandResult `json:"commands"`
+	ProjectID        string                      `json:"projectId"`
+	Graph            *GraphDefinition            `json:"graph,omitempty"`
+	GraphRevision    string                      `json:"graphRevision,omitempty"`
+	HeadSequence     uint64                      `json:"headSequence"`
+	HeadHash         string                      `json:"headHash,omitempty"`
+	Nodes            map[string]NodeRuntime      `json:"nodes"`
+	Attempts         map[string]Attempt          `json:"attempts"`
+	NodeAttempts     map[string][]string         `json:"nodeAttempts"`
+	Leases           map[string]RoleLease        `json:"leases"`
+	Checkpoints      map[string]Checkpoint       `json:"checkpoints"`
+	EvidencePackages map[string]ExecutionPackage `json:"evidencePackages"`
+	AttemptPackages  map[string][]string         `json:"attemptPackages"`
+	ReuseDecisions   map[string]ReuseDecision    `json:"reuseDecisions"`
+	PackageDecisions map[string][]string         `json:"packageDecisions"`
+	Actions          map[string]ActionRecord     `json:"actions"`
+	Effects          map[string]EffectAction     `json:"effects"`
+	Resources        map[string]ResourceLease    `json:"resources"`
+	Incidents        map[string]Incident         `json:"incidents"`
+	Commands         map[string]CommandResult    `json:"commands"`
 }
 
 type CommandResult struct {
@@ -539,8 +543,18 @@ func NewState(projectID string) State {
 	return State{
 		ProjectID: projectID, Nodes: map[string]NodeRuntime{}, Attempts: map[string]Attempt{},
 		NodeAttempts: map[string][]string{}, Leases: map[string]RoleLease{}, Checkpoints: map[string]Checkpoint{},
+		EvidencePackages: map[string]ExecutionPackage{}, AttemptPackages: map[string][]string{}, ReuseDecisions: map[string]ReuseDecision{}, PackageDecisions: map[string][]string{},
 		Actions: map[string]ActionRecord{}, Effects: map[string]EffectAction{}, Resources: map[string]ResourceLease{}, Incidents: map[string]Incident{}, Commands: map[string]CommandResult{},
 	}
+}
+
+func (s State) LatestExecutionPackage(attemptID string) (ExecutionPackage, bool) {
+	ids := s.AttemptPackages[attemptID]
+	if len(ids) == 0 {
+		return ExecutionPackage{}, false
+	}
+	value, ok := s.EvidencePackages[ids[len(ids)-1]]
+	return value, ok
 }
 
 func (s State) EffectForAttempt(attemptID string) (EffectAction, bool) {

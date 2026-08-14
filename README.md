@@ -27,15 +27,16 @@ adapters remain the executors.
 - replaceable sessions through stable roles, leases, attempts, and checkpoints;
 - revision-bound allowed actions instead of hand-written lifecycle envelopes;
 - bounded role-specific context through CLI or six high-level MCP tools;
+- immutable execution packages and deterministic evidence-reuse decisions;
 - recoverable external effects with explicit `unknown` and `reconcile` states;
 - an immutable RFC 8785 journal with disposable SQLite projections.
 
 ## Status
 
-`v0.2.0` is a technical alpha: local-first and single-user, with one native Go
+`v0.3.0` is a technical alpha: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
-stdio MCP. It can verify and replay mixed v1/v2 journals without rewriting legacy
-segments, and migrates disposable projections independently.
+stdio MCP. It keeps execution evidence reusable across policy-only changes while
+requiring a rerun for any protected-core change.
 
 ## Build
 
@@ -60,6 +61,20 @@ dagrail context --root . --view worker --role developer --node implement
 ```
 
 Use `dagrail action list` to obtain a signed, revision-bound action ref. Apply only that ref with a stable idempotency key. Run `dagrail pre-wait` before yielding or claiming the graph is idle.
+
+## Execution evidence
+
+An active worker publishes digest-only execution metadata through the
+`evidence.publish` allowed action. Artifact bodies remain in Git, CI, or an artifact
+store. Reviewers can then apply `evidence.assess-reuse` against a new policy binding and
+current protected core. `reuse_execution` means the recorded execution may be fed to the
+new policy; it never means that policy passed.
+
+```bash
+dagrail evidence list --root . --node implement
+dagrail inspect --root . evidence-package:epkg_...
+dagrail inspect --root . reuse-decision:reuse_...
+```
 
 ## Agent integrations
 
