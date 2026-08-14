@@ -16,3 +16,8 @@ storage handles; custom distributions should review provider filesystem and netw
 Execution Packages accept only digest metadata and bounded absolute artifact URIs. URI
 userinfo, query strings, fragments, and data schemes are rejected because they commonly
 carry credentials or inline artifact bodies.
+
+The v0.5 web UI is a local read-only projection. It refuses non-loopback binds, accepts
+only `GET` and `HEAD`, loads no third-party assets, emits restrictive browser security
+headers, and omits allowed-action references, controller tokens, event payloads, prompts,
+and artifact bodies. It is not a remotely deployable authenticated dashboard.

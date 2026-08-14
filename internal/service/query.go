@@ -22,6 +22,8 @@ type PreWaitAudit struct {
 	ActiveResources   []string `json:"activeResources,omitempty"`
 	OrphanedResources []string `json:"orphanedResources,omitempty"`
 	OpenIncidents     []string `json:"openIncidents,omitempty"`
+	OverdueIncidents  []string `json:"overdueIncidents,omitempty"`
+	CircuitIncidents  []string `json:"circuitOpenIncidents,omitempty"`
 	ZeroReadyCut      []string `json:"zeroReadyCut,omitempty"`
 	Reasons           []string `json:"reasons,omitempty"`
 }
@@ -125,6 +127,14 @@ func (s *Service) PreWait() (PreWaitAudit, error) {
 		if incident.Status != "resolved" {
 			audit.OpenIncidents = append(audit.OpenIncidents, incidentID)
 		}
+		if incident.Status == "circuit-open" {
+			audit.CircuitIncidents = append(audit.CircuitIncidents, incidentID)
+		}
+		if incident.Status == "open" {
+			if deadline, parseErr := time.Parse(time.RFC3339Nano, incident.Deadline); parseErr == nil && !now.Before(deadline) {
+				audit.OverdueIncidents = append(audit.OverdueIncidents, incidentID)
+			}
+		}
 	}
 	sort.Strings(audit.SubmittedAttempts)
 	sort.Strings(audit.ActiveAttempts)
@@ -135,6 +145,8 @@ func (s *Service) PreWait() (PreWaitAudit, error) {
 	sort.Strings(audit.ActiveResources)
 	sort.Strings(audit.OrphanedResources)
 	sort.Strings(audit.OpenIncidents)
+	sort.Strings(audit.OverdueIncidents)
+	sort.Strings(audit.CircuitIncidents)
 	if len(audit.SubmittedAttempts) > 0 {
 		audit.Reasons = append(audit.Reasons, "submitted attempts require a terminal action")
 	}
@@ -152,6 +164,12 @@ func (s *Service) PreWait() (PreWaitAudit, error) {
 	}
 	if len(audit.OpenIncidents) > 0 {
 		audit.Reasons = append(audit.Reasons, "open incidents require ownership, progress or circuit-breaker action")
+	}
+	if len(audit.OverdueIncidents) > 0 {
+		audit.Reasons = append(audit.Reasons, "incident deadlines have expired")
+	}
+	if len(audit.CircuitIncidents) > 0 {
+		audit.Reasons = append(audit.Reasons, "open circuit breakers require resolve, quarantine or a new graph revision")
 	}
 	frontier := domain.ComputeFrontier(state)
 	if len(frontier.Ready) == 0 && len(frontier.Blocked) > 0 && len(audit.ActiveAttempts) == 0 && len(audit.PendingEffects) == 0 {

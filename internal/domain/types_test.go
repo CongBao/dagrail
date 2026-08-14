@@ -77,12 +77,43 @@ func TestFrontierHonorsResourceCapacity(t *testing.T) {
 	if len(frontier.Ready) != 0 || len(frontier.ResourceBlocked) != 1 || frontier.ResourceBlocked[0] != "B" {
 		t.Fatalf("resource exhaustion did not block B: %#v", frontier)
 	}
+	if len(frontier.Explanations) != 1 || len(frontier.Explanations[0].Reasons) != 1 || frontier.Explanations[0].Reasons[0].Code != "resource_capacity_exhausted" || frontier.Explanations[0].Reasons[0].Available != 0 {
+		t.Fatalf("resource explanation is not closed and actionable: %#v", frontier.Explanations)
+	}
 	lease := state.Resources["lease"]
 	lease.Status = "released"
 	state.Resources["lease"] = lease
 	frontier = ComputeFrontier(state)
 	if len(frontier.Ready) != 1 || frontier.Ready[0] != "B" {
 		t.Fatalf("released capacity did not unblock B: %#v", frontier)
+	}
+}
+
+func TestFrontierExplainsEveryUnsatisfiedIncomingEdge(t *testing.T) {
+	graph := GraphDefinition{APIVersion: GraphAPIVersion, Kind: GraphKind, Metadata: GraphMetadata{Name: "explain"}, Spec: GraphSpec{
+		Nodes: []NodeDefinition{
+			{ID: "A", Kind: "join", Title: "A", Outcomes: []Outcome{{ID: "ok", Class: "success"}, {ID: "bad", Class: "failure"}}},
+			{ID: "B", Kind: "join", Title: "B", Outcomes: []Outcome{{ID: "ok", Class: "success"}}},
+			{ID: "C", Kind: "join", Title: "C", Outcomes: []Outcome{{ID: "done", Class: "success"}}},
+		}, Edges: []EdgeDefinition{
+			{ID: "A-C", From: "A", To: "C", When: Predicate{Outcome: "ok"}},
+			{ID: "B-C", From: "B", To: "C", When: Predicate{Outcome: "ok"}},
+		},
+	}}
+	state := NewState("project")
+	state.Graph = &graph
+	state.Nodes["A"] = NodeRuntime{Status: "terminal", Outcome: "bad", OutcomeClass: "failure"}
+	state.Nodes["B"] = NodeRuntime{Status: "planned"}
+	state.Nodes["C"] = NodeRuntime{Status: "planned"}
+	frontier := ComputeFrontier(state)
+	var explanation ReadinessExplanation
+	for _, candidate := range frontier.Explanations {
+		if candidate.NodeID == "C" {
+			explanation = candidate
+		}
+	}
+	if len(explanation.Reasons) != 2 || explanation.Reasons[0].EdgeID != "A-C" || explanation.Reasons[0].Code != "predicate_unsatisfied" || explanation.Reasons[1].EdgeID != "B-C" || explanation.Reasons[1].Code != "source_not_terminal" {
+		t.Fatalf("unexpected readiness explanation: %#v", explanation)
 	}
 }
 

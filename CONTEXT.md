@@ -35,6 +35,7 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Effect**: an external side effect managed as a saga, never represented as an ACID transaction.
 - **Receipt**: typed observation of transport, session creation, visible delivery, acceptance, and completion. These states are not interchangeable.
 - **Incident**: a durable blocker with owner, deadline, attempt budget, progress metric, classification, and dependency cut.
+- **Circuit breaker**: an Incident state that stops repeated work after its deadline or no-progress budget is exhausted without blocking unrelated lanes.
 - **Resource lease**: ownership of bounded executor, browser, server, port, memory, disk, or another declared capacity.
 - **Dependency cut**: only the transitive graph region frozen by an unsatisfied failure path.
 - **Harness**: an agent host such as Codex, Claude Code, or GitHub Copilot CLI.
@@ -61,6 +62,7 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Effect control**: allowed action, outbox, prepared effect, dispatch, receipt, reconcile.
 - **Harness integration**: capability probe, plugin manifest, hooks, launch/resume envelope.
 - **Read model**: SQLite projection, context envelope, cursor delta, inspect ref, dashboard-ready queries.
+- **Operational surface**: payload-free status/history, verified journal backup, and a local read-only UI derived from authority.
 
 ## Current non-goals
 

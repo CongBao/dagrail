@@ -470,6 +470,15 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 					return domain.State{}, nil, err
 				}
 				state.Incidents[incident.ID] = incident
+			case "incident.updated":
+				var incident domain.Incident
+				if err := json.Unmarshal(event.Payload, &incident); err != nil {
+					return domain.State{}, nil, err
+				}
+				if _, ok := state.Incidents[incident.ID]; !ok {
+					return domain.State{}, nil, fmt.Errorf("update references unknown incident %s", incident.ID)
+				}
+				state.Incidents[incident.ID] = incident
 			case "incident.resolved":
 				var payload struct {
 					IncidentID string `json:"incidentId"`

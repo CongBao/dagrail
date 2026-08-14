@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/CongBao/dagrail/internal/mcpserver"
 	internalproviders "github.com/CongBao/dagrail/internal/providers"
 	"github.com/CongBao/dagrail/internal/service"
+	dagrailui "github.com/CongBao/dagrail/internal/ui"
 	"github.com/CongBao/dagrail/internal/version"
 )
 
@@ -31,6 +33,12 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runGraph(args[1:], stdout, stderr)
 	case "frontier":
 		return runFrontier(args[1:], stdout, stderr)
+	case "status":
+		return runStatus(args[1:], stdout, stderr)
+	case "history":
+		return runHistory(args[1:], stdout, stderr)
+	case "backup":
+		return runBackup(args[1:], stdout, stderr)
 	case "role":
 		return runRole(args[1:], stdout, stderr)
 	case "action":
@@ -45,6 +53,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runReconcile(args[1:], stdout, stderr)
 	case "mcp":
 		return runMCP(args[1:], stderr)
+	case "ui":
+		return runUI(args[1:], stdout, stderr)
 	case "hook":
 		return runHook(args[1:], stdin, stdout, stderr)
 	case "harness":
@@ -57,6 +67,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runJournal(args[1:], stdout, stderr)
 	case "evidence":
 		return runEvidence(args[1:], stdout, stderr)
+	case "incident":
+		return runIncident(args[1:], stdout, stderr)
 	case "projection":
 		return runProjection(args[1:], stdout, stderr)
 	case "doctor":
@@ -66,6 +78,174 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runUI(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ui", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	root := flags.String("root", ".", "project root")
+	listen := flags.String("listen", "127.0.0.1:7474", "loopback listen address")
+	open := flags.Bool("open", true, "open the system browser")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	s, err := service.Open(*root)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+	_ = stdout
+	return dagrailui.Serve(ctx, s, *listen, *open, stderr)
+}
+
+func runStatus(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("status", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	root := flags.String("root", ".", "project root")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	s, err := service.Open(*root)
+	if err != nil {
+		return err
+	}
+	status, err := s.Status()
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, status)
+}
+
+func runHistory(args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("history", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	root := flags.String("root", ".", "project root")
+	after := flags.Uint64("after", 0, "exclusive journal cursor")
+	limit := flags.Int("limit", 25, "entries, 1..100")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	s, err := service.Open(*root)
+	if err != nil {
+		return err
+	}
+	history, err := s.History(*after, *limit)
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, history)
+}
+
+func runBackup(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: dagrail backup <create|verify|restore>")
+	}
+	flags := flag.NewFlagSet("backup "+args[0], flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	root := flags.String("root", ".", "project root")
+	filePath := flags.String("file", "", "backup file")
+	output := flags.String("output", "", "new backup file")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	s, err := service.Open(*root)
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "create":
+		if *output == "" {
+			return fmt.Errorf("--output is required")
+		}
+		data, report, err := s.CreateBackup()
+		if err != nil {
+			return err
+		}
+		file, err := os.OpenFile(*output, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return err
+		}
+		if _, err := file.Write(data); err != nil {
+			_ = file.Close()
+			return err
+		}
+		if err := file.Sync(); err != nil {
+			_ = file.Close()
+			return err
+		}
+		if err := file.Close(); err != nil {
+			return err
+		}
+		return writeJSON(stdout, map[string]any{"created": true, "output": *output, "report": report})
+	case "verify", "restore":
+		if *filePath == "" {
+			return fmt.Errorf("--file is required")
+		}
+		info, err := os.Stat(*filePath)
+		if err != nil {
+			return err
+		}
+		if info.Size() > 256*1024*1024 {
+			return fmt.Errorf("backup exceeds 256 MiB limit")
+		}
+		data, err := os.ReadFile(*filePath)
+		if err != nil {
+			return err
+		}
+		if args[0] == "verify" {
+			report, err := s.VerifyBackup(data)
+			if err != nil {
+				return err
+			}
+			return writeJSON(stdout, report)
+		}
+		report, err := s.RestoreBackup(data)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, map[string]any{"restored": true, "report": report})
+	default:
+		return fmt.Errorf("unknown backup command %q", args[0])
+	}
+}
+
+func runIncident(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: dagrail incident <progress|trip|resolve>")
+	}
+	flags := flag.NewFlagSet("incident "+args[0], flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	root := flags.String("root", ".", "project root")
+	id := flags.String("incident", "", "incident ID")
+	role := flags.String("actor-role", "", "owner role")
+	key := flags.String("idempotency-key", "", "idempotency key")
+	note := flags.String("note", "", "bounded progress note")
+	madeProgress := flags.Bool("made-progress", false, "reset consecutive no-progress attempts")
+	reason := flags.String("reason", "", "circuit-breaker reason")
+	resolution := flags.String("resolution", "", "resolution summary")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	s, err := service.Open(*root)
+	if err != nil {
+		return err
+	}
+	var incident any
+	switch args[0] {
+	case "progress":
+		incident, err = s.ProgressIncident(*id, *role, *note, *madeProgress, *key)
+	case "trip":
+		incident, err = s.TripIncident(*id, *role, *reason, *key)
+	case "resolve":
+		incident, err = s.ResolveIncident(*id, *role, *resolution, *key)
+	default:
+		return fmt.Errorf("unknown incident command %q", args[0])
+	}
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, incident)
 }
 
 func runProvider(args []string, stdout, stderr io.Writer) error {

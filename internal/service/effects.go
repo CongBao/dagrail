@@ -117,6 +117,9 @@ func (s *Service) ReconcileEffect(actionID string, evidence json.RawMessage, ide
 	if effect.Status == "confirmed" {
 		return effect, nil
 	}
+	if incident, exists := state.Incidents["effect:"+actionID]; exists && incident.Status == "circuit-open" {
+		return domain.EffectAction{}, fmt.Errorf("effect incident circuit is open: %s", incident.CircuitReason)
+	}
 	adapter, ok := s.Providers.Effect(effect.AdapterID)
 	if !ok {
 		return domain.EffectAction{}, fmt.Errorf("effect adapter %s is not registered", effect.AdapterID)
@@ -187,9 +190,11 @@ func (s *Service) observeEffect(actionID string, receipt sdk.EffectReceipt, idem
 		incident := domain.Incident{ID: incidentID, SourceType: "effect", SourceID: actionID, NodeID: effectBefore.NodeID, OwnerRole: effectBefore.OwnerRole, Status: "open", Classification: "effect-" + receipt.Status, Deadline: now.Add(time.Hour).Format(time.RFC3339Nano), AttemptBudget: 2, ProgressMetric: "new external receipt or deterministic reconcile result", DependencyCut: domain.DependencyCut(stateBefore, effectBefore.NodeID), OpenedAt: now.Format(time.RFC3339Nano), UpdatedAt: now.Format(time.RFC3339Nano)}
 		if existing, ok := stateBefore.Incidents[incidentID]; ok {
 			incident.OpenedAt, incident.Attempts = existing.OpenedAt, existing.Attempts+1
+			incident.NoProgressAttempts = existing.NoProgressAttempts
+			incident.LastProgress, incident.LastProgressAt = existing.LastProgress, existing.LastProgressAt
 		}
 		if incident.Attempts >= incident.AttemptBudget {
-			incident.Status = "circuit-open"
+			incident.Status, incident.CircuitReason = "circuit-open", "effect_attempt_budget_exhausted"
 		}
 		incidentRaw, _ := json.Marshal(incident)
 		events = append(events, journal.Event{Type: "incident.opened", Payload: incidentRaw})

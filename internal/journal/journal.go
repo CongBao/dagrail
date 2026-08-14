@@ -208,6 +208,93 @@ func (s *Store) ReadAll() ([]Segment, error) {
 	return result, err
 }
 
+// ValidateSegments verifies an in-memory portable journal without writing it.
+func ValidateSegments(projectID string, segments []Segment) error {
+	previous := ""
+	for index, segment := range segments {
+		if segment.Sequence != uint64(index+1) || segment.ProjectID != projectID || segment.PreviousHash != previous {
+			return fmt.Errorf("journal chain mismatch at sequence %d", segment.Sequence)
+		}
+		if err := validateStoredEvents(segment.SchemaVersion, segment.Events); err != nil {
+			return fmt.Errorf("journal compatibility error at sequence %d: %w", segment.Sequence, err)
+		}
+		unsigned := unsignedSegment{SchemaVersion: segment.SchemaVersion, Sequence: segment.Sequence, ProjectID: segment.ProjectID, PreviousHash: segment.PreviousHash, Command: segment.Command, Events: segment.Events, CommittedAt: segment.CommittedAt}
+		hash, err := computeHash(unsigned)
+		if err != nil {
+			return err
+		}
+		if segment.SegmentHash != hash {
+			return fmt.Errorf("journal hash mismatch at sequence %d", segment.Sequence)
+		}
+		previous = hash
+	}
+	return nil
+}
+
+// RestoreSegments resumes an exact-prefix restore. It never overwrites an
+// existing segment and refuses any divergent journal.
+func (s *Store) RestoreSegments(segments []Segment) error {
+	if err := ValidateSegments(s.projectID, segments); err != nil {
+		return err
+	}
+	return s.WithLock(func() error {
+		existing, err := s.readAllUnlocked()
+		if err != nil {
+			return err
+		}
+		if len(existing) > len(segments) {
+			return fmt.Errorf("existing journal is longer than backup")
+		}
+		for index := range existing {
+			if existing[index].SegmentHash != segments[index].SegmentHash {
+				return fmt.Errorf("existing journal diverges at sequence %d", index+1)
+			}
+		}
+		for _, segment := range segments[len(existing):] {
+			data, err := json.Marshal(segment)
+			if err != nil {
+				return err
+			}
+			canonical, err := jcs.Transform(data)
+			if err != nil {
+				return err
+			}
+			name := fmt.Sprintf("%012d-%s.json", segment.Sequence, segment.SegmentHash)
+			tmp, err := os.CreateTemp(s.dir, ".restore-*.tmp")
+			if err != nil {
+				return err
+			}
+			tmpName := tmp.Name()
+			cleanup := func() { _ = tmp.Close(); _ = os.Remove(tmpName) }
+			if err := tmp.Chmod(0o600); err != nil {
+				cleanup()
+				return err
+			}
+			if _, err := tmp.Write(canonical); err != nil {
+				cleanup()
+				return err
+			}
+			if err := tmp.Sync(); err != nil {
+				cleanup()
+				return err
+			}
+			if err := tmp.Close(); err != nil {
+				_ = os.Remove(tmpName)
+				return err
+			}
+			if err := os.Rename(tmpName, filepath.Join(s.dir, name)); err != nil {
+				_ = os.Remove(tmpName)
+				return err
+			}
+			if dir, err := os.Open(s.dir); err == nil {
+				_ = dir.Sync()
+				_ = dir.Close()
+			}
+		}
+		return nil
+	})
+}
+
 func (s *Store) Compatibility() (CompatibilityReport, error) {
 	segments, err := s.ReadAll()
 	if err != nil {

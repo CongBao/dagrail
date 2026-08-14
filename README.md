@@ -12,6 +12,7 @@
 
 [![CI](https://github.com/CongBao/dagrail/actions/workflows/ci.yml/badge.svg)](https://github.com/CongBao/dagrail/actions/workflows/ci.yml)
 [![Apache-2.0 License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)](go.mod)
 
 DAGrail is a lightweight control plane for long-running development DAGs. The LLM or
 human chooses what to do; DAGrail keeps graph revisions, role leases, checkpoints,
@@ -20,6 +21,11 @@ allowed actions, effects, and recovery state outside chat.
 It is not a workflow executor, requirement manager, container scheduler, or autonomous
 agent scheduler. Codex, Claude Code, GitHub Copilot CLI, humans, and future harness
 adapters remain the executors.
+
+DAGrail is designed for agentic software-development workflows that outlive one LLM
+session. It complements execution frameworks by owning the small but failure-prone
+control-plane layer: who holds a Role, which Node is actually ready, what was committed,
+and whether an ambiguous Git or harness effect is safe to reconcile.
 
 ## What it provides
 
@@ -30,14 +36,18 @@ adapters remain the executors.
 - immutable execution packages and deterministic evidence-reuse decisions;
 - bounded compile-in providers with schema and stability contracts;
 - recoverable external effects with explicit `unknown` and `reconcile` states;
-- an immutable RFC 8785 journal with disposable SQLite projections.
+- an immutable RFC 8785 journal with disposable SQLite projections;
+- explainable readiness, owned incidents, bounded history, verified backups, and a
+  browser-opened read-only DAG UI.
 
 ## Status
 
-`v0.4.0` is a technical alpha: local-first and single-user, with one native Go
+`v0.5.0` is a technical alpha: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
-stdio MCP. Its Provider Runtime executes schema-bound policy, predicate, importer, and
-projection extensions without giving them controller storage handles.
+stdio MCP. Its operational surface adds explainable dependency blockers, incident
+circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
+read-only UI. The Provider Runtime executes schema-bound extensions without giving them
+controller storage handles.
 
 ## Build
 
@@ -59,6 +69,7 @@ dagrail frontier --root . --format json
 dagrail role bind --root . --role developer --harness codex \
   --session SESSION_ID --idempotency-key bind-SESSION_ID
 dagrail context --root . --view worker --role developer --node implement
+dagrail ui --root .
 ```
 
 Use `dagrail action list` to obtain a signed, revision-bound action ref. Apply only that ref with a stable idempotency key. Run `dagrail pre-wait` before yielding or claiming the graph is idle.
@@ -118,6 +129,11 @@ dagrail projection rebuild
 dagrail doctor
 ```
 
+Create and verify a portable journal backup with `dagrail backup create` and
+`dagrail backup verify`. Restore is exact-prefix-only and rebuilds SQLite automatically.
+See [`docs/operations.md`](docs/operations.md) for status, history, incident, backup, and
+read-only UI workflows.
+
 ## Extensions and security boundary
 
 The public `sdk` package defines compile-in providers. Providers return decisions,
@@ -133,8 +149,7 @@ DAGrail separates cooperative roles but does not claim malicious-user isolation.
 
 See `CONTEXT.md` for the domain vocabulary, `docs/adr/` for architectural decisions,
 [`docs/roadmap.md`](docs/roadmap.md) for planned milestones, and
-[`CHANGELOG.md`](CHANGELOG.md) for released changes. A local, browser-opened,
-strictly read-only DAG UI is planned for the operational-control milestone.
+[`CHANGELOG.md`](CHANGELOG.md) for released changes.
 
 ## License
 

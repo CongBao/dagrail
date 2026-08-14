@@ -495,20 +495,25 @@ type ResourceLease struct {
 }
 
 type Incident struct {
-	ID             string   `json:"id"`
-	SourceType     string   `json:"sourceType"`
-	SourceID       string   `json:"sourceId"`
-	NodeID         string   `json:"nodeId,omitempty"`
-	OwnerRole      string   `json:"ownerRole,omitempty"`
-	Status         string   `json:"status"`
-	Classification string   `json:"classification"`
-	Deadline       string   `json:"deadline,omitempty"`
-	AttemptBudget  int      `json:"attemptBudget"`
-	Attempts       int      `json:"attempts"`
-	ProgressMetric string   `json:"progressMetric,omitempty"`
-	DependencyCut  []string `json:"dependencyCut,omitempty"`
-	OpenedAt       string   `json:"openedAt"`
-	UpdatedAt      string   `json:"updatedAt"`
+	ID                 string   `json:"id"`
+	SourceType         string   `json:"sourceType"`
+	SourceID           string   `json:"sourceId"`
+	NodeID             string   `json:"nodeId,omitempty"`
+	OwnerRole          string   `json:"ownerRole,omitempty"`
+	Status             string   `json:"status"`
+	Classification     string   `json:"classification"`
+	Deadline           string   `json:"deadline,omitempty"`
+	AttemptBudget      int      `json:"attemptBudget"`
+	Attempts           int      `json:"attempts"`
+	NoProgressAttempts int      `json:"noProgressAttempts,omitempty"`
+	ProgressMetric     string   `json:"progressMetric,omitempty"`
+	LastProgress       string   `json:"lastProgress,omitempty"`
+	LastProgressAt     string   `json:"lastProgressAt,omitempty"`
+	CircuitReason      string   `json:"circuitReason,omitempty"`
+	Resolution         string   `json:"resolution,omitempty"`
+	DependencyCut      []string `json:"dependencyCut,omitempty"`
+	OpenedAt           string   `json:"openedAt"`
+	UpdatedAt          string   `json:"updatedAt"`
 }
 
 type State struct {
@@ -588,15 +593,34 @@ func (s State) NodeDefinition(nodeID string) (NodeDefinition, bool) {
 }
 
 type Frontier struct {
-	GraphRevision   string              `json:"graphRevision"`
-	Ready           []string            `json:"ready"`
-	Blocked         []string            `json:"blocked,omitempty"`
-	ResourceBlocked []string            `json:"resourceBlocked,omitempty"`
-	DependencyCuts  map[string][]string `json:"dependencyCuts,omitempty"`
+	GraphRevision   string                 `json:"graphRevision"`
+	Ready           []string               `json:"ready"`
+	Blocked         []string               `json:"blocked,omitempty"`
+	ResourceBlocked []string               `json:"resourceBlocked,omitempty"`
+	DependencyCuts  map[string][]string    `json:"dependencyCuts,omitempty"`
+	Explanations    []ReadinessExplanation `json:"explanations,omitempty"`
+}
+
+type ReadinessExplanation struct {
+	NodeID  string            `json:"nodeId"`
+	State   string            `json:"state"`
+	Reasons []ReadinessReason `json:"reasons,omitempty"`
+}
+
+type ReadinessReason struct {
+	Code          string `json:"code"`
+	EdgeID        string `json:"edgeId,omitempty"`
+	SourceNodeID  string `json:"sourceNodeId,omitempty"`
+	PredicatePath string `json:"predicatePath,omitempty"`
+	Expected      string `json:"expected,omitempty"`
+	Actual        string `json:"actual,omitempty"`
+	ResourceKind  string `json:"resourceKind,omitempty"`
+	Required      int    `json:"required,omitempty"`
+	Available     int    `json:"available,omitempty"`
 }
 
 func ComputeFrontier(state State) Frontier {
-	result := Frontier{GraphRevision: state.GraphRevision}
+	result := Frontier{GraphRevision: state.GraphRevision, Ready: []string{}}
 	if state.Graph == nil {
 		return result
 	}
@@ -609,28 +633,37 @@ func ComputeFrontier(state State) Frontier {
 		if runtime.Status != "planned" {
 			continue
 		}
-		ready := true
+		reasons := []ReadinessReason{}
 		for _, edge := range incoming[node.ID] {
 			source := state.Nodes[edge.From]
-			if source.Status != "terminal" || !predicateSatisfied(edge.When, source) {
-				ready = false
-				break
+			if source.Status != "terminal" {
+				reasons = append(reasons, ReadinessReason{Code: "source_not_terminal", EdgeID: edge.ID, SourceNodeID: edge.From, Expected: "terminal", Actual: source.Status})
+				continue
+			}
+			if ok, detail := explainPredicate(edge.When, source, "$"); !ok {
+				detail.EdgeID, detail.SourceNodeID = edge.ID, edge.From
+				reasons = append(reasons, detail)
 			}
 		}
-		if ready {
-			if resourcesAvailable(state, node) {
+		if len(reasons) == 0 {
+			resourceReasons := resourceReadinessReasons(state, node)
+			if len(resourceReasons) == 0 {
 				result.Ready = append(result.Ready, node.ID)
+				result.Explanations = append(result.Explanations, ReadinessExplanation{NodeID: node.ID, State: "ready"})
 			} else {
 				result.Blocked = append(result.Blocked, node.ID)
 				result.ResourceBlocked = append(result.ResourceBlocked, node.ID)
+				result.Explanations = append(result.Explanations, ReadinessExplanation{NodeID: node.ID, State: "blocked", Reasons: resourceReasons})
 			}
 		} else {
 			result.Blocked = append(result.Blocked, node.ID)
+			result.Explanations = append(result.Explanations, ReadinessExplanation{NodeID: node.ID, State: "blocked", Reasons: reasons})
 		}
 	}
 	sort.Strings(result.Ready)
 	sort.Strings(result.Blocked)
 	sort.Strings(result.ResourceBlocked)
+	sort.Slice(result.Explanations, func(i, j int) bool { return result.Explanations[i].NodeID < result.Explanations[j].NodeID })
 	for nodeID, runtime := range state.Nodes {
 		if runtime.Status != "terminal" || (runtime.OutcomeClass != "failure" && runtime.OutcomeClass != "cancelled") {
 			continue
@@ -679,9 +712,9 @@ func DependencyCut(state State, rootNodeID string) []string {
 	return result
 }
 
-func resourcesAvailable(state State, node NodeDefinition) bool {
+func resourceReadinessReasons(state State, node NodeDefinition) []ReadinessReason {
 	if len(node.Resources) == 0 {
-		return true
+		return nil
 	}
 	capacity := map[string]int{}
 	for _, declaration := range state.Graph.Spec.ResourceCapacities {
@@ -692,42 +725,52 @@ func resourcesAvailable(state State, node NodeDefinition) bool {
 			capacity[lease.Kind] -= lease.Quantity
 		}
 	}
+	reasons := []ReadinessReason{}
 	for _, request := range node.Resources {
 		if capacity[request.Kind] < request.Quantity {
-			return false
+			reasons = append(reasons, ReadinessReason{Code: "resource_capacity_exhausted", ResourceKind: request.Kind, Required: request.Quantity, Available: capacity[request.Kind]})
 		}
 	}
-	return true
+	return reasons
 }
 
 func predicateSatisfied(p Predicate, source NodeRuntime) bool {
+	ok, _ := explainPredicate(p, source, "$")
+	return ok
+}
+
+func explainPredicate(p Predicate, source NodeRuntime, path string) (bool, ReadinessReason) {
 	if p.Outcome != "" {
-		return source.Outcome == p.Outcome
+		ok := source.Outcome == p.Outcome
+		return ok, ReadinessReason{Code: "predicate_unsatisfied", PredicatePath: path + ".outcome", Expected: p.Outcome, Actual: source.Outcome}
 	}
 	if p.Decision != nil {
-		return source.Facts.Decision[p.Decision.Key] == p.Decision.Value
+		actual := source.Facts.Decision[p.Decision.Key]
+		return actual == p.Decision.Value, ReadinessReason{Code: "predicate_unsatisfied", PredicatePath: path + ".decision." + p.Decision.Key, Expected: p.Decision.Value, Actual: actual}
 	}
 	if p.Evidence != nil {
-		return source.Facts.Evidence[p.Evidence.Key] == p.Evidence.Value
+		actual := source.Facts.Evidence[p.Evidence.Key]
+		return actual == p.Evidence.Value, ReadinessReason{Code: "predicate_unsatisfied", PredicatePath: path + ".evidence." + p.Evidence.Key, Expected: p.Evidence.Value, Actual: actual}
 	}
 	if p.Policy != nil {
-		return source.Facts.Policy[p.Policy.Key] == p.Policy.Value
+		actual := source.Facts.Policy[p.Policy.Key]
+		return actual == p.Policy.Value, ReadinessReason{Code: "predicate_unsatisfied", PredicatePath: path + ".policy." + p.Policy.Key, Expected: p.Policy.Value, Actual: actual}
 	}
 	if len(p.All) > 0 {
-		for _, child := range p.All {
-			if !predicateSatisfied(child, source) {
-				return false
+		for index, child := range p.All {
+			if ok, detail := explainPredicate(child, source, fmt.Sprintf("%s.all[%d]", path, index)); !ok {
+				return false, detail
 			}
 		}
-		return true
+		return true, ReadinessReason{}
 	}
 	if len(p.Any) > 0 {
-		for _, child := range p.Any {
-			if predicateSatisfied(child, source) {
-				return true
+		for index, child := range p.Any {
+			if ok, _ := explainPredicate(child, source, fmt.Sprintf("%s.any[%d]", path, index)); ok {
+				return true, ReadinessReason{}
 			}
 		}
-		return false
+		return false, ReadinessReason{Code: "predicate_any_unsatisfied", PredicatePath: path + ".any", Expected: "at least one branch true", Actual: "all branches false"}
 	}
-	return false
+	return false, ReadinessReason{Code: "predicate_invalid", PredicatePath: path}
 }

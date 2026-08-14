@@ -27,3 +27,8 @@ Use `sdk.InputSchemaHash` for stable metadata and run `dagrail provider check` i
 custom distribution. Provider code never receives a storage or controller handle.
 
 Keep control-plane transactions short. Add focused tests first, converge locally, then run the full race and cross-build gates once.
+
+The local UI is a read model, not a control surface. New UI endpoints must remain
+`GET`/`HEAD` only, loopback-bound, bounded, free of action references and event payloads,
+and usable without a CDN or network-loaded asset. Lifecycle changes belong in the
+application service and must never be inferred from browser activity.

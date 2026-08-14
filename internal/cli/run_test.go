@@ -60,6 +60,23 @@ func TestUserCanInitializeImportGraphAndReadFrontier(t *testing.T) {
 	if !strings.Contains(out, `"ready":["A"]`) {
 		t.Fatalf("expected only A ready, got %s", out)
 	}
+	status, err := run("status", "--root", root)
+	if err != nil || !strings.Contains(status, `"headSequence":1`) || !strings.Contains(status, `"blocked":["B"]`) {
+		t.Fatalf("operational status unavailable: %v %s", err, status)
+	}
+	history, err := run("history", "--root", root, "--after", "0", "--limit", "1")
+	if err != nil || !strings.Contains(history, `"commandKind":"graph.import"`) || strings.Contains(history, `"payload"`) {
+		t.Fatalf("bounded history contract failed: %v %s", err, history)
+	}
+	backupPath := filepath.Join(root, "journal-backup.json")
+	created, err := run("backup", "create", "--root", root, "--output", backupPath)
+	if err != nil || !strings.Contains(created, `"valid":true`) {
+		t.Fatalf("backup create failed: %v %s", err, created)
+	}
+	verified, err := run("backup", "verify", "--root", root, "--file", backupPath)
+	if err != nil || !strings.Contains(verified, `"segments":1`) {
+		t.Fatalf("backup verify failed: %v %s", err, verified)
+	}
 	compatibility, err := run("journal", "compatibility", "--root", root)
 	if err != nil {
 		t.Fatalf("journal compatibility: %v", err)

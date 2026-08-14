@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Read-only local DAGrail governance dashboard">
+  <title>DAGrail · Read-only DAG</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <header>
+    <div><span class="eyebrow">DAGRAIL</span><h1 id="project-name">DAG overview</h1></div>
+    <div class="header-actions"><span class="readonly">Read only</span><button id="refresh" type="button">Refresh</button></div>
+  </header>
+  <main>
+    <section id="summary" class="summary" aria-label="Project status"></section>
+    <section class="panel graph-panel">
+      <div class="panel-heading"><div><span class="eyebrow">TOPOLOGY</span><h2>Execution graph</h2></div><span id="updated" class="muted"></span></div>
+      <div id="legend" class="legend"></div>
+      <div class="graph-scroll"><svg id="graph" role="img" aria-label="DAG topology"></svg></div>
+    </section>
+    <div class="columns">
+      <section class="panel"><div class="panel-heading"><h2>Readiness</h2></div><div id="readiness"></div></section>
+      <section class="panel"><div class="panel-heading"><h2>Incidents</h2></div><div id="incidents"></div></section>
+    </div>
+    <div class="columns">
+      <section class="panel"><div class="panel-heading"><h2>Attempts & leases</h2></div><div id="runtime"></div></section>
+      <section class="panel"><div class="panel-heading"><h2>Recent history</h2></div><div id="history"></div></section>
+    </div>
+  </main>
+  <div id="error" role="alert" hidden></div>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

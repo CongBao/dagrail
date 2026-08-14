@@ -2,6 +2,23 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.5.0 — 2026-08-14
+
+### Added
+
+- reason-coded readiness explanations, resource shortfalls, and visible dependency cuts;
+- incident progress, deadline, attempt-budget, circuit-breaker, and resolution controls;
+- payload-free bounded history, operational status, and digest-bound journal
+  backup/verify/restore commands;
+- a loopback-only, browser-opened, strictly read-only DAG UI with topology, frontier,
+  incidents, attempts, leases, and recent history;
+- overdue and circuit-open incident checks in the pre-wait liveness audit.
+
+### Security
+
+- the UI accepts only `GET` and `HEAD`, exposes no action references or event payloads,
+  uses no remote assets, and refuses non-loopback binds.
+
 ## 0.4.0 — 2026-08-14
 
 ### Added
