@@ -1,0 +1,7 @@
+{
+  "description": "Bounded DAGrail project guidance; never stores or echoes prompts.",
+  "hooks": {
+    "SessionStart": [{"matcher": "startup|resume|clear|compact", "hooks": [{"type": "command", "command": "dagrail hook --harness codex --event session-start", "timeout": 2, "additionalContextLimit": 2000}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "dagrail hook --harness codex --event user-prompt-submit", "timeout": 2, "additionalContextLimit": 500}]}]
+  }
+}

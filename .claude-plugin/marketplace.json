@@ -1,0 +1,17 @@
+{
+  "name": "dagrail",
+  "owner": {"name": "CongBao"},
+  "description": "LLM-led local DAG governance with durable machine state.",
+  "plugins": [{
+    "name": "dagrail",
+    "displayName": "DAGrail",
+    "description": "Advance recoverable agent DAGs through typed, auditable actions.",
+    "source": {"source": "github", "repo": "CongBao/dagrail", "ref": "main"},
+    "author": {"name": "CongBao", "url": "https://github.com/CongBao"},
+    "homepage": "https://github.com/CongBao/dagrail#readme",
+    "repository": "https://github.com/CongBao/dagrail",
+    "license": "Apache-2.0",
+    "keywords": ["dag", "agent-governance", "mcp"],
+    "category": "Productivity"
+  }]
+}

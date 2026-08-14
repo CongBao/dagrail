@@ -1,0 +1,10 @@
+{
+  "name": "dagrail",
+  "interface": {"displayName": "DAGrail"},
+  "plugins": [{
+    "name": "dagrail",
+    "source": {"source": "url", "url": "https://github.com/CongBao/dagrail.git", "ref": "main"},
+    "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+    "category": "Productivity"
+  }]
+}

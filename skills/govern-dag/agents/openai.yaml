@@ -1,0 +1,4 @@
+interface:
+  display_name: "DAGrail Orchestrator"
+  short_description: "Drive a governed DAG with compact, safe actions"
+  default_prompt: "Use $govern-dag to inspect the frontier and advance this project safely."

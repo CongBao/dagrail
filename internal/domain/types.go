@@ -1,0 +1,719 @@
+package domain
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"math/big"
+	"sort"
+	"strings"
+)
+
+const (
+	GraphAPIVersion = "dagrail.io/v1alpha1"
+	GraphKind       = "Graph"
+)
+
+type GraphDefinition struct {
+	APIVersion string        `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string        `json:"kind" yaml:"kind"`
+	Metadata   GraphMetadata `json:"metadata" yaml:"metadata"`
+	Spec       GraphSpec     `json:"spec" yaml:"spec"`
+}
+
+type GraphMetadata struct {
+	Name         string            `json:"name" yaml:"name"`
+	ExternalRefs []ExternalRef     `json:"externalRefs,omitempty" yaml:"externalRefs,omitempty"`
+	Labels       map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
+}
+
+type GraphSpec struct {
+	Roles              []RoleDefinition   `json:"roles" yaml:"roles"`
+	Nodes              []NodeDefinition   `json:"nodes" yaml:"nodes"`
+	Edges              []EdgeDefinition   `json:"edges,omitempty" yaml:"edges,omitempty"`
+	ResourceCapacities []ResourceCapacity `json:"resourceCapacities,omitempty" yaml:"resourceCapacities,omitempty"`
+	Providers          []ProviderRef      `json:"providers,omitempty" yaml:"providers,omitempty"`
+}
+
+type ResourceCapacity struct {
+	Kind     string `json:"kind" yaml:"kind"`
+	Capacity int    `json:"capacity" yaml:"capacity"`
+}
+
+type ProviderRef struct {
+	ID         string `json:"id" yaml:"id"`
+	Version    string `json:"version" yaml:"version"`
+	SchemaHash string `json:"schemaHash,omitempty" yaml:"schemaHash,omitempty"`
+}
+
+type ExternalRef struct {
+	System        string `json:"system" yaml:"system"`
+	Type          string `json:"type" yaml:"type"`
+	ID            string `json:"id" yaml:"id"`
+	URL           string `json:"url,omitempty" yaml:"url,omitempty"`
+	Revision      string `json:"revision,omitempty" yaml:"revision,omitempty"`
+	ContentDigest string `json:"contentDigest,omitempty" yaml:"contentDigest,omitempty"`
+}
+
+type RoleDefinition struct {
+	ID           string   `json:"id" yaml:"id"`
+	Capabilities []string `json:"capabilities" yaml:"capabilities"`
+}
+
+type NodeDefinition struct {
+	ID           string            `json:"id" yaml:"id"`
+	Kind         string            `json:"kind" yaml:"kind"`
+	Role         string            `json:"role,omitempty" yaml:"role,omitempty"`
+	Title        string            `json:"title" yaml:"title"`
+	Objective    string            `json:"objective,omitempty" yaml:"objective,omitempty"`
+	Parent       string            `json:"parent,omitempty" yaml:"parent,omitempty"`
+	Supersedes   string            `json:"supersedes,omitempty" yaml:"supersedes,omitempty"`
+	Inputs       json.RawMessage   `json:"inputs,omitempty" yaml:"-"`
+	Outcomes     []Outcome         `json:"outcomes" yaml:"outcomes"`
+	RetryBudget  int               `json:"retryBudget,omitempty" yaml:"retryBudget,omitempty"`
+	Resources    []ResourceRequest `json:"resources,omitempty" yaml:"resources,omitempty"`
+	ExternalRefs []ExternalRef     `json:"externalRefs,omitempty" yaml:"externalRefs,omitempty"`
+	Metadata     map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty"`
+}
+
+type Outcome struct {
+	ID    string `json:"id" yaml:"id"`
+	Class string `json:"class" yaml:"class"`
+}
+
+type ResourceRequest struct {
+	Kind     string `json:"kind" yaml:"kind"`
+	Quantity int    `json:"quantity" yaml:"quantity"`
+}
+
+type EdgeDefinition struct {
+	ID   string    `json:"id" yaml:"id"`
+	From string    `json:"from" yaml:"from"`
+	To   string    `json:"to" yaml:"to"`
+	When Predicate `json:"when" yaml:"when"`
+}
+
+type Predicate struct {
+	Outcome  string      `json:"outcome,omitempty" yaml:"outcome,omitempty"`
+	Decision *ValueMatch `json:"decision,omitempty" yaml:"decision,omitempty"`
+	Evidence *ValueMatch `json:"evidence,omitempty" yaml:"evidence,omitempty"`
+	Policy   *ValueMatch `json:"policy,omitempty" yaml:"policy,omitempty"`
+	All      []Predicate `json:"all,omitempty" yaml:"all,omitempty"`
+	Any      []Predicate `json:"any,omitempty" yaml:"any,omitempty"`
+}
+
+type ValueMatch struct {
+	Key   string `json:"key" yaml:"key"`
+	Value string `json:"value" yaml:"value"`
+}
+
+var builtinKinds = map[string]bool{
+	"task": true, "review": true, "decision": true, "gate": true,
+	"effect": true, "join": true, "milestone": true,
+}
+
+func IsBuiltinNodeKind(kind string) bool { return builtinKinds[kind] }
+
+func ValidateGraph(g GraphDefinition) error {
+	if g.APIVersion != GraphAPIVersion || g.Kind != GraphKind {
+		return fmt.Errorf("graph must be %s %s", GraphAPIVersion, GraphKind)
+	}
+	if strings.TrimSpace(g.Metadata.Name) == "" {
+		return fmt.Errorf("graph metadata.name is required")
+	}
+	roles := map[string]bool{}
+	for _, role := range g.Spec.Roles {
+		if role.ID == "" || roles[role.ID] {
+			return fmt.Errorf("role IDs must be non-empty and unique: %q", role.ID)
+		}
+		roles[role.ID] = true
+	}
+	capacities := map[string]int{}
+	for _, resource := range g.Spec.ResourceCapacities {
+		if resource.Kind == "" || resource.Capacity <= 0 || capacities[resource.Kind] != 0 {
+			return fmt.Errorf("resource capacities require a unique kind and positive capacity")
+		}
+		capacities[resource.Kind] = resource.Capacity
+	}
+	providerIDs := map[string]bool{}
+	for _, provider := range g.Spec.Providers {
+		if provider.ID == "" || provider.Version == "" || provider.SchemaHash == "" || providerIDs[provider.ID] {
+			return fmt.Errorf("providers require a unique ID, version and schema hash")
+		}
+		providerIDs[provider.ID] = true
+	}
+	nodes := map[string]NodeDefinition{}
+	for _, node := range g.Spec.Nodes {
+		if node.ID == "" || nodes[node.ID].ID != "" {
+			return fmt.Errorf("node IDs must be non-empty and unique: %q", node.ID)
+		}
+		if !builtinKinds[node.Kind] && !strings.Contains(node.Kind, ".") {
+			return fmt.Errorf("node %s has unknown kind %q", node.ID, node.Kind)
+		}
+		if node.Role != "" && !roles[node.Role] {
+			return fmt.Errorf("node %s references unknown role %s", node.ID, node.Role)
+		}
+		if (node.Kind == "task" || node.Kind == "review" || node.Kind == "decision" || node.Kind == "gate" || node.Kind == "effect") && node.Role == "" {
+			return fmt.Errorf("node %s kind %s requires a role", node.ID, node.Kind)
+		}
+		if len(node.Outcomes) == 0 {
+			return fmt.Errorf("node %s must declare outcomes", node.ID)
+		}
+		if node.RetryBudget < 0 {
+			return fmt.Errorf("node %s retry budget cannot be negative", node.ID)
+		}
+		if len(node.Inputs) > 0 {
+			if err := ValidateAuthorityJSON(node.Inputs); err != nil {
+				return fmt.Errorf("node %s inputs: %w", node.ID, err)
+			}
+			if err := RejectSensitiveFields(node.Inputs); err != nil {
+				return fmt.Errorf("node %s inputs: %w", node.ID, err)
+			}
+		}
+		if node.Kind == "join" || node.Kind == "milestone" {
+			if len(node.Resources) > 0 {
+				return fmt.Errorf("deterministic node %s cannot request executor resources", node.ID)
+			}
+			successes := 0
+			for _, outcome := range node.Outcomes {
+				if outcome.Class == "success" {
+					successes++
+				}
+			}
+			if successes != 1 {
+				return fmt.Errorf("deterministic node %s must declare exactly one success outcome", node.ID)
+			}
+		}
+		seenOutcomes := map[string]bool{}
+		for _, outcome := range node.Outcomes {
+			if outcome.ID == "" || seenOutcomes[outcome.ID] {
+				return fmt.Errorf("node %s outcomes must have unique IDs", node.ID)
+			}
+			switch outcome.Class {
+			case "success", "retryable", "failure", "cancelled":
+			default:
+				return fmt.Errorf("node %s outcome %s has invalid class %s", node.ID, outcome.ID, outcome.Class)
+			}
+			seenOutcomes[outcome.ID] = true
+		}
+		seenResources := map[string]bool{}
+		for _, resource := range node.Resources {
+			if resource.Kind == "" || resource.Quantity <= 0 || seenResources[resource.Kind] {
+				return fmt.Errorf("node %s resource requests require a unique kind and positive quantity", node.ID)
+			}
+			if capacity := capacities[resource.Kind]; capacity == 0 {
+				return fmt.Errorf("node %s requests undeclared resource %s", node.ID, resource.Kind)
+			} else if resource.Quantity > capacity {
+				return fmt.Errorf("node %s requests %d %s but capacity is %d", node.ID, resource.Quantity, resource.Kind, capacity)
+			}
+			seenResources[resource.Kind] = true
+		}
+		nodes[node.ID] = node
+	}
+	parents := map[string]string{}
+	superseded := map[string]string{}
+	for _, node := range g.Spec.Nodes {
+		if node.Parent != "" {
+			if nodes[node.Parent].ID == "" || node.Parent == node.ID {
+				return fmt.Errorf("node %s has invalid hierarchy parent %s", node.ID, node.Parent)
+			}
+			parents[node.ID] = node.Parent
+		}
+		if node.Supersedes != "" {
+			if nodes[node.Supersedes].ID == "" || node.Supersedes == node.ID {
+				return fmt.Errorf("node %s has invalid supersedes reference %s", node.ID, node.Supersedes)
+			}
+			if replacement := superseded[node.Supersedes]; replacement != "" {
+				return fmt.Errorf("node %s is superseded by both %s and %s", node.Supersedes, replacement, node.ID)
+			}
+			superseded[node.Supersedes] = node.ID
+		}
+	}
+	for nodeID := range parents {
+		seen := map[string]bool{}
+		for current := nodeID; current != ""; current = parents[current] {
+			if seen[current] {
+				return fmt.Errorf("node hierarchy contains a cycle at %s", current)
+			}
+			seen[current] = true
+		}
+	}
+	seenEdges := map[string]bool{}
+	adj := map[string][]string{}
+	indegree := map[string]int{}
+	for id := range nodes {
+		indegree[id] = 0
+	}
+	for _, edge := range g.Spec.Edges {
+		if edge.ID == "" || seenEdges[edge.ID] {
+			return fmt.Errorf("edge IDs must be non-empty and unique: %q", edge.ID)
+		}
+		seenEdges[edge.ID] = true
+		if nodes[edge.From].ID == "" || nodes[edge.To].ID == "" {
+			return fmt.Errorf("edge %s references an unknown node", edge.ID)
+		}
+		if edge.From == edge.To {
+			return fmt.Errorf("edge %s is a self-cycle", edge.ID)
+		}
+		if err := validatePredicate(edge.When, nodes[edge.From]); err != nil {
+			return fmt.Errorf("edge %s: %w", edge.ID, err)
+		}
+		adj[edge.From] = append(adj[edge.From], edge.To)
+		indegree[edge.To]++
+	}
+	queue := make([]string, 0)
+	for id, degree := range indegree {
+		if degree == 0 {
+			queue = append(queue, id)
+		}
+	}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		for _, child := range adj[id] {
+			indegree[child]--
+			if indegree[child] == 0 {
+				queue = append(queue, child)
+			}
+		}
+	}
+	for _, degree := range indegree {
+		if degree != 0 {
+			return fmt.Errorf("graph contains a cycle")
+		}
+	}
+	return nil
+}
+
+func ValidateAuthorityJSON(raw json.RawMessage) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return fmt.Errorf("invalid JSON: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return fmt.Errorf("invalid trailing JSON content")
+	}
+	limit := new(big.Int).SetInt64(9_007_199_254_740_991)
+	var walk func(any) error
+	walk = func(current any) error {
+		switch typed := current.(type) {
+		case json.Number:
+			text := typed.String()
+			if strings.ContainsAny(text, ".eE") {
+				return fmt.Errorf("floating authority number %s must be an integer or string", text)
+			}
+			integer, ok := new(big.Int).SetString(text, 10)
+			if !ok || new(big.Int).Abs(integer).Cmp(limit) > 0 {
+				return fmt.Errorf("authority integer %s exceeds the RFC 8785 safe range; encode it as a string", text)
+			}
+		case map[string]any:
+			for _, child := range typed {
+				if err := walk(child); err != nil {
+					return err
+				}
+			}
+		case []any:
+			for _, child := range typed {
+				if err := walk(child); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return walk(value)
+}
+
+func RejectSensitiveFields(raw json.RawMessage) error {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return fmt.Errorf("invalid JSON: %w", err)
+	}
+	var walk func(any) error
+	walk = func(current any) error {
+		switch typed := current.(type) {
+		case map[string]any:
+			for key, child := range typed {
+				normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(key, "_", ""), "-", ""))
+				for _, forbidden := range []string{"password", "secret", "token", "apikey", "authorization", "privatekey"} {
+					if strings.Contains(normalized, forbidden) {
+						return fmt.Errorf("field %s may contain a secret; store an external reference instead", key)
+					}
+				}
+				if err := walk(child); err != nil {
+					return err
+				}
+			}
+		case []any:
+			for _, child := range typed {
+				if err := walk(child); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return walk(value)
+}
+
+func validatePredicate(p Predicate, source NodeDefinition) error {
+	branches := 0
+	if p.Outcome != "" {
+		branches++
+		found := false
+		for _, outcome := range source.Outcomes {
+			found = found || outcome.ID == p.Outcome
+		}
+		if !found {
+			return fmt.Errorf("outcome %s is not declared by source %s", p.Outcome, source.ID)
+		}
+	}
+	if p.Decision != nil {
+		branches++
+		if p.Decision.Key == "" || p.Decision.Value == "" {
+			return fmt.Errorf("decision predicate requires non-empty key and value")
+		}
+	}
+	if p.Evidence != nil {
+		branches++
+		if p.Evidence.Key == "" || p.Evidence.Value == "" {
+			return fmt.Errorf("evidence predicate requires non-empty key and value")
+		}
+	}
+	if p.Policy != nil {
+		branches++
+		if p.Policy.Key == "" || p.Policy.Value == "" {
+			return fmt.Errorf("policy predicate requires non-empty key and value")
+		}
+	}
+	if len(p.All) > 0 {
+		branches++
+	}
+	if len(p.Any) > 0 {
+		branches++
+	}
+	if branches != 1 {
+		return fmt.Errorf("predicate must contain exactly one closed operator")
+	}
+	for _, child := range append(append([]Predicate{}, p.All...), p.Any...) {
+		if err := validatePredicate(child, source); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type NodeRuntime struct {
+	Status       string         `json:"status"`
+	Outcome      string         `json:"outcome,omitempty"`
+	OutcomeClass string         `json:"outcomeClass,omitempty"`
+	Facts        PredicateFacts `json:"facts,omitempty"`
+}
+
+type PredicateFacts struct {
+	Decision map[string]string `json:"decision,omitempty"`
+	Evidence map[string]string `json:"evidence,omitempty"`
+	Policy   map[string]string `json:"policy,omitempty"`
+}
+
+type Attempt struct {
+	ID           string `json:"id"`
+	NodeID       string `json:"nodeId"`
+	RoleID       string `json:"roleId"`
+	Number       int    `json:"number"`
+	Status       string `json:"status"`
+	Outcome      string `json:"outcome,omitempty"`
+	CheckpointID string `json:"checkpointId,omitempty"`
+	StartedAt    string `json:"startedAt"`
+	UpdatedAt    string `json:"updatedAt"`
+}
+
+type RoleLease struct {
+	RoleID    string `json:"roleId"`
+	Harness   string `json:"harness"`
+	SessionID string `json:"sessionId"`
+	BoundAt   string `json:"boundAt"`
+	ExpiresAt string `json:"expiresAt"`
+	Active    bool   `json:"active"`
+}
+
+type EvidenceRef struct {
+	Digest string `json:"digest"`
+	Type   string `json:"type"`
+	Size   int64  `json:"size"`
+	URI    string `json:"uri,omitempty"`
+}
+
+type Checkpoint struct {
+	ID           string        `json:"id"`
+	AttemptID    string        `json:"attemptId"`
+	Summary      string        `json:"summary"`
+	EvidenceRefs []EvidenceRef `json:"evidenceRefs,omitempty"`
+	CreatedAt    string        `json:"createdAt"`
+}
+
+type ActionRecord struct {
+	ID        string          `json:"id"`
+	Kind      string          `json:"kind"`
+	NodeID    string          `json:"nodeId,omitempty"`
+	AttemptID string          `json:"attemptId,omitempty"`
+	Status    string          `json:"status"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	Sequence  uint64          `json:"sequence"`
+}
+
+type EffectAction struct {
+	ID             string          `json:"id"`
+	NodeID         string          `json:"nodeId"`
+	AttemptID      string          `json:"attemptId"`
+	AdapterID      string          `json:"adapterId"`
+	OwnerRole      string          `json:"ownerRole,omitempty"`
+	Status         string          `json:"status"`
+	Request        json.RawMessage `json:"request"`
+	Prepared       json.RawMessage `json:"prepared"`
+	Receipt        json.RawMessage `json:"receipt,omitempty"`
+	IdempotencyKey string          `json:"idempotencyKey"`
+	PreparedAt     string          `json:"preparedAt"`
+	UpdatedAt      string          `json:"updatedAt"`
+	Sequence       uint64          `json:"sequence"`
+}
+
+type ResourceLease struct {
+	ID         string `json:"id"`
+	Kind       string `json:"kind"`
+	Quantity   int    `json:"quantity"`
+	NodeID     string `json:"nodeId"`
+	AttemptID  string `json:"attemptId"`
+	RoleID     string `json:"roleId,omitempty"`
+	Status     string `json:"status"`
+	LeasedAt   string `json:"leasedAt"`
+	ReleasedAt string `json:"releasedAt,omitempty"`
+}
+
+type Incident struct {
+	ID             string   `json:"id"`
+	SourceType     string   `json:"sourceType"`
+	SourceID       string   `json:"sourceId"`
+	NodeID         string   `json:"nodeId,omitempty"`
+	OwnerRole      string   `json:"ownerRole,omitempty"`
+	Status         string   `json:"status"`
+	Classification string   `json:"classification"`
+	Deadline       string   `json:"deadline,omitempty"`
+	AttemptBudget  int      `json:"attemptBudget"`
+	Attempts       int      `json:"attempts"`
+	ProgressMetric string   `json:"progressMetric,omitempty"`
+	DependencyCut  []string `json:"dependencyCut,omitempty"`
+	OpenedAt       string   `json:"openedAt"`
+	UpdatedAt      string   `json:"updatedAt"`
+}
+
+type State struct {
+	ProjectID     string                   `json:"projectId"`
+	Graph         *GraphDefinition         `json:"graph,omitempty"`
+	GraphRevision string                   `json:"graphRevision,omitempty"`
+	HeadSequence  uint64                   `json:"headSequence"`
+	HeadHash      string                   `json:"headHash,omitempty"`
+	Nodes         map[string]NodeRuntime   `json:"nodes"`
+	Attempts      map[string]Attempt       `json:"attempts"`
+	NodeAttempts  map[string][]string      `json:"nodeAttempts"`
+	Leases        map[string]RoleLease     `json:"leases"`
+	Checkpoints   map[string]Checkpoint    `json:"checkpoints"`
+	Actions       map[string]ActionRecord  `json:"actions"`
+	Effects       map[string]EffectAction  `json:"effects"`
+	Resources     map[string]ResourceLease `json:"resources"`
+	Incidents     map[string]Incident      `json:"incidents"`
+	Commands      map[string]CommandResult `json:"commands"`
+}
+
+type CommandResult struct {
+	Kind          string `json:"kind"`
+	GraphRevision string `json:"graphRevision,omitempty"`
+	Sequence      uint64 `json:"sequence"`
+}
+
+func NewState(projectID string) State {
+	return State{
+		ProjectID: projectID, Nodes: map[string]NodeRuntime{}, Attempts: map[string]Attempt{},
+		NodeAttempts: map[string][]string{}, Leases: map[string]RoleLease{}, Checkpoints: map[string]Checkpoint{},
+		Actions: map[string]ActionRecord{}, Effects: map[string]EffectAction{}, Resources: map[string]ResourceLease{}, Incidents: map[string]Incident{}, Commands: map[string]CommandResult{},
+	}
+}
+
+func (s State) EffectForAttempt(attemptID string) (EffectAction, bool) {
+	for _, effect := range s.Effects {
+		if effect.AttemptID == attemptID {
+			return effect, true
+		}
+	}
+	return EffectAction{}, false
+}
+
+func (s State) LatestAttempt(nodeID string) (Attempt, bool) {
+	ids := s.NodeAttempts[nodeID]
+	if len(ids) == 0 {
+		return Attempt{}, false
+	}
+	attempt, ok := s.Attempts[ids[len(ids)-1]]
+	return attempt, ok
+}
+
+func (s State) NodeDefinition(nodeID string) (NodeDefinition, bool) {
+	if s.Graph == nil {
+		return NodeDefinition{}, false
+	}
+	for _, node := range s.Graph.Spec.Nodes {
+		if node.ID == nodeID {
+			return node, true
+		}
+	}
+	return NodeDefinition{}, false
+}
+
+type Frontier struct {
+	GraphRevision   string              `json:"graphRevision"`
+	Ready           []string            `json:"ready"`
+	Blocked         []string            `json:"blocked,omitempty"`
+	ResourceBlocked []string            `json:"resourceBlocked,omitempty"`
+	DependencyCuts  map[string][]string `json:"dependencyCuts,omitempty"`
+}
+
+func ComputeFrontier(state State) Frontier {
+	result := Frontier{GraphRevision: state.GraphRevision}
+	if state.Graph == nil {
+		return result
+	}
+	incoming := map[string][]EdgeDefinition{}
+	for _, edge := range state.Graph.Spec.Edges {
+		incoming[edge.To] = append(incoming[edge.To], edge)
+	}
+	for _, node := range state.Graph.Spec.Nodes {
+		runtime := state.Nodes[node.ID]
+		if runtime.Status != "planned" {
+			continue
+		}
+		ready := true
+		for _, edge := range incoming[node.ID] {
+			source := state.Nodes[edge.From]
+			if source.Status != "terminal" || !predicateSatisfied(edge.When, source) {
+				ready = false
+				break
+			}
+		}
+		if ready {
+			if resourcesAvailable(state, node) {
+				result.Ready = append(result.Ready, node.ID)
+			} else {
+				result.Blocked = append(result.Blocked, node.ID)
+				result.ResourceBlocked = append(result.ResourceBlocked, node.ID)
+			}
+		} else {
+			result.Blocked = append(result.Blocked, node.ID)
+		}
+	}
+	sort.Strings(result.Ready)
+	sort.Strings(result.Blocked)
+	sort.Strings(result.ResourceBlocked)
+	for nodeID, runtime := range state.Nodes {
+		if runtime.Status != "terminal" || (runtime.OutcomeClass != "failure" && runtime.OutcomeClass != "cancelled") {
+			continue
+		}
+		cut := DependencyCut(state, nodeID)
+		if len(cut) > 0 {
+			if result.DependencyCuts == nil {
+				result.DependencyCuts = map[string][]string{}
+			}
+			result.DependencyCuts[nodeID] = cut
+		}
+	}
+	return result
+}
+
+func DependencyCut(state State, rootNodeID string) []string {
+	if state.Graph == nil {
+		return nil
+	}
+	outgoing := map[string][]EdgeDefinition{}
+	for _, edge := range state.Graph.Spec.Edges {
+		outgoing[edge.From] = append(outgoing[edge.From], edge)
+	}
+	seen := map[string]bool{}
+	queue := []string{rootNodeID}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for _, edge := range outgoing[current] {
+			if current == rootNodeID && predicateSatisfied(edge.When, state.Nodes[current]) {
+				continue
+			}
+			runtime := state.Nodes[edge.To]
+			if runtime.Status == "terminal" || runtime.Status == "superseded" || seen[edge.To] {
+				continue
+			}
+			seen[edge.To] = true
+			queue = append(queue, edge.To)
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for nodeID := range seen {
+		result = append(result, nodeID)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func resourcesAvailable(state State, node NodeDefinition) bool {
+	if len(node.Resources) == 0 {
+		return true
+	}
+	capacity := map[string]int{}
+	for _, declaration := range state.Graph.Spec.ResourceCapacities {
+		capacity[declaration.Kind] = declaration.Capacity
+	}
+	for _, lease := range state.Resources {
+		if lease.Status == "active" {
+			capacity[lease.Kind] -= lease.Quantity
+		}
+	}
+	for _, request := range node.Resources {
+		if capacity[request.Kind] < request.Quantity {
+			return false
+		}
+	}
+	return true
+}
+
+func predicateSatisfied(p Predicate, source NodeRuntime) bool {
+	if p.Outcome != "" {
+		return source.Outcome == p.Outcome
+	}
+	if p.Decision != nil {
+		return source.Facts.Decision[p.Decision.Key] == p.Decision.Value
+	}
+	if p.Evidence != nil {
+		return source.Facts.Evidence[p.Evidence.Key] == p.Evidence.Value
+	}
+	if p.Policy != nil {
+		return source.Facts.Policy[p.Policy.Key] == p.Policy.Value
+	}
+	if len(p.All) > 0 {
+		for _, child := range p.All {
+			if !predicateSatisfied(child, source) {
+				return false
+			}
+		}
+		return true
+	}
+	if len(p.Any) > 0 {
+		for _, child := range p.Any {
+			if predicateSatisfied(child, source) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}

@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/graph-v1alpha1.schema.json",
+  "title": "DAGrail Graph v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {"const": "dagrail.io/v1alpha1"},
+    "kind": {"const": "Graph"},
+    "metadata": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "labels": {"type": "object", "additionalProperties": {"type": "string"}},
+        "externalRefs": {"type": "array", "items": {"$ref": "#/$defs/externalRef"}}
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roles", "nodes"],
+      "properties": {
+        "roles": {"type": "array", "items": {"$ref": "#/$defs/role"}},
+        "nodes": {"type": "array", "items": {"$ref": "#/$defs/node"}},
+        "edges": {"type": "array", "items": {"$ref": "#/$defs/edge"}},
+        "resourceCapacities": {"type": "array", "items": {"$ref": "#/$defs/resourceCapacity"}},
+        "providers": {"type": "array", "items": {"$ref": "#/$defs/provider"}}
+      }
+    }
+  },
+  "$defs": {
+    "externalRef": {
+      "type": "object",
+      "required": ["system", "type", "id"],
+      "properties": {
+        "system": {"type": "string"}, "type": {"type": "string"}, "id": {"type": "string"},
+        "url": {"type": "string"}, "revision": {"type": "string"}, "contentDigest": {"type": "string"}
+      }
+    },
+    "provider": {
+      "type": "object", "additionalProperties": false, "required": ["id", "version", "schemaHash"],
+      "properties": {"id": {"type": "string"}, "version": {"type": "string"}, "schemaHash": {"type": "string"}}
+    },
+    "role": {
+      "type": "object", "additionalProperties": false, "required": ["id", "capabilities"],
+      "properties": {"id": {"type": "string", "minLength": 1}, "capabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}}
+    },
+    "outcome": {
+      "type": "object", "additionalProperties": false, "required": ["id", "class"],
+      "properties": {"id": {"type": "string", "minLength": 1}, "class": {"enum": ["success", "retryable", "failure", "cancelled"]}}
+    },
+    "resourceCapacity": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "capacity"],
+      "properties": {"kind": {"type": "string", "minLength": 1}, "capacity": {"type": "integer", "minimum": 1}}
+    },
+    "resourceRequest": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "quantity"],
+      "properties": {"kind": {"type": "string", "minLength": 1}, "quantity": {"type": "integer", "minimum": 1}}
+    },
+    "node": {
+      "type": "object",
+      "required": ["id", "kind", "title", "outcomes"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "kind": {"type": "string", "minLength": 1},
+        "role": {"type": "string"}, "title": {"type": "string"}, "objective": {"type": "string"},
+        "parent": {"type": "string"}, "supersedes": {"type": "string"}, "inputs": {},
+        "outcomes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/outcome"}},
+        "retryBudget": {"type": "integer", "minimum": 0},
+        "resources": {"type": "array", "items": {"$ref": "#/$defs/resourceRequest"}},
+        "externalRefs": {"type": "array", "items": {"$ref": "#/$defs/externalRef"}},
+        "metadata": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+    "valueMatch": {
+      "type": "object", "additionalProperties": false, "required": ["key", "value"],
+      "properties": {"key": {"type": "string", "minLength": 1}, "value": {"type": "string", "minLength": 1}}
+    },
+    "predicate": {
+      "type": "object",
+      "oneOf": [
+        {"required": ["outcome"], "properties": {"outcome": {"type": "string"}}},
+        {"required": ["decision"], "properties": {"decision": {"$ref": "#/$defs/valueMatch"}}},
+        {"required": ["evidence"], "properties": {"evidence": {"$ref": "#/$defs/valueMatch"}}},
+        {"required": ["policy"], "properties": {"policy": {"$ref": "#/$defs/valueMatch"}}},
+        {"required": ["all"], "properties": {"all": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/predicate"}}}},
+        {"required": ["any"], "properties": {"any": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/predicate"}}}}
+      ]
+    },
+    "edge": {
+      "type": "object", "additionalProperties": false, "required": ["id", "from", "to", "when"],
+      "properties": {"id": {"type": "string"}, "from": {"type": "string"}, "to": {"type": "string"}, "when": {"$ref": "#/$defs/predicate"}}
+    }
+  }
+}

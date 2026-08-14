@@ -1,0 +1,86 @@
+apiVersion: dagrail.io/v1alpha1
+kind: Graph
+metadata:
+  name: development-example
+spec:
+  resourceCapacities:
+    - kind: workspace
+      capacity: 2
+  roles:
+    - id: developer
+      capabilities: [node.run]
+    - id: reviewer
+      capabilities: [node.review]
+    - id: integrator
+      capabilities: [effect.apply]
+  nodes:
+    - id: implement
+      kind: task
+      role: developer
+      title: Implement the change
+      retryBudget: 2
+      resources:
+        - kind: workspace
+          quantity: 1
+      outcomes:
+        - id: submitted
+          class: success
+        - id: retry
+          class: retryable
+        - id: failed
+          class: failure
+    - id: review
+      kind: review
+      role: reviewer
+      title: Inspect the actual artifact
+      retryBudget: 2
+      outcomes:
+        - id: approved
+          class: success
+        - id: returned
+          class: retryable
+    - id: merge
+      kind: effect
+      role: integrator
+      title: Merge the approved candidate
+      inputs:
+        adapter: git.merge
+        request:
+          repository: .
+          targetBranch: main
+          candidate: REPLACE_WITH_FULL_COMMIT_SHA
+          strategy: merge-commit
+      outcomes:
+        - id: merged
+          class: success
+        - id: merge-failed
+          class: failure
+    - id: complete
+      kind: milestone
+      title: Development completed
+      outcomes:
+        - id: reached
+          class: success
+  edges:
+    - id: implementation-to-review
+      from: implement
+      to: review
+      when:
+        outcome: submitted
+    - id: review-to-merge
+      from: review
+      to: merge
+      when:
+        all:
+          - outcome: approved
+          - decision:
+              key: verdict
+              value: approve
+          - evidence:
+              key: artifact
+              value: inspected
+    - id: merge-to-complete
+      from: merge
+      to: complete
+      when:
+        outcome: merged

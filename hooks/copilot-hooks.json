@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{"type": "command", "command": "dagrail hook --harness copilot-cli --event session-start", "timeoutSec": 2}],
+    "userPromptTransformed": [{"type": "command", "command": "dagrail hook --harness copilot-cli --event user-prompt-transformed", "timeoutSec": 2}]
+  }
+}

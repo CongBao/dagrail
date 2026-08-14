@@ -1,0 +1,4 @@
+interface:
+  display_name: "DAGrail Worker"
+  short_description: "Execute one assigned DAG node from its checkpoint"
+  default_prompt: "Use $execute-dag-node to resume and complete my assigned DAG node."

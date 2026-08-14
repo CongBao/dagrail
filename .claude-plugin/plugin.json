@@ -1,0 +1,12 @@
+{
+  "name": "dagrail",
+  "version": "0.1.0",
+  "description": "Govern long-running multi-agent DAGs without keeping lifecycle state in chat.",
+  "author": {"name": "CongBao", "url": "https://github.com/CongBao"},
+  "homepage": "https://github.com/CongBao/dagrail#readme",
+  "repository": "https://github.com/CongBao/dagrail",
+  "license": "Apache-2.0",
+  "keywords": ["dag", "agent-governance", "mcp", "workflow"],
+  "skills": "./skills/",
+  "hooks": "./hooks/claude-hooks.json"
+}

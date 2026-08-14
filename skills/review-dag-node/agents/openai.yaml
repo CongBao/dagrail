@@ -1,0 +1,4 @@
+interface:
+  display_name: "DAGrail Reviewer"
+  short_description: "Review one DAG node with bounded evidence"
+  default_prompt: "Use $review-dag-node to inspect and decide this assigned review node."

@@ -1,0 +1,55 @@
+# Build and test output
+/dagrail
+/dagrail.exe
+/bin/
+/build/
+/dist/
+*.test
+*.out
+coverage.out
+coverage.html
+*.prof
+*.trace
+
+# DAGrail runtime state: project.yaml is the only repository-safe marker
+.dagrail/*
+!.dagrail/project.yaml
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.db-wal
+*.db-shm
+*.pid
+*.sock
+*.log
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+.envrc
+.secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+credentials.local.json
+secrets.json
+secrets.local.json
+
+# Local harness and editor configuration
+.codex/
+.claude/settings.local.json
+.copilot/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db

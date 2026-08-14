@@ -1,0 +1,127 @@
+package domain
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestFrontierEvaluatesClosedTypedFacts(t *testing.T) {
+	graph := GraphDefinition{
+		APIVersion: GraphAPIVersion,
+		Kind:       GraphKind,
+		Metadata:   GraphMetadata{Name: "facts"},
+		Spec: GraphSpec{
+			Roles: []RoleDefinition{{ID: "reviewer"}},
+			Nodes: []NodeDefinition{
+				{ID: "review", Kind: "review", Role: "reviewer", Title: "review", Outcomes: []Outcome{{ID: "approved", Class: "success"}}},
+				{ID: "merge", Kind: "join", Title: "merge", Outcomes: []Outcome{{ID: "done", Class: "success"}}},
+			},
+			Edges: []EdgeDefinition{{
+				ID: "review-to-merge", From: "review", To: "merge",
+				When: Predicate{All: []Predicate{
+					{Decision: &ValueMatch{Key: "verdict", Value: "approve"}},
+					{Evidence: &ValueMatch{Key: "artifact", Value: "inspected"}},
+					{Policy: &ValueMatch{Key: "admission", Value: "pass"}},
+				}},
+			}},
+		},
+	}
+	if err := ValidateGraph(graph); err != nil {
+		t.Fatal(err)
+	}
+	state := NewState("project")
+	state.Graph = &graph
+	state.Nodes["review"] = NodeRuntime{Status: "terminal", Outcome: "approved", Facts: PredicateFacts{
+		Decision: map[string]string{"verdict": "approve"},
+		Evidence: map[string]string{"artifact": "inspected"},
+		Policy:   map[string]string{"admission": "pass"},
+	}}
+	state.Nodes["merge"] = NodeRuntime{Status: "planned"}
+	frontier := ComputeFrontier(state)
+	if len(frontier.Ready) != 1 || frontier.Ready[0] != "merge" {
+		t.Fatalf("typed predicate was not satisfied: %#v", frontier)
+	}
+}
+
+func TestPredicateFactRequiresKeyAndValue(t *testing.T) {
+	source := NodeDefinition{ID: "source", Outcomes: []Outcome{{ID: "ok", Class: "success"}}}
+	if err := validatePredicate(Predicate{Decision: &ValueMatch{}}, source); err == nil {
+		t.Fatal("empty decision fact was accepted")
+	}
+}
+
+func TestFrontierHonorsResourceCapacity(t *testing.T) {
+	graph := GraphDefinition{
+		APIVersion: GraphAPIVersion,
+		Kind:       GraphKind,
+		Metadata:   GraphMetadata{Name: "resources"},
+		Spec: GraphSpec{
+			Roles:              []RoleDefinition{{ID: "worker"}},
+			ResourceCapacities: []ResourceCapacity{{Kind: "browser", Capacity: 1}},
+			Nodes: []NodeDefinition{
+				{ID: "A", Kind: "task", Role: "worker", Title: "A", Resources: []ResourceRequest{{Kind: "browser", Quantity: 1}}, Outcomes: []Outcome{{ID: "done", Class: "success"}}},
+				{ID: "B", Kind: "task", Role: "worker", Title: "B", Resources: []ResourceRequest{{Kind: "browser", Quantity: 1}}, Outcomes: []Outcome{{ID: "done", Class: "success"}}},
+			},
+		},
+	}
+	if err := ValidateGraph(graph); err != nil {
+		t.Fatal(err)
+	}
+	state := NewState("project")
+	state.Graph = &graph
+	state.Nodes["A"] = NodeRuntime{Status: "active"}
+	state.Nodes["B"] = NodeRuntime{Status: "planned"}
+	state.Resources["lease"] = ResourceLease{ID: "lease", Kind: "browser", Quantity: 1, NodeID: "A", AttemptID: "attempt", Status: "active"}
+	frontier := ComputeFrontier(state)
+	if len(frontier.Ready) != 0 || len(frontier.ResourceBlocked) != 1 || frontier.ResourceBlocked[0] != "B" {
+		t.Fatalf("resource exhaustion did not block B: %#v", frontier)
+	}
+	lease := state.Resources["lease"]
+	lease.Status = "released"
+	state.Resources["lease"] = lease
+	frontier = ComputeFrontier(state)
+	if len(frontier.Ready) != 1 || frontier.Ready[0] != "B" {
+		t.Fatalf("released capacity did not unblock B: %#v", frontier)
+	}
+}
+
+func TestDependencyCutSkipsFailureHandlingBranch(t *testing.T) {
+	graph := GraphDefinition{
+		APIVersion: GraphAPIVersion, Kind: GraphKind, Metadata: GraphMetadata{Name: "cut"},
+		Spec: GraphSpec{Nodes: []NodeDefinition{
+			{ID: "source", Kind: "join", Title: "source", Outcomes: []Outcome{{ID: "ok", Class: "success"}, {ID: "broken", Class: "failure"}}},
+			{ID: "success-only", Kind: "join", Title: "success", Outcomes: []Outcome{{ID: "done", Class: "success"}}},
+			{ID: "failure-handler", Kind: "join", Title: "handler", Outcomes: []Outcome{{ID: "done", Class: "success"}}},
+			{ID: "downstream", Kind: "join", Title: "downstream", Outcomes: []Outcome{{ID: "done", Class: "success"}}},
+		}, Edges: []EdgeDefinition{
+			{ID: "success", From: "source", To: "success-only", When: Predicate{Outcome: "ok"}},
+			{ID: "failure", From: "source", To: "failure-handler", When: Predicate{Outcome: "broken"}},
+			{ID: "downstream", From: "success-only", To: "downstream", When: Predicate{Outcome: "done"}},
+		}},
+	}
+	state := NewState("project")
+	state.Graph = &graph
+	state.Nodes["source"] = NodeRuntime{Status: "terminal", Outcome: "broken", OutcomeClass: "failure"}
+	for _, id := range []string{"success-only", "failure-handler", "downstream"} {
+		state.Nodes[id] = NodeRuntime{Status: "planned"}
+	}
+	cut := DependencyCut(state, "source")
+	if len(cut) != 2 || cut[0] != "downstream" || cut[1] != "success-only" {
+		t.Fatalf("unexpected dependency cut: %#v", cut)
+	}
+}
+
+func TestGraphRejectsHierarchyCycleAndFloatingAuthorityNumber(t *testing.T) {
+	graph := GraphDefinition{
+		APIVersion: GraphAPIVersion, Kind: GraphKind, Metadata: GraphMetadata{Name: "invalid"},
+		Spec: GraphSpec{Nodes: []NodeDefinition{
+			{ID: "A", Kind: "join", Title: "A", Parent: "B", Inputs: json.RawMessage(`{"ratio":1.5}`), Outcomes: []Outcome{{ID: "done", Class: "success"}}},
+			{ID: "B", Kind: "join", Title: "B", Parent: "A", Outcomes: []Outcome{{ID: "done", Class: "success"}}},
+		}},
+	}
+	err := ValidateGraph(graph)
+	if err == nil || (!strings.Contains(err.Error(), "floating") && !strings.Contains(err.Error(), "hierarchy")) {
+		t.Fatalf("invalid authority was accepted: %v", err)
+	}
+}
