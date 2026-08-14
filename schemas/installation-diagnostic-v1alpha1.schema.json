@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/installation-diagnostic-v1alpha1.schema.json",
+  "title": "DAGrail Installation Diagnostic v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "version", "healthy", "runtime", "bundle", "harnesses", "checks"],
+  "properties": {
+    "apiVersion": {"const": "dagrail.io/installation-diagnostic/v1alpha1"},
+    "kind": {"const": "InstallationDiagnostic"},
+    "version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "healthy": {"type": "boolean"},
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verified", "rollbackAvailable"],
+      "properties": {
+        "verified": {"type": "boolean"},
+        "version": {"type": "string", "minLength": 1, "maxLength": 128},
+        "rollbackAvailable": {"type": "boolean"}
+      }
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verified"],
+      "properties": {
+        "verified": {"type": "boolean"},
+        "version": {"type": "string", "minLength": 1, "maxLength": 128},
+        "files": {"type": "integer", "minimum": 0, "maximum": 10000}
+      }
+    },
+    "harnesses": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "detected", "pluginStatus", "mcpConfigured", "ready"],
+        "properties": {
+          "id": {"enum": ["codex", "claude-code", "copilot-cli"]},
+          "detected": {"type": "boolean"},
+          "pluginStatus": {"type": "string", "minLength": 1, "maxLength": 64},
+          "mcpConfigured": {"type": "boolean"},
+          "ready": {"type": "boolean"}
+        }
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 11,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "code"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z][a-z0-9.-]{0,127}$"},
+          "status": {"enum": ["pass", "fail"]},
+          "code": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,127}$"}
+        }
+      }
+    }
+  }
+}

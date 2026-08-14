@@ -85,6 +85,14 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Release verification**: a path-free offline proof that the manifest, payload set,
   archive metadata, expansion bounds, checksums, and SPDX envelopes agree; it does not
   authenticate a publisher.
+- **Command catalog**: the bounded machine-readable source for top-level commands,
+  subcommands, effect class, project requirement, output mode, completion, and broad
+  process error classes.
+- **CLI error**: an opt-in bounded process envelope for usage, interruption,
+  diagnostics, or otherwise unclassified operation failure; it does not replace typed
+  domain reports.
+- **Installation diagnostic**: path-free local evidence over the verified runtime,
+  linked plugin bundle, selected harness registrations, and MCP launcher state.
 
 ## Invariants
 
@@ -125,6 +133,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
     false; adoption evidence must be observed, not inferred from CI.
 21. A published release set is closed and manifest-bound before publication; checksum
     consistency never substitutes for provenance or publisher trust.
+22. Command discovery, compatibility inventory, and completion share one closed
+    catalog; process interruption is never collapsed into a generic failure exit.
 
 ## Bounded contexts
 
@@ -137,8 +147,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
   detail, payload-free timeline, and operational summaries with stable local deep links.
 - **Operational surface**: payload-free status/history, verified journal backup,
   runtime upgrade/rollback, optional portable-file signatures, local security audit,
-  bundled-plugin conformance, shareable support diagnostics, and a local read-only UI
-  derived from authority.
+  bundled-plugin conformance, command catalog, installation diagnostics, shareable
+  support diagnostics, and a local read-only UI derived from authority.
 - **Migration observation**: bounded source digests, private locators, isolated shadow
   import, and repeatable drift verification without lifecycle control.
 

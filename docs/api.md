@@ -5,10 +5,10 @@ implementation detail and carries no source-compatibility promise.
 
 ## Compatibility discovery
 
-`dagrail contract` is the machine-readable index. It reports the binary version,
-top-level CLI commands, exactly six MCP tools, context budgets, readable/write journal
-versions, projection schema, provider SDK version, and the path plus SHA-256 digest of
-every governed JSON report schema.
+`dagrail contract` is the machine-readable compatibility index. It reports the binary
+version, top-level CLI commands, exactly six MCP tools, context budgets, readable/write
+journal versions, projection schema, provider SDK version, and the path plus SHA-256
+digest of every governed JSON report schema.
 
 The beta line is additive unless a surface selects a new `apiVersion`. Automation
 should select API versions and schema digests, never human wording or JSON key order.
@@ -19,11 +19,28 @@ CLI mutation commands require a stable idempotency key and, where applicable, an
 expected revision or controller-issued action ref. JSON output is intended for scripts;
 human frontier output is the exception and can be replaced with `--format json`.
 
-The complete command inventory is returned by `dagrail contract`. Run a subcommand
-without arguments for its current usage. Exit status is nonzero when a typed report is
-emitted but its gate fails, including `doctor`, `recovery rehearse`, and
-`qualify release`. `release manifest|verify` is the maintainer-facing, offline
-distribution contract; it never publishes or downloads an artifact.
+`dagrail commands` returns the detailed CommandCatalog v1alpha1 used by dispatcher
+validation and shell completion. `dagrail completion bash|zsh|fish|powershell` emits a
+bounded script derived from that catalog. `dagrail contract` binds the catalog schema
+and digest into the broader compatibility surface.
+
+By default, command errors remain concise text on stderr. Automation can place
+`--errors=json` before the command or set `DAGRAIL_ERROR_FORMAT=json` to receive a
+CLIError v1alpha1 envelope. The stable broad exits are `1` operation failure, `2` usage,
+`7` failed diagnostic, and `130` interruption. Domain-specific lifecycle outcomes stay
+in command reports rather than being inferred from process codes. Error messages are
+bounded to 2 KiB and the complete envelope to 4 KiB.
+
+Exit status is nonzero when a typed report is emitted but its gate fails, including
+`doctor`, `doctor install`, `recovery rehearse`, and `qualify release`.
+`release manifest|verify` is the maintainer-facing, offline distribution contract; it never
+publishes or downloads an artifact. Process cancellation is propagated into MCP, UI,
+provider, projection, and host-plugin work; harness-management subprocesses also have a
+two-minute ceiling and a 64-KiB combined-output cap.
+
+`dagrail doctor install` is a local, path-free diagnostic for the linked runtime,
+plugin bundle, selected harness registrations, and MCP launchers. It reports closed
+status codes without including executable paths or raw host output.
 
 ## MCP
 

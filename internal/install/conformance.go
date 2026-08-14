@@ -1,6 +1,7 @@
 package install
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"unicode"
@@ -52,6 +53,10 @@ type ConformanceReport struct {
 }
 
 func Conformance(options Options) (ConformanceReport, error) {
+	return ConformanceContext(context.Background(), options)
+}
+
+func ConformanceContext(ctx context.Context, options Options) (ConformanceReport, error) {
 	harnessIDs, err := normalizeHarnesses(options.Harnesses)
 	if err != nil {
 		return ConformanceReport{}, err
@@ -70,7 +75,7 @@ func Conformance(options Options) (ConformanceReport, error) {
 	if !report.Bundle.Verified {
 		report.Ready = false
 	}
-	states, err := Status(Options{Harnesses: harnessIDs, RuntimePath: options.RuntimePath, MarketplaceSource: options.MarketplaceSource})
+	states, err := StatusContext(ctx, Options{Harnesses: harnessIDs, RuntimePath: options.RuntimePath, MarketplaceSource: options.MarketplaceSource})
 	if err != nil {
 		return ConformanceReport{}, err
 	}

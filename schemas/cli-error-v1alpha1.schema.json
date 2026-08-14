@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/cli-error-v1alpha1.schema.json",
+  "title": "DAGrail CLI Error v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "code", "category", "message", "retryable", "exitCode"],
+  "properties": {
+    "apiVersion": {"const": "dagrail.io/cli-error/v1alpha1"},
+    "kind": {"const": "CLIError"},
+    "code": {"enum": ["operation_failed", "usage", "diagnostic_failed", "interrupted"]},
+    "category": {"enum": ["operation", "usage", "diagnostic", "interruption"]},
+    "message": {"type": "string", "minLength": 1, "maxLength": 2048},
+    "retryable": {"type": "boolean"},
+    "exitCode": {"enum": [1, 2, 7, 130]}
+  }
+}

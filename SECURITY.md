@@ -86,6 +86,13 @@ mutation or extra files. The bundle contains no runtime state, repository histor
 source code, credentials, or project authority. Host plugin installation remains an
 external operation under the cooperative OS-user boundary.
 
+Host plugin management captures at most 64 KiB of combined subprocess output, honors
+caller cancellation, and terminates an individual host command after two minutes.
+`doctor install` converts runtime, bundle, registration, and MCP state into closed codes
+without executable paths or raw host output. CLIError envelopes are local operator
+output, not shareable support reports; their message is bounded but can still include
+an operator-supplied path returned by an underlying command.
+
 Support reports are deliberately narrower than backups: they pseudonymize project
 identity and contain aggregate counts plus typed security, journal, and status-only
 doctor evidence. They exclude Graph and event payloads, identifiers, absolute paths,

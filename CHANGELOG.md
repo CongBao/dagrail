@@ -2,6 +2,28 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.17.0 — 2026-08-14
+
+### Added
+
+- `commands`, a bounded schema-valid catalog for command effect, project requirement,
+  output mode, subcommands, error opt-in, and stable broad exit classes;
+- catalog-generated Bash, Zsh, Fish, and PowerShell completion through
+  `completion <shell>`;
+- an opt-in CLIError v1alpha1 JSON envelope with bounded messages and explicit
+  `operation_failed`, `usage`, `diagnostic_failed`, and `interrupted` classes;
+- `doctor install`, a path-free InstallationDiagnostic v1alpha1 report over runtime,
+  linked plugin bundle, harness detection, plugin registration, and MCP configuration.
+
+### Changed
+
+- process interruption now propagates through provider calls, plugin install/status,
+  graph import providers, projection providers, MCP stdio, and the read-only UI;
+- external harness management commands retain the 64-KiB output cap and now also have
+  a two-minute upper bound while honoring an earlier caller cancellation;
+- the compatibility contract now derives its top-level command list from the same
+  catalog used by dispatch and shell completion.
+
 ## 0.16.0 — 2026-08-14
 
 ### Added

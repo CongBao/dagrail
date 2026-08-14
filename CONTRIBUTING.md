@@ -18,6 +18,11 @@ Changes to release packaging must also pass `go test ./internal/release` and pre
 the exact ReleaseManifest/ReleaseVerification schema digests exposed by `dagrail
 contract`.
 
+Adding or renaming a CLI command requires updating the single command catalog.
+Completion and the compatibility command inventory must never be maintained as
+independent lists. Error-envelope changes require schema, byte-budget, and exit-code
+tests.
+
 Changes to graph, journal, provider, MCP, or receipt contracts require a compatibility test and an ADR when they are difficult to reverse. Never add a second authority beside the journal. New provider implementations must be deterministic or explicitly return an external receipt; they cannot receive storage handles.
 
 Journal readers must verify the exact stored bytes and hash chain before applying an

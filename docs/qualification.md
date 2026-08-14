@@ -26,6 +26,7 @@ candidate still reports production adoption gaps explicitly.
 | Support evidence | private roots, project/graph/Node/actor identities, repeat export | schema-valid aggregate report, no private values, and exclusive file creation |
 | Disaster recovery | exact-prefix restore, legacy upcast, stale/deleted projection, independent rebuild | identical state and logical projection fingerprints without live mutation |
 | Release artifacts | missing/extra/mutated files, duplicate/unsorted checksums, unsafe archives, invalid SPDX, identity drift | one closed 12-payload manifest and schema-valid offline verification |
+| Operator automation | unknown commands, cancellation, oversized errors, catalog/completion drift, missing harnesses | schema-valid bounded errors/catalogs, stable exit classes, cancellation, and path-free installation checks |
 
 Every push also builds the six real target binaries, packages them with release metadata,
 generates SPDX inventories through the pinned release action, aggregates the artifacts,
@@ -56,6 +57,11 @@ go test ./internal/service -run '^$' -fuzz '^FuzzDecodeGraphPatch$' -fuzztime=30
 go test ./internal/harness -run '^$' -fuzz '^FuzzNativeReceiptConformance$' -fuzztime=30s
 go test ./internal/release -run '^$' -fuzz '^FuzzReleaseMetadataInputs$' -fuzztime=30s
 ```
+
+CLI contract tests validate the published CommandCatalog, CLIError, and
+InstallationDiagnostic schemas; check catalog ordering and completion coverage; cap
+error bytes; and prove cancellation becomes exit class `interrupted`. They do not claim
+that every user's shell profile or every future harness build has been exercised.
 
 GitHub CI runs every seed corpus as part of normal tests and performs a bounded fuzz
 smoke for each target on every push. Longer fuzz runs are an investigation tool, not a

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 const (
@@ -164,12 +165,22 @@ func Install(ctx context.Context, options Options) ([]Result, error) {
 }
 
 func Status(options Options) ([]Result, error) {
+	return StatusContext(context.Background(), options)
+}
+
+func StatusContext(ctx context.Context, options Options) ([]Result, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	harnesses, err := normalizeHarnesses(options.Harnesses)
 	if err != nil {
 		return nil, err
 	}
 	results := make([]Result, 0, len(harnesses))
 	for _, harness := range harnesses {
+		if err := ctx.Err(); err != nil {
+			return results, err
+		}
 		path := findExecutable(harness)
 		status := "not_detected"
 		mcpConfigured := false
@@ -180,13 +191,13 @@ func Status(options Options) ([]Result, error) {
 			if harness == "codex" {
 				pluginArgs = append(pluginArgs, "--json")
 			}
-			pluginOutput, pluginErr := run(context.Background(), path, pluginArgs...)
+			pluginOutput, pluginErr := run(ctx, path, pluginArgs...)
 			if pluginErr == nil && strings.Contains(strings.ToLower(pluginOutput), "dagrail") {
 				status = "installed"
 			} else if pluginErr != nil {
 				message = "plugin status probe unavailable: " + pluginErr.Error()
 			}
-			mcpOutput, mcpErr := run(context.Background(), path, "mcp", "list")
+			mcpOutput, mcpErr := run(ctx, path, "mcp", "list")
 			mcpConfigured = mcpErr == nil && strings.Contains(strings.ToLower(mcpOutput), "dagrail")
 		}
 		results = append(results, Result{Harness: harness, Status: status, Executable: path, MCPConfigured: mcpConfigured, Message: message})
@@ -287,11 +298,19 @@ func findExecutable(harness string) string {
 	return ""
 }
 func run(ctx context.Context, name string, args ...string) (string, error) {
-	command := exec.CommandContext(ctx, name, args...)
+	commandCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(commandCtx, name, args...)
 	output := &boundedBuffer{remaining: 64 * 1024}
 	command.Stdout, command.Stderr = output, output
 	err := command.Run()
 	if err != nil {
+		if ctx.Err() != nil {
+			return output.String(), ctx.Err()
+		}
+		if commandCtx.Err() == context.DeadlineExceeded {
+			return output.String(), fmt.Errorf("host command exceeded the two-minute limit")
+		}
 		return output.String(), fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(output.String()))
 	}
 	return output.String(), nil

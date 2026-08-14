@@ -32,10 +32,15 @@ digests, context budgets, and command inventory implemented by the current binar
 - ReleaseManifest v1beta1 fixes the six target names and complete archive/SBOM/checksum
   set. ReleaseVerification v1alpha1 is an additive, path-free offline report; neither
   surface substitutes internal consistency for publisher identity or adoption evidence.
+- CommandCatalog, CLIError, and InstallationDiagnostic v1alpha1 are governed by the
+  schema paths and digests in `dagrail contract`. Catalog fields and commands are
+  additive in-version; the four broad error classes and their exit codes remain stable
+  through the beta line. Completion is generated from the catalog, not an independent
+  authority. Installation diagnostics remain path-free and omit raw host output.
 
 ## Not promised
 
-Human-readable wording, command help layout, ordering of JSON object keys, experimental
+Human-readable wording, completion script formatting, command help layout, ordering of JSON object keys, experimental
 provider contracts, native harness preview protocols, and the SQLite schema are not
 stable interfaces. Pre-1.0 beta releases may remove a surface only with a versioned
 replacement, migration instructions, and an explicit changelog entry.

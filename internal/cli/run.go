@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/CongBao/dagrail/internal/commandcatalog"
 	"github.com/CongBao/dagrail/internal/contract"
 	"github.com/CongBao/dagrail/internal/harness"
 	"github.com/CongBao/dagrail/internal/hook"
@@ -28,15 +28,33 @@ import (
 )
 
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	_ = stdin
+	return RunContext(context.Background(), args, stdin, stdout, stderr)
+}
+
+func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (runErr error) {
+	defer func() { runErr = normalizeDispatchError(runErr) }()
+	if WantsJSONErrors(args) {
+		stderr = io.Discard
+	}
+	var err error
+	args, err = consumeGlobalArgs(args)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(args) == 0 {
-		return fmt.Errorf("usage: dagrail <command>")
+		return usagef("usage: dagrail [--errors=json] <command>")
+	}
+	if !commandcatalog.Contains(args[0]) {
+		return usagef("unknown command %q", args[0])
 	}
 	switch args[0] {
 	case "init":
 		return runInit(args[1:], stdout, stderr)
 	case "graph":
-		return runGraph(args[1:], stdout, stderr)
+		return runGraph(ctx, args[1:], stdout, stderr)
 	case "frontier":
 		return runFrontier(args[1:], stdout, stderr)
 	case "status":
@@ -51,7 +69,25 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runAction(args[1:], stdout, stderr)
 	case "context":
 		return runContext(args[1:], stdout, stderr)
+	case "commands":
+		if len(args) != 1 {
+			return usagef("usage: dagrail commands")
+		}
+		return writeJSON(stdout, commandcatalog.Current(version.Version))
+	case "completion":
+		if len(args) != 2 {
+			return usagef("usage: dagrail completion <bash|zsh|fish|powershell>")
+		}
+		result, completionErr := commandcatalog.Completion(args[1])
+		if completionErr != nil {
+			return usagef("%v", completionErr)
+		}
+		_, completionErr = io.WriteString(stdout, result)
+		return completionErr
 	case "contract":
+		if len(args) != 1 {
+			return usagef("usage: dagrail contract")
+		}
 		return writeJSON(stdout, contract.Current())
 	case "inspect":
 		return runInspect(args[1:], stdout, stderr)
@@ -62,19 +98,19 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	case "recovery":
 		return runRecovery(args[1:], stdout, stderr)
 	case "mcp":
-		return runMCP(args[1:], stderr)
+		return runMCP(ctx, args[1:], stderr)
 	case "observe":
 		return runObserve(args[1:], stdout, stderr)
 	case "ui":
-		return runUI(args[1:], stdout, stderr)
+		return runUI(ctx, args[1:], stdout, stderr)
 	case "hook":
 		return runHook(args[1:], stdin, stdout, stderr)
 	case "harness":
 		return runHarness(args[1:], stdout, stderr)
 	case "plugin":
-		return runPlugin(args[1:], stdout, stderr)
+		return runPlugin(ctx, args[1:], stdout, stderr)
 	case "provider":
-		return runProvider(args[1:], stdout, stderr)
+		return runProvider(ctx, args[1:], stdout, stderr)
 	case "signature":
 		return runSignature(args[1:], stdout, stderr)
 	case "journal":
@@ -84,21 +120,24 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	case "incident":
 		return runIncident(args[1:], stdout, stderr)
 	case "projection":
-		return runProjection(args[1:], stdout, stderr)
+		return runProjection(ctx, args[1:], stdout, stderr)
 	case "qualify":
 		return runQualify(args[1:], stdout, stderr)
 	case "release":
 		return runRelease(args[1:], stdout, stderr)
 	case "doctor":
-		return runDoctor(args[1:], stdout, stderr)
+		return runDoctor(ctx, args[1:], stdout, stderr)
 	case "security":
 		return runSecurity(args[1:], stdout, stderr)
 	case "support":
 		return runSupport(args[1:], stdout, stderr)
 	case "version":
+		if len(args) != 1 {
+			return usagef("usage: dagrail version")
+		}
 		return writeJSON(stdout, map[string]string{"version": version.Version, "commit": version.Commit, "date": version.Date})
 	default:
-		return fmt.Errorf("unknown command %q", args[0])
+		return usagef("unknown command %q", args[0])
 	}
 }
 
@@ -183,7 +222,7 @@ func runSignature(args []string, stdout, stderr io.Writer) error {
 	return writeJSON(stdout, report)
 }
 
-func runUI(args []string, stdout, stderr io.Writer) error {
+func runUI(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("ui", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
@@ -196,8 +235,6 @@ func runUI(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
 	_ = stdout
 	return dagrailui.Serve(ctx, s, *listen, *open, stderr)
 }
@@ -351,7 +388,7 @@ func runIncident(args []string, stdout, stderr io.Writer) error {
 	return writeJSON(stdout, incident)
 }
 
-func runProvider(args []string, stdout, stderr io.Writer) error {
+func runProvider(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: dagrail provider <list|check|invoke>")
 	}
@@ -387,7 +424,7 @@ func runProvider(args []string, stdout, stderr io.Writer) error {
 		if !validBoundedJSON(*input, 64*1024) {
 			return fmt.Errorf("--input must be valid JSON no larger than 64 KiB")
 		}
-		result, err := s.InvokeProvider(context.Background(), internalproviders.Invocation{Kind: *kind, ProviderID: *id, Input: json.RawMessage(*input)})
+		result, err := s.InvokeProvider(ctx, internalproviders.Invocation{Kind: *kind, ProviderID: *id, Input: json.RawMessage(*input)})
 		if err != nil {
 			return err
 		}
@@ -420,7 +457,7 @@ func runEvidence(args []string, stdout, stderr io.Writer) error {
 	return writeJSON(stdout, result)
 }
 
-func runPlugin(args []string, stdout, stderr io.Writer) error {
+func runPlugin(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: dagrail plugin <install|status|conformance|materialize|bundle-status|runtime-status|rollback|uninstall>")
 	}
@@ -482,19 +519,19 @@ func runPlugin(args []string, stdout, stderr io.Writer) error {
 	options := install.Options{Harnesses: []string{*harnesses}, RuntimePath: *runtimePath, MarketplaceSource: *source, DryRun: *dryRun}
 	switch args[0] {
 	case "install":
-		results, err := install.Install(context.Background(), options)
+		results, err := install.Install(ctx, options)
 		if writeErr := writeJSON(stdout, results); writeErr != nil {
 			return writeErr
 		}
 		return err
 	case "status":
-		results, err := install.Status(options)
+		results, err := install.StatusContext(ctx, options)
 		if err != nil {
 			return err
 		}
 		return writeJSON(stdout, results)
 	case "conformance":
-		result, err := install.Conformance(options)
+		result, err := install.ConformanceContext(ctx, options)
 		if err != nil {
 			return err
 		}
@@ -512,7 +549,7 @@ func runPlugin(args []string, stdout, stderr io.Writer) error {
 		}
 		return writeJSON(stdout, result)
 	case "uninstall":
-		results, err := install.Uninstall(context.Background(), options)
+		results, err := install.Uninstall(ctx, options)
 		if writeErr := writeJSON(stdout, results); writeErr != nil {
 			return writeErr
 		}
@@ -569,7 +606,7 @@ func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	return writeJSON(stdout, output)
 }
 
-func runMCP(args []string, stderr io.Writer) error {
+func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
 	flags := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
@@ -584,7 +621,7 @@ func runMCP(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return mcpserver.Run(context.Background(), s)
+	return mcpserver.Run(ctx, s)
 }
 
 func runReconcile(args []string, stdout, stderr io.Writer) error {
@@ -765,7 +802,7 @@ func runInit(args []string, stdout, stderr io.Writer) error {
 	return writeJSON(stdout, map[string]any{"projectId": s.Project.Config.ProjectID, "root": s.Project.Root})
 }
 
-func runGraph(args []string, stdout, stderr io.Writer) error {
+func runGraph(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: dagrail graph <import|export|validate|preview-change|apply-change>")
 	}
@@ -794,7 +831,7 @@ func runGraph(args []string, stdout, stderr io.Writer) error {
 			if !validBoundedJSON(*providerInput, 64*1024) {
 				return fmt.Errorf("--input must be valid JSON no larger than 64 KiB")
 			}
-			result, err = s.ImportGraphFromProvider(context.Background(), *providerID, json.RawMessage(*providerInput), *key, *role)
+			result, err = s.ImportGraphFromProvider(ctx, *providerID, json.RawMessage(*providerInput), *key, *role)
 		} else {
 			result, err = s.ImportGraph(*file, *key, *role)
 		}
@@ -1129,12 +1166,40 @@ func runRelease(args []string, stdout, stderr io.Writer) error {
 	}
 }
 
-func runDoctor(args []string, stdout, stderr io.Writer) error {
+func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) > 0 && args[0] == "install" {
+		flags := flag.NewFlagSet("doctor install", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		harnesses := flags.String("harness", "codex,claude-code,copilot-cli", "comma-separated harnesses")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 {
+			return usagef("usage: dagrail doctor install [--harness list]")
+		}
+		report, err := install.Diagnose(ctx, install.Options{Harnesses: []string{*harnesses}})
+		if err != nil {
+			return err
+		}
+		if err := writeJSON(stdout, report); err != nil {
+			return err
+		}
+		if !report.Healthy {
+			return diagnosticError(fmt.Errorf("installation diagnostic found failed checks"))
+		}
+		return nil
+	}
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		return usagef("usage: dagrail doctor [--root path] or dagrail doctor install [--harness list]")
+	}
 	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if flags.NArg() != 0 {
+		return usagef("usage: dagrail doctor [--root path]")
 	}
 	s, err := service.Open(*root)
 	if err != nil {
@@ -1145,12 +1210,12 @@ func runDoctor(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if !report.Healthy {
-		return fmt.Errorf("doctor found failed checks")
+		return diagnosticError(fmt.Errorf("doctor found failed checks"))
 	}
 	return nil
 }
 
-func runProjection(args []string, stdout, stderr io.Writer) error {
+func runProjection(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: dagrail projection <rebuild|render>")
 	}
@@ -1175,7 +1240,7 @@ func runProjection(args []string, stdout, stderr io.Writer) error {
 		if *providerID == "" {
 			return fmt.Errorf("--provider is required")
 		}
-		result, err := s.RenderProjection(context.Background(), *providerID)
+		result, err := s.RenderProjection(ctx, *providerID)
 		if err != nil {
 			return err
 		}

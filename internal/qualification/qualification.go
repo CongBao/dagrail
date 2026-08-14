@@ -106,6 +106,7 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 	add("compatibility-contract", contractOK, chooseCode(contractOK, "contract_schema_valid", "contract_schema_invalid"))
 
 	surfaces := []contract.DocumentedSurface{
+		contractReport.CommandCatalog, contractReport.CLIError, contractReport.Installation,
 		contractReport.UI, contractReport.Security, contractReport.JournalVerification,
 		contractReport.PluginConformance, contractReport.Support, contractReport.Recovery,
 		contractReport.ReleaseQualification, contractReport.ReleaseManifest, contractReport.ReleaseVerification,

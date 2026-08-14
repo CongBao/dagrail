@@ -117,6 +117,10 @@ DAGrail advances through evidence-backed milestones. A version is complete only 
 - bounded progress and cancellation behavior for slow local operations;
 - installation and upgrade diagnostics that remain actionable without raw host output.
 
+Delivered in v0.17.0. Error categories remain intentionally broad: domain-specific
+policy and lifecycle details stay in their typed command reports rather than becoming
+an unstable taxonomy of process exit codes.
+
 ## v0.18.0 — 1.0 readiness convergence
 
 - historical-binary upgrade and rollback matrix across the beta compatibility window;

@@ -33,6 +33,8 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 - replaceable sessions through stable roles, leases, attempts, and checkpoints;
 - revision-bound allowed actions instead of hand-written lifecycle envelopes;
 - bounded role-specific context through CLI or six high-level MCP tools;
+- one machine-readable command catalog, generated shell completion, bounded typed
+  process errors, and path-free installation diagnostics;
 - a machine-readable beta compatibility contract and digest-bound observe-only shadows;
 - immutable execution packages and deterministic evidence-reuse decisions;
 - bounded compile-in providers with schema and stability contracts;
@@ -47,7 +49,7 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 
 ## Status
 
-`v0.16.0` is a pre-1.0 release candidate: local-first and single-user, with one native Go
+`v0.17.0` is a pre-1.0 release candidate: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
 stdio MCP. Its operational surface adds explainable dependency blockers, incident
 circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
@@ -66,6 +68,12 @@ The v0.16 distribution contract adds an offline-verifiable manifest for the comp
 six-platform release set: six closed binary archives, six SPDX inventories, sorted
 checksums, and exact tag/commit/source-date identity. Publication verifies that manifest
 before release and attests it together with the checksum set.
+
+The v0.17 operator surface adds `dagrail commands`, catalog-generated completion for
+Bash, Zsh, Fish, and PowerShell, opt-in bounded JSON errors with stable broad exit
+classes, cancellation propagation into slow host/provider/UI/MCP work, and a path-free
+`dagrail doctor install` report. Use `--errors=json` before the command, or set
+`DAGRAIL_ERROR_FORMAT=json`, when an automation needs the error envelope.
 
 The structural release report validates public source and automated gate
 declarations, but deliberately reports `productionValidated: false`. Independent

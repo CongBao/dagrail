@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"github.com/CongBao/dagrail/internal/commandcatalog"
 	"github.com/CongBao/dagrail/internal/install"
 	"github.com/CongBao/dagrail/internal/journal"
 	"github.com/CongBao/dagrail/internal/mcpserver"
@@ -41,6 +42,9 @@ type Report struct {
 	Stability            string                   `json:"stability"`
 	Graph                VersionedSurface         `json:"graph"`
 	CLI                  VersionedSurface         `json:"cli"`
+	CommandCatalog       DocumentedSurface        `json:"commandCatalog"`
+	CLIError             DocumentedSurface        `json:"cliError"`
+	Installation         DocumentedSurface        `json:"installationDiagnostic"`
 	UI                   DocumentedSurface        `json:"ui"`
 	Security             DocumentedSurface        `json:"security"`
 	JournalVerification  DocumentedSurface        `json:"journalVerification"`
@@ -67,6 +71,24 @@ func Current() Report {
 		Stability:  "beta",
 		Graph:      VersionedSurface{APIVersion: "dagrail.io/v1alpha1", Stability: "additive"},
 		CLI:        VersionedSurface{APIVersion: "dagrail.io/cli/v1beta1", Stability: "additive"},
+		CommandCatalog: DocumentedSurface{
+			APIVersion:   commandcatalog.APIVersion,
+			Stability:    "additive-machine-discovery",
+			SchemaPath:   "schemas/command-catalog-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:1d9b40770dca0a7bdd382de612f866609bc454f631f6fbc23aecbbf610bc792d",
+		},
+		CLIError: DocumentedSurface{
+			APIVersion:   "dagrail.io/cli-error/v1alpha1",
+			Stability:    "additive-opt-in-errors",
+			SchemaPath:   "schemas/cli-error-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:ce7c541fa46c92182cbeef29a181efec5f6fd70081d9a0048e1839d2eb531ff1",
+		},
+		Installation: DocumentedSurface{
+			APIVersion:   install.InstallationDiagnosticAPIVersion,
+			Stability:    "additive-local-diagnostic",
+			SchemaPath:   "schemas/installation-diagnostic-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:575f4d580dacc1b81c8ab5787d0d4c2e1904927beb5449a850d3ce35e60a3942",
+		},
 		UI: DocumentedSurface{
 			APIVersion:   "dagrail.io/ui/v1beta1",
 			Stability:    "additive-read-only",
@@ -134,9 +156,7 @@ func Current() Report {
 			{View: "reviewer", Bytes: 12288},
 			{View: "worker", Bytes: 8192},
 		},
-		Commands: []string{
-			"action", "backup", "context", "contract", "doctor", "evidence", "frontier", "graph", "harness", "history", "hook", "incident", "init", "inspect", "journal", "mcp", "observe", "plugin", "pre-wait", "projection", "provider", "qualify", "reconcile", "recovery", "release", "role", "security", "signature", "status", "support", "ui", "version",
-		},
+		Commands: commandcatalog.Names(),
 		Promises: []string{
 			"journal history is never rewritten by an upgrade",
 			"the six MCP tool names remain stable through the v0.x beta line",
@@ -149,6 +169,9 @@ func Current() Report {
 			"recovery rehearsal writes only to disposable storage and binds replay and projection evidence to one immutable journal head",
 			"release qualification distinguishes structural candidate evidence from outstanding production adoption evidence",
 			"published release sets bind exactly six archives, six SPDX inventories, sorted checksums, source identity, and bounded offline verification",
+			"command discovery and completion are generated from one bounded catalog",
+			"opt-in CLI error envelopes keep stable broad exit classes and preserve interruption",
+			"host plugin commands are output-bounded, time-bounded, and cancellation-aware",
 			"SQLite remains disposable and rebuildable from the verified journal",
 		},
 	}
