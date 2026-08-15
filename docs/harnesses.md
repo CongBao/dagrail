@@ -111,6 +111,11 @@ new thread. If the old process disappeared, takeover is allowed only after lease
 The replacement calls `dag_context` and continues from the durable checkpoint; chat
 history is neither required nor authoritative.
 
+MCP registrations always use the verified runtime's absolute path. Host hook manifests
+use the portable `dagrail hook ...` launcher form, so installation and conformance also
+start a fresh process and require that `dagrail` on `PATH` resolves to the exact same
+runtime. A missing or shadowed launcher fails closed before host installation.
+
 Native Codex or Claude resume sends a new bounded work instruction to an existing host
 session. It does not prove Node acceptance, and it never bypasses the Role lease. Copilot
 resume uses the manual envelope until a durable, capability-probed host lifecycle is

@@ -30,9 +30,10 @@ const (
 )
 
 const (
-	LegacySegmentSchemaVersion  = 1
-	CurrentSegmentSchemaVersion = 2
-	CurrentEventSchemaVersion   = 1
+	LegacySegmentSchemaVersion   = 1
+	PreviousSegmentSchemaVersion = 2
+	CurrentSegmentSchemaVersion  = 3
+	CurrentEventSchemaVersion    = 1
 )
 
 type Command struct {
@@ -40,6 +41,8 @@ type Command struct {
 	Kind           string `json:"kind"`
 	ActorRole      string `json:"actorRole,omitempty"`
 	IdempotencyKey string `json:"idempotencyKey"`
+	ObjectRef      string `json:"objectRef,omitempty"`
+	RequestDigest  string `json:"requestDigest,omitempty"`
 }
 
 type Event struct {
@@ -149,6 +152,14 @@ func (s *Store) AppendOnce(command Command, events []Event, now time.Time, expec
 	if err := domain.RejectSensitiveFields(commandRaw); err != nil {
 		return result, false, fmt.Errorf("journal command contains prohibited material: %w", err)
 	}
+	if command.RequestDigest != "" {
+		if len(command.RequestDigest) != len("sha256:")+64 || !strings.HasPrefix(command.RequestDigest, "sha256:") {
+			return result, false, fmt.Errorf("journal command request digest is invalid")
+		}
+		if _, err := hex.DecodeString(strings.TrimPrefix(command.RequestDigest, "sha256:")); err != nil {
+			return result, false, fmt.Errorf("journal command request digest is invalid")
+		}
+	}
 	err = s.WithLock(func() error {
 		segments, err := s.readAllUnlocked()
 		if err != nil {
@@ -159,8 +170,11 @@ func (s *Store) AppendOnce(command Command, events []Event, now time.Time, expec
 				if existing.Command.IdempotencyKey != command.IdempotencyKey {
 					continue
 				}
-				if existing.Command.Kind != command.Kind {
-					return fmt.Errorf("idempotency key is already bound to command %s", existing.Command.Kind)
+				if existing.Command.Kind != command.Kind ||
+					(existing.Command.ActorRole != "" && existing.Command.ActorRole != command.ActorRole) ||
+					(existing.Command.ObjectRef != "" && existing.Command.ObjectRef != command.ObjectRef) ||
+					(existing.Command.RequestDigest != "" && existing.Command.RequestDigest != command.RequestDigest) {
+					return fmt.Errorf("idempotency key is already bound to another command intent")
 				}
 				result = existing
 				return nil
@@ -360,7 +374,7 @@ func CompatibilityForSegments(segments []Segment) (CompatibilityReport, error) {
 	report := CompatibilityReport{
 		Compatible:              true,
 		SegmentCount:            len(segments),
-		ReadableSegmentSchemas:  []int{LegacySegmentSchemaVersion, CurrentSegmentSchemaVersion},
+		ReadableSegmentSchemas:  []int{LegacySegmentSchemaVersion, PreviousSegmentSchemaVersion, CurrentSegmentSchemaVersion},
 		CurrentWriteSchema:      CurrentSegmentSchemaVersion,
 		CurrentWriteEventSchema: CurrentEventSchemaVersion,
 		SegmentSchemas:          map[int]int{},
@@ -514,7 +528,7 @@ func validateStoredEvents(segmentSchema int, events []Event) error {
 			if event.SchemaVersion != 0 {
 				return fmt.Errorf("legacy event %d unexpectedly declares schema version %d", index, event.SchemaVersion)
 			}
-		case CurrentSegmentSchemaVersion:
+		case PreviousSegmentSchemaVersion, CurrentSegmentSchemaVersion:
 			if event.SchemaVersion != CurrentEventSchemaVersion {
 				return fmt.Errorf("event %d uses unsupported schema version %d", index, event.SchemaVersion)
 			}

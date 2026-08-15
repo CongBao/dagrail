@@ -182,6 +182,16 @@
       "type": "object", "additionalProperties": false, "required": ["id", "attemptId", "coreDigest", "createdAt"],
       "properties": {"id": {"type": "string"}, "attemptId": {"type": "string"}, "coreDigest": {"type": "string"}, "createdAt": {"type": "string"}}
     },
+    "decision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "nodeId", "attemptId", "roleId", "key", "source", "outcome", "createdAt"],
+      "properties": {
+        "id": {"type": "string"}, "nodeId": {"type": "string"}, "attemptId": {"type": "string"},
+        "roleId": {"type": "string"}, "key": {"type": "string"}, "source": {"type": "string"},
+        "outcome": {"type": "string"}, "providerId": {"type": "string"}, "providerVersion": {"type": "string"},
+        "createdAt": {"type": "string"}
+      }
+    },
     "lease": {
       "type": "object", "additionalProperties": false, "required": ["roleId", "harness", "sessionId", "boundAt", "expiresAt", "active"],
       "properties": {
@@ -208,7 +218,8 @@
       "properties": {
         "id": {"type": "string"}, "kind": {"type": "string"}, "quantity": {"type": "integer", "minimum": 1},
         "nodeId": {"type": "string"}, "attemptId": {"type": "string"}, "roleId": {"type": "string"},
-        "status": {"type": "string"}, "leasedAt": {"type": "string"}, "releasedAt": {"type": "string"}
+        "status": {"type": "string"}, "closureStatus": {"type": "string"},
+        "closureUpdatedAt": {"type": "string"}, "leasedAt": {"type": "string"}, "releasedAt": {"type": "string"}
       }
     },
     "effect": {
@@ -224,14 +235,16 @@
     },
     "nodeDetail": {
       "type": "object", "additionalProperties": false,
-      "required": ["apiVersion", "graphRevision", "headSequence", "contract", "runtime", "incoming", "outgoing", "attempts", "checkpoints", "evidence", "incidents", "resources", "effects"],
+      "required": ["apiVersion", "graphRevision", "headSequence", "counts", "truncated", "contract", "runtime", "incoming", "outgoing", "attempts", "checkpoints", "evidence", "decisions", "incidents", "resources", "effects"],
       "properties": {
         "apiVersion": {"const": "dagrail.io/ui/v1beta1"}, "graphRevision": {"type": "string"}, "headSequence": {"type": "integer", "minimum": 0},
+        "counts": {"$ref": "#/$defs/counts"}, "truncated": {"type": "object", "additionalProperties": {"type": "boolean"}},
         "contract": {"$ref": "#/$defs/nodeContract"}, "runtime": {"$ref": "#/$defs/runtime"}, "readiness": {"$ref": "#/$defs/readiness"},
-        "incoming": {"type": "array", "items": {"$ref": "#/$defs/edge"}}, "outgoing": {"type": "array", "items": {"$ref": "#/$defs/edge"}},
-        "attempts": {"type": "array", "items": {"$ref": "#/$defs/attempt"}}, "checkpoints": {"type": "array", "items": {"$ref": "#/$defs/checkpoint"}},
-        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}, "incidents": {"type": "array", "items": {"$ref": "#/$defs/incident"}},
-        "resources": {"type": "array", "items": {"$ref": "#/$defs/resource"}}, "effects": {"type": "array", "items": {"$ref": "#/$defs/effect"}}
+        "incoming": {"type": "array", "items": {"$ref": "#/$defs/edge"}, "maxItems": 100}, "outgoing": {"type": "array", "items": {"$ref": "#/$defs/edge"}, "maxItems": 100},
+        "attempts": {"type": "array", "items": {"$ref": "#/$defs/attempt"}, "maxItems": 100}, "checkpoints": {"type": "array", "items": {"$ref": "#/$defs/checkpoint"}, "maxItems": 100},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}, "maxItems": 100}, "decisions": {"type": "array", "items": {"$ref": "#/$defs/decision"}, "maxItems": 100},
+        "incidents": {"type": "array", "items": {"$ref": "#/$defs/incident"}, "maxItems": 100},
+        "resources": {"type": "array", "items": {"$ref": "#/$defs/resource"}, "maxItems": 100}, "effects": {"type": "array", "items": {"$ref": "#/$defs/effect"}, "maxItems": 100}
       }
     },
     "historyEntry": {

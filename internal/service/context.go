@@ -126,7 +126,7 @@ func (s *Service) ContextSince(view, roleID, nodeID string, budget int, cursor u
 		}
 	}
 	if roleID != "" && nodeID != "" {
-		if actions, listErr := s.ListActions(roleID, nodeID); listErr == nil {
+		if actions, listErr := s.listActions(state, roleID, nodeID); listErr == nil {
 			data["allowedActions"] = actions.Actions
 		}
 	}

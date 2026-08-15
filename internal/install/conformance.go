@@ -32,6 +32,7 @@ type HarnessConformance struct {
 	Detected         bool                    `json:"detected"`
 	PluginStatus     string                  `json:"pluginStatus"`
 	MCPConfigured    bool                    `json:"mcpConfigured"`
+	HookLauncher     bool                    `json:"hookLauncherVerified"`
 	Version          string                  `json:"version,omitempty"`
 	Capabilities     sdk.HarnessCapabilities `json:"capabilities"`
 	NativeMode       string                  `json:"nativeMode,omitempty"`
@@ -83,6 +84,7 @@ func ConformanceContext(ctx context.Context, options Options) (ConformanceReport
 	for _, state := range states {
 		stateByHarness[state.Harness] = state
 	}
+	hookLauncherVerified := validateHookLauncher(ctx, options.RuntimePath) == nil
 	for _, harnessID := range harnessIDs {
 		adapter, err := harness.New(harnessID)
 		if err != nil {
@@ -95,6 +97,7 @@ func ConformanceContext(ctx context.Context, options Options) (ConformanceReport
 			Detected:       probe.Detected,
 			PluginStatus:   state.Status,
 			MCPConfigured:  state.MCPConfigured,
+			HookLauncher:   hookLauncherVerified,
 			Version:        safeProbeVersion(probe.Version),
 			Capabilities:   probe.Capabilities,
 			NativeMode:     probe.NativeMode,
@@ -118,6 +121,9 @@ func ConformanceContext(ctx context.Context, options Options) (ConformanceReport
 		}
 		if !item.MCPConfigured {
 			item.UnavailableCodes = append(item.UnavailableCodes, "mcp_not_configured")
+		}
+		if !item.HookLauncher {
+			item.UnavailableCodes = append(item.UnavailableCodes, "hook_launcher_unverified")
 		}
 		if !item.ManualFallback {
 			item.UnavailableCodes = append(item.UnavailableCodes, "manual_fallback_missing")

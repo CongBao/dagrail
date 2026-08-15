@@ -24,6 +24,10 @@ NodeKind-specific capability. Older Graph definitions remain importable but cann
 apply newly protected mutations until a revision grants the corresponding capability.
 Terminal actions are `task.complete`, `review.resolve`, `decision.record`,
 `gate.evaluate`, and `effect.complete`; custom NodeKinds retain `attempt.finish`.
+New mutation commands also bind the idempotency key to actor, target, command kind, and
+an RFC 8785 request digest. Reusing a key with changed intent fails closed. Historical
+commands without this additive journal field retain their original bytes and narrower
+retry contract.
 
 `dagrail commands` returns the detailed CommandCatalog v1alpha1 used by dispatcher
 validation and shell completion. `dagrail completion bash|zsh|fish|powershell` emits a
@@ -70,6 +74,9 @@ The stdio server exposes only these high-level tools:
 Tool input-schema digests are part of `dagrail contract`. Callers cannot construct raw
 lifecycle transitions; allowed-action refs bind project, head, Graph Revision, Role
 lease, Node/Attempt, provider set, and expiry.
+Graph apply and effect reconciliation recheck the active owner lease. Tool cancellation
+is propagated into policy providers and effect adapters; cancellation never commits a
+semantic Decision that was not returned.
 
 Decision and Gate Nodes produce DecisionRecord v1alpha1 authority. A record binds the
 closed outcome and digest-only evidence to one Graph Revision and Attempt. Provider

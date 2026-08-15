@@ -81,7 +81,7 @@ func TestUserCanInitializeImportGraphAndReadFrontier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("journal compatibility: %v", err)
 	}
-	if !strings.Contains(compatibility, `"currentWriteSegmentSchema":2`) || !strings.Contains(compatibility, `"projectionSchemaVersion":4`) {
+	if !strings.Contains(compatibility, `"currentWriteSegmentSchema":3`) || !strings.Contains(compatibility, `"projectionSchemaVersion":4`) {
 		t.Fatalf("compatibility report lacks current schemas: %s", compatibility)
 	}
 	verification, err := run("journal", "verify", "--root", root)

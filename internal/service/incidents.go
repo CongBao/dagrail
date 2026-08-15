@@ -15,7 +15,11 @@ func (s *Service) ProgressIncident(incidentID, actorRole, note string, madeProgr
 	if err := validateIncidentText("progress note", note, 1024); err != nil {
 		return domain.Incident{}, err
 	}
-	return s.updateIncident(incidentID, actorRole, idempotencyKey, "incident.progress", func(incident *domain.Incident, now time.Time) error {
+	requestDigest, err := incidentRequestDigest("incident.progress", map[string]any{"note": note, "madeProgress": madeProgress})
+	if err != nil {
+		return domain.Incident{}, err
+	}
+	return s.updateIncident(incidentID, actorRole, idempotencyKey, "incident.progress", requestDigest, func(incident *domain.Incident, now time.Time) error {
 		if incident.Status != "open" {
 			return fmt.Errorf("incident %s is not open", incident.ID)
 		}
@@ -40,7 +44,11 @@ func (s *Service) TripIncident(incidentID, actorRole, reason, idempotencyKey str
 	if err := validateIncidentText("circuit reason", reason, 512); err != nil {
 		return domain.Incident{}, err
 	}
-	return s.updateIncident(incidentID, actorRole, idempotencyKey, "incident.trip", func(incident *domain.Incident, _ time.Time) error {
+	requestDigest, err := incidentRequestDigest("incident.trip", map[string]any{"reason": reason})
+	if err != nil {
+		return domain.Incident{}, err
+	}
+	return s.updateIncident(incidentID, actorRole, idempotencyKey, "incident.trip", requestDigest, func(incident *domain.Incident, _ time.Time) error {
 		if incident.Status == "resolved" {
 			return fmt.Errorf("resolved incident cannot be tripped")
 		}
@@ -53,7 +61,11 @@ func (s *Service) ResolveIncident(incidentID, actorRole, resolution, idempotency
 	if err := validateIncidentText("resolution", resolution, 1024); err != nil {
 		return domain.Incident{}, err
 	}
-	return s.updateIncident(incidentID, actorRole, idempotencyKey, "incident.resolve", func(incident *domain.Incident, _ time.Time) error {
+	requestDigest, err := incidentRequestDigest("incident.resolve", map[string]any{"resolution": resolution})
+	if err != nil {
+		return domain.Incident{}, err
+	}
+	return s.updateIncident(incidentID, actorRole, idempotencyKey, "incident.resolve", requestDigest, func(incident *domain.Incident, _ time.Time) error {
 		if incident.Status == "resolved" {
 			return nil
 		}
@@ -69,7 +81,11 @@ func (s *Service) SetIncidentDisposition(incidentID, actorRole, disposition, not
 	if err := validateIncidentText("disposition note", note, 1024); err != nil {
 		return domain.Incident{}, err
 	}
-	return s.updateIncident(incidentID, actorRole, idempotencyKey, "incident.disposition", func(incident *domain.Incident, now time.Time) error {
+	requestDigest, err := incidentRequestDigest("incident.disposition", map[string]any{"disposition": disposition, "note": note})
+	if err != nil {
+		return domain.Incident{}, err
+	}
+	return s.updateIncident(incidentID, actorRole, idempotencyKey, "incident.disposition", requestDigest, func(incident *domain.Incident, now time.Time) error {
 		if incident.Status == "resolved" {
 			return fmt.Errorf("resolved incident cannot receive a disposition")
 		}
@@ -96,7 +112,15 @@ func validateIncidentText(label, value string, maximum int) error {
 	return nil
 }
 
-func (s *Service) updateIncident(incidentID, actorRole, idempotencyKey, commandKind string, mutate func(*domain.Incident, time.Time) error) (domain.Incident, error) {
+func incidentRequestDigest(kind string, value any) (string, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return authorityRequestDigest(kind, raw)
+}
+
+func (s *Service) updateIncident(incidentID, actorRole, idempotencyKey, commandKind, requestDigest string, mutate func(*domain.Incident, time.Time) error) (domain.Incident, error) {
 	if incidentID == "" || actorRole == "" || idempotencyKey == "" {
 		return domain.Incident{}, fmt.Errorf("incident, actor role and idempotency key are required")
 	}
@@ -104,7 +128,10 @@ func (s *Service) updateIncident(incidentID, actorRole, idempotencyKey, commandK
 	if err != nil {
 		return domain.Incident{}, err
 	}
-	if _, ok := state.Commands[idempotencyKey]; ok {
+	if command, ok := state.Commands[idempotencyKey]; ok {
+		if command.Kind != commandKind || command.ActorRole != actorRole || command.ObjectRef != "incident:"+incidentID || (command.RequestDigest != "" && command.RequestDigest != requestDigest) {
+			return domain.Incident{}, fmt.Errorf("idempotency key is already bound to another command")
+		}
 		incident, exists := state.Incidents[incidentID]
 		if !exists {
 			return domain.Incident{}, fmt.Errorf("idempotent command references unavailable incident")
@@ -121,6 +148,9 @@ func (s *Service) updateIncident(incidentID, actorRole, idempotencyKey, commandK
 	if _, err := s.requireRoleCapability(state, actorRole, domain.CapabilityIncidentManage); err != nil {
 		return domain.Incident{}, err
 	}
+	if _, err := s.validLease(state, actorRole); err != nil {
+		return domain.Incident{}, err
+	}
 	now := s.Now().UTC()
 	if err := mutate(&incident, now); err != nil {
 		return domain.Incident{}, err
@@ -128,7 +158,7 @@ func (s *Service) updateIncident(incidentID, actorRole, idempotencyKey, commandK
 	incident.UpdatedAt = now.Format(time.RFC3339Nano)
 	raw, _ := json.Marshal(incident)
 	expectedHead := state.HeadHash
-	if _, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: commandKind, ActorRole: actorRole, IdempotencyKey: idempotencyKey}, []journal.Event{{Type: "incident.updated", Payload: raw}}, now, &expectedHead); err != nil {
+	if _, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: commandKind, ActorRole: actorRole, IdempotencyKey: idempotencyKey, ObjectRef: "incident:" + incidentID, RequestDigest: requestDigest}, []journal.Event{{Type: "incident.updated", Payload: raw}}, now, &expectedHead); err != nil {
 		return domain.Incident{}, err
 	}
 	state, segments, err := s.load()

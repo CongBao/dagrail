@@ -792,6 +792,9 @@ type State struct {
 
 type CommandResult struct {
 	Kind          string `json:"kind"`
+	ActorRole     string `json:"actorRole,omitempty"`
+	ObjectRef     string `json:"objectRef,omitempty"`
+	RequestDigest string `json:"requestDigest,omitempty"`
 	GraphRevision string `json:"graphRevision,omitempty"`
 	Sequence      uint64 `json:"sequence"`
 }

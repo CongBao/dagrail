@@ -112,10 +112,17 @@ func (s *Service) ApplyGraphChange(path, token, idempotencyKey, actorRole string
 	if err != nil {
 		return GraphImpact{}, err
 	}
+	requestDigest := "sha256:" + tokenPayload.PatchDigest
 	if command, ok := state.Commands[idempotencyKey]; ok {
+		if command.Kind != "graph.change" || command.ActorRole != actorRole || command.ObjectRef != "graph:"+tokenPayload.ProposedRevision || (command.RequestDigest != "" && command.RequestDigest != requestDigest) {
+			return GraphImpact{}, fmt.Errorf("idempotency key is already bound to another command")
+		}
 		return graphImpactForSequence(segments, command.Sequence)
 	}
 	if _, err := s.requireRoleCapability(state, actorRole, domain.CapabilityGraphChange); err != nil {
+		return GraphImpact{}, err
+	}
+	if _, err := s.validLease(state, actorRole); err != nil {
 		return GraphImpact{}, err
 	}
 	if tokenPayload.ProjectID != state.ProjectID || tokenPayload.HeadHash != state.HeadHash || tokenPayload.CurrentRevision != state.GraphRevision || tokenPayload.ProviderSet != providerFingerprint(state.Graph) {
@@ -158,7 +165,7 @@ func (s *Service) ApplyGraphChange(path, token, idempotencyKey, actorRole string
 		Impact           GraphImpact            `json:"impact"`
 	}{graph, revision, state.GraphRevision, superseded, impact})
 	expectedHead := tokenPayload.HeadHash
-	segment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "graph.change", ActorRole: actorRole, IdempotencyKey: idempotencyKey}, []journal.Event{{Type: "graph.revised", Payload: payload}}, s.Now(), &expectedHead)
+	segment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "graph.change", ActorRole: actorRole, IdempotencyKey: idempotencyKey, ObjectRef: "graph:" + revision, RequestDigest: requestDigest}, []journal.Event{{Type: "graph.revised", Payload: payload}}, s.Now(), &expectedHead)
 	if err != nil {
 		return GraphImpact{}, err
 	}

@@ -118,6 +118,8 @@ func Install(ctx context.Context, options Options) ([]Result, error) {
 	}
 	results := make([]Result, 0, len(plans))
 	var failures []error
+	var runtimeValidationErr error
+	runtimeValidated := false
 	for _, plan := range plans {
 		executable := findExecutable(plan.Harness)
 		plan.Executable = executable
@@ -130,9 +132,16 @@ func Install(ctx context.Context, options Options) ([]Result, error) {
 			results = append(results, Result{Harness: plan.Harness, Status: "planned", Executable: executable, Message: strings.Join(plan.MCPAdd, " ")})
 			continue
 		}
-		if err := validateFreshRuntime(ctx, options.RuntimePath); err != nil {
-			results = append(results, Result{Harness: plan.Harness, Status: "failed", Executable: executable, Message: err.Error()})
-			failures = append(failures, err)
+		if !runtimeValidated {
+			runtimeValidationErr = validateFreshRuntime(ctx, options.RuntimePath)
+			if runtimeValidationErr == nil {
+				runtimeValidationErr = validateHookLauncher(ctx, options.RuntimePath)
+			}
+			runtimeValidated = true
+		}
+		if runtimeValidationErr != nil {
+			results = append(results, Result{Harness: plan.Harness, Status: "failed", Executable: executable, Message: runtimeValidationErr.Error()})
+			failures = append(failures, runtimeValidationErr)
 			continue
 		}
 		marketplaceOutput, marketplaceErr := run(ctx, executable, plan.MarketplaceAdd...)
@@ -257,6 +266,30 @@ func DefaultRuntimePath() (string, error) {
 		return filepath.Join(root, "DAGrail", "bin", "dagrail.exe"), nil
 	}
 	return filepath.Join(home, ".local", "bin", "dagrail"), nil
+}
+
+func validateHookLauncher(ctx context.Context, runtimePath string) error {
+	resolved, err := exec.LookPath("dagrail")
+	if err != nil {
+		return fmt.Errorf("hook launcher dagrail is not available on PATH")
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return fmt.Errorf("resolve hook launcher: %w", err)
+	}
+	want, err := filepath.Abs(runtimePath)
+	if err != nil {
+		return fmt.Errorf("resolve runtime path: %w", err)
+	}
+	resolvedReal, resolvedErr := filepath.EvalSymlinks(resolved)
+	wantReal, wantErr := filepath.EvalSymlinks(want)
+	if resolvedErr != nil || wantErr != nil || filepath.Clean(resolvedReal) != filepath.Clean(wantReal) {
+		return fmt.Errorf("hook launcher dagrail does not resolve to the verified runtime")
+	}
+	if err := validateFreshRuntime(ctx, resolvedReal); err != nil {
+		return fmt.Errorf("hook launcher fresh-process probe: %w", err)
+	}
+	return nil
 }
 
 func normalizeHarnesses(values []string) ([]string, error) {

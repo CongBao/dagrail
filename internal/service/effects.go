@@ -17,7 +17,7 @@ type effectNodeInput struct {
 	Request json.RawMessage `json:"request"`
 }
 
-func (s *Service) applyEffectAction(state domain.State, payload actionRefPayload, input json.RawMessage, idempotencyKey string, node domain.NodeDefinition) (ActionResult, error) {
+func (s *Service) applyEffectAction(ctx context.Context, state domain.State, payload actionRefPayload, input json.RawMessage, idempotencyKey, requestDigest string, node domain.NodeDefinition) (ActionResult, error) {
 	attempt, err := activeAttempt(state, payload)
 	if err != nil {
 		return ActionResult{}, err
@@ -40,7 +40,7 @@ func (s *Service) applyEffectAction(state domain.State, payload actionRefPayload
 		return ActionResult{}, fmt.Errorf("effect adapter %s is not registered", declaration.Adapter)
 	}
 	request := sdk.EffectRequest{ActionID: payload.ActionID, ProjectRoot: s.Project.Root, NodeID: node.ID, AttemptID: attempt.ID, IdempotencyKey: idempotencyKey, Request: declaration.Request}
-	prepared, err := adapter.Prepare(context.Background(), request)
+	prepared, err := adapter.Prepare(ctx, request)
 	if err != nil {
 		return ActionResult{}, err
 	}
@@ -59,7 +59,7 @@ func (s *Service) applyEffectAction(state domain.State, payload actionRefPayload
 	action := domain.ActionRecord{ID: payload.ActionID, Kind: payload.Kind, NodeID: node.ID, AttemptID: attempt.ID, Status: "prepared", Input: input}
 	actionRaw, _ := json.Marshal(action)
 	expectedHead := payload.HeadHash
-	segment, created, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: payload.Kind, ActorRole: payload.RoleID, IdempotencyKey: idempotencyKey}, []journal.Event{{Type: "effect.prepared", Payload: effectRaw}, {Type: "action.applied", Payload: actionRaw}}, s.Now(), &expectedHead)
+	segment, created, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: payload.Kind, ActorRole: payload.RoleID, IdempotencyKey: idempotencyKey, ObjectRef: "action:" + payload.ActionID, RequestDigest: requestDigest}, []journal.Event{{Type: "effect.prepared", Payload: effectRaw}, {Type: "action.applied", Payload: actionRaw}}, s.Now(), &expectedHead)
 	if err != nil {
 		return ActionResult{}, err
 	}
@@ -75,7 +75,7 @@ func (s *Service) applyEffectAction(state domain.State, payload actionRefPayload
 	}
 	dispatchedAt := s.Now().UTC().Format(time.RFC3339Nano)
 	dispatchedRaw, _ := json.Marshal(map[string]string{"actionId": payload.ActionID, "dispatchedAt": dispatchedAt})
-	if _, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "effect.dispatch", ActorRole: payload.RoleID, IdempotencyKey: idempotencyKey + "/dispatch"}, []journal.Event{{Type: "effect.dispatched", Payload: dispatchedRaw}}, s.Now(), nil); err != nil {
+	if _, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "effect.dispatch", ActorRole: payload.RoleID, IdempotencyKey: idempotencyKey + "/dispatch", ObjectRef: "effect:" + payload.ActionID, RequestDigest: requestDigest}, []journal.Event{{Type: "effect.dispatched", Payload: dispatchedRaw}}, s.Now(), nil); err != nil {
 		return ActionResult{}, err
 	}
 	state, segments, err = s.load()
@@ -85,14 +85,14 @@ func (s *Service) applyEffectAction(state domain.State, payload actionRefPayload
 	if err := s.Projection.Sync(state, segments); err != nil {
 		return ActionResult{}, err
 	}
-	receipt, dispatchErr := adapter.Dispatch(context.Background(), request, prepared)
+	receipt, dispatchErr := adapter.Dispatch(ctx, request, prepared)
 	if dispatchErr != nil {
 		receipt = sdk.EffectReceipt{Status: "unknown", Detail: mustJSON(map[string]string{"error": boundedError(dispatchErr)})}
 	}
 	if receipt.Status == "" {
 		receipt.Status = "unknown"
 	}
-	observed, observeErr := s.observeEffect(payload.ActionID, receipt, idempotencyKey+"/observe")
+	observed, observeErr := s.observeEffect(payload.ActionID, payload.RoleID, receipt, idempotencyKey+"/observe", requestDigest)
 	if observeErr != nil {
 		return ActionResult{ActionID: payload.ActionID, Kind: payload.Kind, NodeID: node.ID, AttemptID: attempt.ID, Status: "unknown", Sequence: segment.Sequence}, fmt.Errorf("effect may have occurred; reconcile action %s: %w", payload.ActionID, observeErr)
 	}
@@ -100,6 +100,13 @@ func (s *Service) applyEffectAction(state domain.State, payload actionRefPayload
 }
 
 func (s *Service) ReconcileEffect(actionID string, evidence json.RawMessage, idempotencyKey string) (domain.EffectAction, error) {
+	return s.ReconcileEffectContext(context.Background(), actionID, evidence, idempotencyKey)
+}
+
+func (s *Service) ReconcileEffectContext(ctx context.Context, actionID string, evidence json.RawMessage, idempotencyKey string) (domain.EffectAction, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.EffectAction{}, err
+	}
 	if actionID == "" || idempotencyKey == "" {
 		return domain.EffectAction{}, fmt.Errorf("action and idempotency key are required")
 	}
@@ -114,12 +121,19 @@ func (s *Service) ReconcileEffect(actionID string, evidence json.RawMessage, ide
 			return domain.EffectAction{}, fmt.Errorf("reconciliation evidence: %w", err)
 		}
 	}
+	requestDigest, err := authorityRequestDigest("effect.reconcile", evidence)
+	if err != nil {
+		return domain.EffectAction{}, fmt.Errorf("reconciliation evidence digest: %w", err)
+	}
 	state, _, err := s.load()
 	if err != nil {
 		return domain.EffectAction{}, err
 	}
-	if _, ok := state.Commands[idempotencyKey]; ok {
+	if command, ok := state.Commands[idempotencyKey]; ok {
 		effect, exists := state.Effects[actionID]
+		if !exists || command.Kind != "effect.observe" || command.ActorRole != effect.OwnerRole || command.ObjectRef != "effect:"+actionID || (command.RequestDigest != "" && command.RequestDigest != requestDigest) {
+			return domain.EffectAction{}, fmt.Errorf("idempotency key is already bound to another command")
+		}
 		if exists {
 			return effect, nil
 		}
@@ -128,7 +142,15 @@ func (s *Service) ReconcileEffect(actionID string, evidence json.RawMessage, ide
 	if !ok {
 		return domain.EffectAction{}, fmt.Errorf("unknown effect action %s", actionID)
 	}
+	if command, exists := state.Commands[idempotencyKey+"/begin"]; exists {
+		if command.Kind != "effect.reconcile" || command.ActorRole != effect.OwnerRole || command.ObjectRef != "effect:"+actionID || (command.RequestDigest != "" && command.RequestDigest != requestDigest) {
+			return domain.EffectAction{}, fmt.Errorf("idempotency key is already bound to another reconciliation request")
+		}
+	}
 	if _, err := s.requireRoleCapability(state, effect.OwnerRole, domain.CapabilityEffectReconcile, domain.CapabilityEffectApply); err != nil {
+		return domain.EffectAction{}, err
+	}
+	if _, err := s.validLease(state, effect.OwnerRole); err != nil {
 		return domain.EffectAction{}, err
 	}
 	if effect.Status == "confirmed" {
@@ -149,17 +171,17 @@ func (s *Service) ReconcileEffect(actionID string, evidence json.RawMessage, ide
 	reconcilingAt := s.Now().UTC().Format(time.RFC3339Nano)
 	reconcilingRaw, _ := json.Marshal(map[string]string{"actionId": actionID, "reconcilingAt": reconcilingAt})
 	expectedHead := state.HeadHash
-	if _, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "effect.reconcile", ActorRole: effect.OwnerRole, IdempotencyKey: idempotencyKey + "/begin"}, []journal.Event{{Type: "effect.reconciling", Payload: reconcilingRaw}}, s.Now(), &expectedHead); err != nil {
+	if _, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "effect.reconcile", ActorRole: effect.OwnerRole, IdempotencyKey: idempotencyKey + "/begin", ObjectRef: "effect:" + actionID, RequestDigest: requestDigest}, []journal.Event{{Type: "effect.reconciling", Payload: reconcilingRaw}}, s.Now(), &expectedHead); err != nil {
 		return domain.EffectAction{}, err
 	}
-	receipt, err := adapter.Reconcile(context.Background(), request, prepared, evidence)
+	receipt, err := adapter.Reconcile(ctx, request, prepared, evidence)
 	if err != nil {
 		return domain.EffectAction{}, err
 	}
-	return s.observeEffect(actionID, receipt, idempotencyKey)
+	return s.observeEffect(actionID, effect.OwnerRole, receipt, idempotencyKey, requestDigest)
 }
 
-func (s *Service) observeEffect(actionID string, receipt sdk.EffectReceipt, idempotencyKey string) (domain.EffectAction, error) {
+func (s *Service) observeEffect(actionID, actorRole string, receipt sdk.EffectReceipt, idempotencyKey, requestDigest string) (domain.EffectAction, error) {
 	switch receipt.Status {
 	case "confirmed", "failed", "unknown", "reconciling":
 	default:
@@ -227,7 +249,7 @@ func (s *Service) observeEffect(actionID string, receipt sdk.EffectReceipt, idem
 			events = append(events, journal.Event{Type: "incident.resolved", Payload: resolvedRaw})
 		}
 	}
-	if _, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "effect.observe", IdempotencyKey: idempotencyKey}, events, s.Now(), nil); err != nil {
+	if _, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "effect.observe", ActorRole: actorRole, IdempotencyKey: idempotencyKey, ObjectRef: "effect:" + actionID, RequestDigest: requestDigest}, events, s.Now(), nil); err != nil {
 		return domain.EffectAction{}, err
 	}
 	state, segments, err := s.load()

@@ -20,6 +20,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Decision contract**: the closed key and `human | llm | provider` source declared by a Decision or Gate Node; provider contracts also bind provider and policy IDs.
 - **Decision record**: immutable journal authority binding one closed outcome and its facts/evidence to Project, Graph Revision, Node, Attempt, Role, input digest, and optional exact provider version/schema.
 - **Journal segment**: the atomic command commit containing one or more immutable events.
+- **Command intent digest**: an RFC 8785 digest over a mutation's bounded request,
+  bound to its idempotency key so a retry cannot silently change intent.
 - **Stored event**: the exact versioned event bytes committed inside a Journal segment and covered by its hash.
 - **Normalized event**: the current in-memory representation produced from a verified Stored event.
 - **Upcast**: a deterministic, side-effect-free conversion from a verified older event version to the current Normalized event; it never rewrites history.
@@ -153,6 +155,9 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 27. Human, LLM, and provider judgments become state only as revision-bound Decision records; opaque provider output and chat remain non-authoritative.
 28. Attempt completion and Node supersession cannot release active resources; only a confirmed closure receipt can return declared capacity.
 29. A repository used for qualification may drive conversion fixtures and comparisons, but its domain names, paths, and lifecycle conventions cannot enter the DAGrail kernel or public generic contracts.
+30. A new mutation command binds its idempotency key to actor, object, command kind,
+    and normalized request intent; a changed retry fails closed instead of returning an
+    unrelated earlier result.
 
 ## Bounded contexts
 

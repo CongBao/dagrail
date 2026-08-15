@@ -1,6 +1,6 @@
 # Threat model v1
 
-This model applies to DAGrail v0.18's local CLI, stdio MCP server, compile-in
+This model applies to DAGrail v0.20's local CLI, stdio MCP server, compile-in
 providers, harness subprocesses, loopback Explorer, immutable journal, SQLite
 projection, portable exports, and plugin runtime. It is versioned because changing a
 trust boundary is an architecture change, not a documentation edit.
@@ -57,6 +57,8 @@ proved by the portable binary.
   omitted entry-point check cannot silently persist recognized credential material.
 - Dynamic-graph impact tokens authorize one apply attempt and are removed before the
   resulting Graph Revision event is committed.
+- New mutation commands bind idempotency keys to actor, target, kind, and canonical
+  request digest, preventing a changed retry from inheriting an earlier result.
 - Plugin materialization uses a closed embedded file set, host-specific relative local
   marketplace sources, a digest-addressed destination, and exact mutation detection.
 - Support output pseudonymizes project identity and excludes absolute paths, Graph and

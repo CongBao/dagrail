@@ -8,6 +8,9 @@ digests, context budgets, and command inventory implemented by the current binar
 
 - Verified journal history is never rewritten. A release either reads a stored schema
   through an explicit upcaster or fails closed before reduction.
+- Journal segment schema v3 adds canonical command-intent bindings. Existing v1 and v2
+  segments remain readable; new callers must not reuse an idempotency key with changed
+  actor, object, command kind, or request intent.
 - The six MCP tool names remain stable. Documented input fields and CLI JSON fields are
   additive unless a new API version is selected.
 - Stable provider contracts remain source-compatible. Additions use new optional
@@ -40,7 +43,7 @@ digests, context budgets, and command inventory implemented by the current binar
   additive in-version; the four broad error classes and their exit codes remain stable
   through the beta line. Completion is generated from the catalog, not an independent
   authority. Installation diagnostics remain path-free and omit raw host output.
-- HistoricalBinaryMatrix v1alpha1 closes the v0.10–v0.18 input window by exact commit.
+- HistoricalBinaryMatrix v1alpha1 closes the v0.10–v0.19 input window by exact commit.
   ReadinessDecision v1alpha1 may declare external-validation readiness but cannot set
   production validation or 1.0 readiness. Changing a pinned historical commit or
   weakening an adoption gap requires a new contract version and explicit rationale.

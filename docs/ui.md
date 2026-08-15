@@ -36,7 +36,7 @@ that foreground server remains running.
 | `/api/v1/overview` | 100 ready IDs plus aggregate counts |
 | `/api/v1/nodes` | 200 Nodes per page |
 | `/api/v1/topology` | 500 Nodes maximum; UI requests 200 |
-| `/api/v1/node?id=…` | one payload-free Node detail |
+| `/api/v1/node?id=…` | one payload-free Node detail; 100 items per child collection plus counts/truncation |
 | `/api/v1/history` | 100 payload-free entries |
 | `/api/v1/operations` | 200 latest objects of each kind |
 
@@ -53,6 +53,8 @@ SHA-256 digest is emitted by `dagrail contract`. Timeline navigation uses an exc
 `before` cursor so older/newer traversal is non-overlapping even when the oldest page is
 short. Node details omit Graph metadata, external-reference URLs, input bodies, effect
 requests, raw receipts, and artifact bodies.
+Decision rows expose only identity, closed outcome, source, provider identity, and time;
+resource rows expose typed closure state but never the closure receipt body.
 
 Topology is an operational map, not a graph editor. A focused response orders the focus
 first, then increasing hop distance and stable Node ID, so truncation never removes the

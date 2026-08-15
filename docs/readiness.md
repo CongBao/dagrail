@@ -27,7 +27,7 @@ be mistaken for production evidence.
 ## Historical compatibility evidence
 
 The closed beta window starts at v0.10. The manifest in
-`internal/compatibility/beta-window.json` pins the exact v0.10–v0.18 source commits. A
+`internal/compatibility/beta-window.json` pins the exact v0.10–v0.19 source commits. A
 dedicated CI and tag-release job builds every pinned binary plus the candidate, verifies
 every adjacent runtime install/upgrade/rollback/re-forward pair, then asks the candidate
 to verify and recover a journal created by v0.10. The manifest is immutable input: a
@@ -52,5 +52,5 @@ All four items must be recorded from real use rather than marked complete by CI:
 
 After those observations exist, a later release may define a signed or reviewable
 adoption-evidence format and select a new readiness schema that can truthfully set
-production validation and 1.0 readiness. v0.18 intentionally provides no flag or JSON
+production validation and 1.0 readiness. The v1alpha1 contract intentionally provides no flag or JSON
 field that lets a caller self-assert those outcomes.

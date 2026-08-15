@@ -65,24 +65,37 @@ func (s *Service) BindRole(roleID, harness, sessionID string, ttl time.Duration,
 	if roleID == "" || harness == "" || sessionID == "" {
 		return domain.RoleLease{}, fmt.Errorf("role, harness and session are required")
 	}
-	bindingRaw, err := json.Marshal(map[string]string{"roleId": roleID, "harness": harness, "sessionId": sessionID})
-	if err != nil {
-		return domain.RoleLease{}, err
-	}
-	if err := domain.RejectSensitiveFields(bindingRaw); err != nil {
-		return domain.RoleLease{}, fmt.Errorf("role binding contains prohibited material: %w", err)
-	}
 	if ttl <= 0 {
 		ttl = 15 * time.Minute
 	}
 	if ttl > 24*time.Hour {
 		return domain.RoleLease{}, fmt.Errorf("lease TTL cannot exceed 24 hours")
 	}
+	bindingRaw, err := json.Marshal(struct {
+		RoleID     string `json:"roleId"`
+		Harness    string `json:"harness"`
+		SessionID  string `json:"sessionId"`
+		TTLSeconds int64  `json:"ttlSeconds"`
+		Takeover   bool   `json:"takeover"`
+	}{roleID, harness, sessionID, int64(ttl / time.Second), takeover})
+	if err != nil {
+		return domain.RoleLease{}, err
+	}
+	if err := domain.RejectSensitiveFields(bindingRaw); err != nil {
+		return domain.RoleLease{}, fmt.Errorf("role binding contains prohibited material: %w", err)
+	}
+	requestDigest, err := authorityRequestDigest("role.bind", bindingRaw)
+	if err != nil {
+		return domain.RoleLease{}, err
+	}
 	state, _, err := s.load()
 	if err != nil {
 		return domain.RoleLease{}, err
 	}
-	if _, ok := state.Commands[idempotencyKey]; ok {
+	if command, ok := state.Commands[idempotencyKey]; ok {
+		if command.Kind != "role.bind" || command.ActorRole != roleID || command.ObjectRef != "role:"+roleID || (command.RequestDigest != "" && command.RequestDigest != requestDigest) {
+			return domain.RoleLease{}, fmt.Errorf("idempotency key is already bound to another command")
+		}
 		lease, exists := state.Leases[roleID]
 		if exists {
 			return lease, nil
@@ -113,7 +126,7 @@ func (s *Service) BindRole(roleID, harness, sessionID string, ttl time.Duration,
 	lease := domain.RoleLease{RoleID: roleID, Harness: harness, SessionID: sessionID, BoundAt: now.Format(time.RFC3339Nano), ExpiresAt: now.Add(ttl).Format(time.RFC3339Nano), Active: true}
 	payload, _ := json.Marshal(lease)
 	expectedHead := state.HeadHash
-	if _, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "role.bind", ActorRole: roleID, IdempotencyKey: idempotencyKey}, []journal.Event{{Type: "role.bound", Payload: payload}}, now, &expectedHead); err != nil {
+	if _, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "role.bind", ActorRole: roleID, IdempotencyKey: idempotencyKey, ObjectRef: "role:" + roleID, RequestDigest: requestDigest}, []journal.Event{{Type: "role.bound", Payload: payload}}, now, &expectedHead); err != nil {
 		return domain.RoleLease{}, err
 	}
 	state, segments, err := s.load()
@@ -130,11 +143,22 @@ func (s *Service) ReleaseRole(roleID, sessionID, idempotencyKey string) error {
 	if idempotencyKey == "" {
 		return fmt.Errorf("idempotency key is required")
 	}
+	requestRaw, err := json.Marshal(map[string]string{"roleId": roleID, "sessionId": sessionID})
+	if err != nil {
+		return err
+	}
+	requestDigest, err := authorityRequestDigest("role.release", requestRaw)
+	if err != nil {
+		return err
+	}
 	state, _, err := s.load()
 	if err != nil {
 		return err
 	}
-	if _, ok := state.Commands[idempotencyKey]; ok {
+	if command, ok := state.Commands[idempotencyKey]; ok {
+		if command.Kind != "role.release" || command.ActorRole != roleID || command.ObjectRef != "role:"+roleID || (command.RequestDigest != "" && command.RequestDigest != requestDigest) {
+			return fmt.Errorf("idempotency key is already bound to another command")
+		}
 		return nil
 	}
 	lease, ok := state.Leases[roleID]
@@ -143,7 +167,7 @@ func (s *Service) ReleaseRole(roleID, sessionID, idempotencyKey string) error {
 	}
 	payload, _ := json.Marshal(map[string]string{"roleId": roleID, "releasedAt": s.Now().UTC().Format(time.RFC3339Nano)})
 	expectedHead := state.HeadHash
-	if _, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "role.release", ActorRole: roleID, IdempotencyKey: idempotencyKey}, []journal.Event{{Type: "role.released", Payload: payload}}, s.Now(), &expectedHead); err != nil {
+	if _, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "role.release", ActorRole: roleID, IdempotencyKey: idempotencyKey, ObjectRef: "role:" + roleID, RequestDigest: requestDigest}, []journal.Event{{Type: "role.released", Payload: payload}}, s.Now(), &expectedHead); err != nil {
 		return err
 	}
 	state, segments, err := s.load()
@@ -158,6 +182,10 @@ func (s *Service) ListActions(roleID, nodeID string) (ActionList, error) {
 	if err != nil {
 		return ActionList{}, err
 	}
+	return s.listActions(state, roleID, nodeID)
+}
+
+func (s *Service) listActions(state domain.State, roleID, nodeID string) (ActionList, error) {
 	lease, err := s.validLease(state, roleID)
 	if err != nil {
 		return ActionList{}, err
@@ -281,6 +309,13 @@ func (s *Service) ListActions(roleID, nodeID string) (ActionList, error) {
 }
 
 func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey string) (ActionResult, error) {
+	return s.ApplyActionContext(context.Background(), ref, input, idempotencyKey)
+}
+
+func (s *Service) ApplyActionContext(ctx context.Context, ref string, input json.RawMessage, idempotencyKey string) (ActionResult, error) {
+	if err := ctx.Err(); err != nil {
+		return ActionResult{}, err
+	}
 	if idempotencyKey == "" {
 		return ActionResult{}, fmt.Errorf("idempotency key is required")
 	}
@@ -292,6 +327,10 @@ func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey 
 	}
 	if err := domain.RejectSensitiveFields(input); err != nil {
 		return ActionResult{}, fmt.Errorf("action input: %w", err)
+	}
+	requestDigest, err := authorityRequestDigest("action.apply", input)
+	if err != nil {
+		return ActionResult{}, fmt.Errorf("action input digest: %w", err)
 	}
 	secret, err := s.actionSecret()
 	if err != nil {
@@ -306,7 +345,11 @@ func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey 
 		return ActionResult{}, err
 	}
 	if command, ok := state.Commands[idempotencyKey]; ok {
-		return actionResultForSequence(state, command.Sequence)
+		result, resultErr := actionResultForSequence(state, command.Sequence)
+		if resultErr != nil || result.ActionID != payload.ActionID || result.Kind != payload.Kind || (command.RequestDigest != "" && command.RequestDigest != requestDigest) {
+			return ActionResult{}, fmt.Errorf("idempotency key is already bound to another command")
+		}
+		return result, nil
 	}
 	if payload.ProjectID != state.ProjectID || payload.GraphRevision != state.GraphRevision || payload.ProviderSet != providerFingerprint(state.Graph) || payload.HeadHash != state.HeadHash {
 		return ActionResult{}, fmt.Errorf("action reference is stale")
@@ -330,10 +373,10 @@ func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey 
 		return ActionResult{}, err
 	}
 	if payload.Kind == "resource.close" || payload.Kind == "resource.reconcile" {
-		return s.applyResourceAction(state, payload, input, idempotencyKey)
+		return s.applyResourceAction(state, payload, input, idempotencyKey, requestDigest)
 	}
 	if payload.Kind == "effect.prepare" {
-		return s.applyEffectAction(state, payload, input, idempotencyKey, node)
+		return s.applyEffectAction(ctx, state, payload, input, idempotencyKey, requestDigest, node)
 	}
 	now := s.Now().UTC().Format(time.RFC3339Nano)
 	events := make([]journal.Event, 0, 2)
@@ -433,7 +476,7 @@ func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey 
 		value := completionInput{}
 		var decision *domain.DecisionRecord
 		if payload.Kind == "gate.evaluate" {
-			record, decisionErr := s.buildGateDecision(context.Background(), state, node, attempt, payload.RoleID, input, s.Now())
+			record, decisionErr := s.buildGateDecision(ctx, state, node, attempt, payload.RoleID, input, s.Now())
 			if decisionErr != nil {
 				return ActionResult{}, decisionErr
 			}
@@ -508,7 +551,7 @@ func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey 
 	actionRaw, _ := json.Marshal(action)
 	events = append(events, journal.Event{Type: "action.applied", Payload: actionRaw})
 	expectedHead := payload.HeadHash
-	segment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: payload.Kind, ActorRole: payload.RoleID, IdempotencyKey: idempotencyKey}, events, s.Now(), &expectedHead)
+	segment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: payload.Kind, ActorRole: payload.RoleID, IdempotencyKey: idempotencyKey, ObjectRef: "action:" + payload.ActionID, RequestDigest: requestDigest}, events, s.Now(), &expectedHead)
 	if err != nil {
 		return ActionResult{}, err
 	}

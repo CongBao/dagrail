@@ -4,4 +4,4 @@ interface:
   icon_small: "./assets/icon-small.svg"
   icon_large: "./assets/icon-large.svg"
   brand_color: "#2563EB"
-  default_prompt: "Use $govern-dag to inspect the frontier and advance this project safely."
+  default_prompt: "Use $govern-dag as the assigned control Role: read bounded authority, advance only returned actions, and prove liveness before waiting."

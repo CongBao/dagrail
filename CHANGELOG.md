@@ -2,6 +2,37 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.20.0 — 2026-08-15
+
+### Added
+
+- canonical command-intent digests that bind new idempotency keys to actor, object,
+  command kind, and bounded request data without rewriting historical journal bytes;
+- adversarial tests for signed-action capability forgery, changed-request idempotency,
+  unleased graph mutation, cancellation during policy evaluation, invalid MCP graph
+  modes, and textual hook-launcher path substitution;
+- payload-free Decision summaries and resource-closure status in the read-only Explorer.
+
+### Changed
+
+- provider, effect, CLI, and MCP cancellation now reaches the actual invocation rather
+  than stopping only at the outer command boundary;
+- graph changes, incident updates, and effect reconciliation require an active owner
+  Role lease in addition to their declared capability;
+- context construction reuses one loaded state, hooks emit a bounded eight-Node ready
+  summary, and every hook instruction names the exact governing, execution, or review
+  skill without guessing Role identity;
+- plugin installation and conformance require the textual `dagrail` hook launcher to
+  resolve in a fresh process to the same verified runtime used by absolute MCP launchers;
+- all three bundled skills were rewritten around current allowed-action refs, closed
+  NodeKind outcomes, resource/effect reconciliation, evidence boundaries, and mandatory
+  pre-wait liveness checks.
+
+### Compatibility
+
+- the closed historical-binary window now covers v0.10–v0.19; journal segment schema
+  v3 adds command intent bindings while schemas v1 and v2 remain readable.
+
 ## 0.19.0 — 2026-08-15
 
 ### Added
@@ -22,8 +53,8 @@ All notable changes to DAGrail are documented here. The project follows Semantic
 
 - successful tasks must be submitted before completion, while review, decision, gate,
   and effect Nodes expose their own closed lifecycle verbs;
-- graph apply, effect reconcile, and incident mutations now require an unexpired Role
-  lease and the matching declared capability;
+- graph apply, effect reconcile, and incident mutations enforce the matching declared
+  Role capability;
 - the compatibility window now includes the exact v0.18 source commit.
 
 ### Architecture

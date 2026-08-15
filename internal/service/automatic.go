@@ -24,7 +24,7 @@ func (s *Service) settleAutomatic() error {
 		for _, nodeID := range frontier.Unreachable {
 			payload, _ := json.Marshal(map[string]string{"nodeId": nodeID, "reason": "closed_predicate_unsatisfied", "skippedAt": s.Now().UTC().Format(time.RFC3339Nano)})
 			expectedHead := state.HeadHash
-			_, created, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "node.auto-skip", ActorRole: "dagrail.controller", IdempotencyKey: "skip/" + state.GraphRevision + "/" + nodeID}, []journal.Event{{Type: "node.auto-skipped", Payload: payload}}, s.Now(), &expectedHead)
+			_, created, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "node.auto-skip", ActorRole: "dagrail.controller", IdempotencyKey: "skip/" + state.GraphRevision + "/" + nodeID, ObjectRef: "node:" + nodeID}, []journal.Event{{Type: "node.auto-skipped", Payload: payload}}, s.Now(), &expectedHead)
 			if err != nil {
 				return err
 			}
@@ -51,7 +51,7 @@ func (s *Service) settleAutomatic() error {
 			}
 			payload, _ := json.Marshal(map[string]string{"nodeId": node.ID, "outcome": outcome, "completedAt": s.Now().UTC().Format(time.RFC3339Nano)})
 			expectedHead := state.HeadHash
-			_, created, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "node.auto-complete", ActorRole: "dagrail.controller", IdempotencyKey: "auto/" + state.GraphRevision + "/" + node.ID}, []journal.Event{{Type: "node.auto-completed", Payload: payload}}, s.Now(), &expectedHead)
+			_, created, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "node.auto-complete", ActorRole: "dagrail.controller", IdempotencyKey: "auto/" + state.GraphRevision + "/" + node.ID, ObjectRef: "node:" + node.ID}, []journal.Event{{Type: "node.auto-completed", Payload: payload}}, s.Now(), &expectedHead)
 			if err != nil {
 				return err
 			}

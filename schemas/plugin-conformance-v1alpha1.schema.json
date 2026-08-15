@@ -37,13 +37,14 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["harness", "ready", "detected", "pluginStatus", "mcpConfigured", "capabilities", "manualFallback"],
+        "required": ["harness", "ready", "detected", "pluginStatus", "mcpConfigured", "hookLauncherVerified", "capabilities", "manualFallback"],
         "properties": {
           "harness": {"enum": ["codex", "claude-code", "copilot-cli"]},
           "ready": {"type": "boolean"},
           "detected": {"type": "boolean"},
           "pluginStatus": {"type": "string", "maxLength": 64},
           "mcpConfigured": {"type": "boolean"},
+          "hookLauncherVerified": {"type": "boolean"},
           "version": {"type": "string", "maxLength": 256},
           "capabilities": {"type": "object"},
           "nativeMode": {"type": "string", "maxLength": 128},

@@ -67,7 +67,7 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 	case "role":
 		return runRole(args[1:], stdout, stderr)
 	case "action":
-		return runAction(args[1:], stdout, stderr)
+		return runAction(ctx, args[1:], stdout, stderr)
 	case "context":
 		return runContext(args[1:], stdout, stderr)
 	case "commands":
@@ -95,7 +95,7 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 	case "pre-wait":
 		return runPreWait(args[1:], stdout, stderr)
 	case "reconcile":
-		return runReconcile(args[1:], stdout, stderr)
+		return runReconcile(ctx, args[1:], stdout, stderr)
 	case "recovery":
 		return runRecovery(args[1:], stdout, stderr)
 	case "mcp":
@@ -630,7 +630,7 @@ func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
 	return mcpserver.Run(ctx, s)
 }
 
-func runReconcile(args []string, stdout, stderr io.Writer) error {
+func runReconcile(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("reconcile", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
@@ -647,7 +647,7 @@ func runReconcile(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	value, err := s.ReconcileEffect(*action, json.RawMessage(*receipt), *key)
+	value, err := s.ReconcileEffectContext(ctx, *action, json.RawMessage(*receipt), *key)
 	if err != nil {
 		return err
 	}
@@ -729,7 +729,7 @@ func runRole(args []string, stdout, stderr io.Writer) error {
 	}
 }
 
-func runAction(args []string, stdout, stderr io.Writer) error {
+func runAction(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: dagrail action <list|apply>")
 	}
@@ -759,7 +759,7 @@ func runAction(args []string, stdout, stderr io.Writer) error {
 		if !validBoundedJSON(*input, 64*1024) {
 			return fmt.Errorf("--input must be valid JSON no larger than 64 KiB")
 		}
-		value, err := s.ApplyAction(*ref, json.RawMessage(*input), *key)
+		value, err := s.ApplyActionContext(ctx, *ref, json.RawMessage(*input), *key)
 		if err != nil {
 			return err
 		}

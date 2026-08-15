@@ -5,14 +5,35 @@ description: Govern a DAGrail project as the orchestration role. Use when inspec
 
 # Govern a DAGrail project
 
-Treat DAGrail, not chat, as runtime authority.
+Treat DAGrail—not chat, a roadmap projection, or a harness thread—as runtime authority.
 
-1. Call `dag_context` with `view: orchestrator`. Follow opaque refs for detail instead of requesting the full graph or journal.
-2. Bind the stable orchestration Role through `dagrail role bind`; use takeover only after the prior lease expires.
-3. Select only an `allowedActions[].ref` returned by the current context and pass a stable idempotency key to `dag_apply`.
-4. Use `dag_graph_change` preview before apply. Do not edit active contracts or rewrite terminal nodes.
-5. Reconcile every `unknown` effect before retrying. Omit caller evidence when a native adapter can observe the bound session; otherwise provide only a verified typed receipt. Transport acceptance and session creation are not recipient-visible delivery.
-6. Follow `evidence-package:` and `reuse-decision:` refs instead of loading artifact bodies. A `reuse_execution` decision permits policy reevaluation without execution; it is not policy approval.
-7. Call `dag_pre_wait` before yielding, waiting, or declaring blocked. Resolve every reported ready, submitted, expired, or unreconciled item.
+1. Bind only the assigned control Role. It needs the capabilities for actions it will
+   perform, such as `graph.change`; takeover is valid only after the former lease expires.
+2. Call `dag_context` with `view: orchestrator` and a cursor when available. Inspect
+   opaque refs selectively; do not load the complete graph, journal, or artifact bodies.
+3. Advance work only through current controller-issued action refs. Preserve one stable
+   idempotency key per intended action. Do not copy refs, leases, hashes, or Attempt IDs
+   between Roles, Nodes, projects, or sessions.
+4. Keep semantic responsibilities in their typed Nodes. A task produces work, a review
+   resolves approve/return, a decision records a closed human/LLM choice, a gate invokes
+   its policy provider, and an effect owns the external saga. The control Role does not
+   repeat review or promote delivery into acceptance.
+5. Modify the graph only with `dag_graph_change` preview followed by apply of that exact,
+   unexpired token. Re-preview after any head or revision change. Planned contracts and
+   Role capabilities may change; active contracts are frozen, terminal history is
+   append-only, and active resources must close before supersession.
+6. Reconcile every `unknown` effect before retrying. Prefer native observation; otherwise
+   provide only verified typed evidence. Transport acceptance, session creation,
+   recipient-visible delivery, acceptance, completion, and DAG outcome are distinct.
+7. Follow `decision:`, `evidence-package:`, and `reuse-decision:` refs. A
+   `reuse_execution` result permits policy reevaluation without rerunning the protected
+   execution core; it is not approval.
+8. Keep incidents owned and bounded. Record progress, apply one closed recovery
+   disposition (`retry`, `rollback`, `lkg`, `quarantine`, `off-critical-path`, or
+   `escalate`), and respect an open circuit instead of repeating adjacent fixes.
+9. Call `dag_pre_wait` before yielding, waiting, or declaring blocked. Do not wait while
+   ready Nodes, submitted Attempts, stale/expired leases, incidents, resource closure,
+   or unreconciled effects still require a bounded action.
 
-Never edit journal, SQLite, or generated projections directly. Keep semantic review in its assigned node; the control role performs only the action authorized by that node's contract.
+Never edit the journal, SQLite, action secret, or generated projections. Hooks may add
+bounded guidance but cannot assign, accept, merge, complete, or infer a lifecycle result.

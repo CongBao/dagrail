@@ -137,6 +137,9 @@ func (s *Service) ImportGraphWithProvenance(path, idempotencyKey, actorRole stri
 		return domain.CommandResult{}, err
 	}
 	if existing, ok := state.Commands[idempotencyKey]; ok {
+		if existing.Kind != "graph.import" || existing.ActorRole != actorRole {
+			return domain.CommandResult{}, fmt.Errorf("idempotency key is already bound to another command")
+		}
 		return existing, nil
 	}
 	graph, err := decodeGraph(path)
@@ -167,6 +170,10 @@ func (s *Service) importGraphDefinition(graph domain.GraphDefinition, idempotenc
 		return domain.CommandResult{}, err
 	}
 	if existing, ok := state.Commands[idempotencyKey]; ok {
+		revision, revisionErr := graphRevision(graph)
+		if revisionErr != nil || existing.Kind != "graph.import" || existing.ActorRole != actorRole || existing.ObjectRef != "graph:"+revision {
+			return domain.CommandResult{}, fmt.Errorf("idempotency key is already bound to another command")
+		}
 		return existing, nil
 	}
 	if state.Graph != nil {
@@ -188,7 +195,16 @@ func (s *Service) importGraphDefinition(graph domain.GraphDefinition, idempotenc
 		Source   any                    `json:"source,omitempty"`
 	}{graph, revision, source})
 	expectedHead := state.HeadHash
-	segment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "graph.import", ActorRole: actorRole, IdempotencyKey: idempotencyKey}, []journal.Event{{Type: "graph.imported", Payload: payload}}, s.Now(), &expectedHead)
+	requestDigest := ""
+	if sourceRaw, marshalErr := json.Marshal(source); marshalErr == nil {
+		var providerSource struct {
+			InputDigest string `json:"inputDigest"`
+		}
+		if json.Unmarshal(sourceRaw, &providerSource) == nil {
+			requestDigest = providerSource.InputDigest
+		}
+	}
+	segment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "graph.import", ActorRole: actorRole, IdempotencyKey: idempotencyKey, ObjectRef: "graph:" + revision, RequestDigest: requestDigest}, []journal.Event{{Type: "graph.imported", Payload: payload}}, s.Now(), &expectedHead)
 	if err != nil {
 		return domain.CommandResult{}, err
 	}
@@ -578,12 +594,89 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 			}
 		}
 		if segment.Command.IdempotencyKey != "" {
-			state.Commands[segment.Command.IdempotencyKey] = domain.CommandResult{Kind: segment.Command.Kind, GraphRevision: state.GraphRevision, Sequence: segment.Sequence}
+			requestDigest := segment.Command.RequestDigest
+			if requestDigest == "" {
+				requestDigest = commandRequestDigest(segment)
+			}
+			objectRef := segment.Command.ObjectRef
+			if objectRef == "" {
+				objectRef = commandObjectRef(segment, state)
+			}
+			state.Commands[segment.Command.IdempotencyKey] = domain.CommandResult{Kind: segment.Command.Kind, ActorRole: segment.Command.ActorRole, ObjectRef: objectRef, RequestDigest: requestDigest, GraphRevision: state.GraphRevision, Sequence: segment.Sequence}
 		}
 		state.HeadSequence = segment.Sequence
 		state.HeadHash = segment.SegmentHash
 	}
 	return state, segments, nil
+}
+
+func commandObjectRef(segment journal.Segment, state domain.State) string {
+	for _, event := range segment.Events {
+		switch event.Type {
+		case "action.applied":
+			var value domain.ActionRecord
+			if json.Unmarshal(event.Payload, &value) == nil && value.ID != "" {
+				return "action:" + value.ID
+			}
+		case "effect.observed", "effect.dispatched", "effect.reconciling":
+			var value struct {
+				ActionID string `json:"actionId"`
+			}
+			if json.Unmarshal(event.Payload, &value) == nil && value.ActionID != "" {
+				return "effect:" + value.ActionID
+			}
+		case "role.bound":
+			var value domain.RoleLease
+			if json.Unmarshal(event.Payload, &value) == nil && value.RoleID != "" {
+				return "role:" + value.RoleID
+			}
+		case "role.released":
+			var value struct {
+				RoleID string `json:"roleId"`
+			}
+			if json.Unmarshal(event.Payload, &value) == nil && value.RoleID != "" {
+				return "role:" + value.RoleID
+			}
+		case "incident.updated":
+			var value domain.Incident
+			if json.Unmarshal(event.Payload, &value) == nil && value.ID != "" {
+				return "incident:" + value.ID
+			}
+		}
+	}
+	if segment.Command.Kind == "graph.import" || segment.Command.Kind == "graph.change" {
+		return "graph:" + state.GraphRevision
+	}
+	return ""
+}
+
+func commandRequestDigest(segment journal.Segment) string {
+	for _, event := range segment.Events {
+		if event.Type != "graph.imported" {
+			continue
+		}
+		var value struct {
+			Source struct {
+				InputDigest string `json:"inputDigest"`
+			} `json:"source"`
+		}
+		if json.Unmarshal(event.Payload, &value) == nil {
+			return value.Source.InputDigest
+		}
+	}
+	return ""
+}
+
+func authorityRequestDigest(namespace string, raw []byte) (string, error) {
+	if len(raw) == 0 {
+		raw = []byte("null")
+	}
+	canonical, err := jcs.Transform(raw)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(append([]byte("dagrail-request-v1\x00"+namespace+"\x00"), canonical...))
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 func decodeGraph(path string) (domain.GraphDefinition, error) {

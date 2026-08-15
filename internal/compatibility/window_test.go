@@ -16,7 +16,7 @@ func TestEmbeddedBetaWindowIsClosedAndSchemaValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if window.CurrentVersion != version.Version || evidence.Historical != 9 || !strings.HasPrefix(evidence.Digest, "sha256:") {
+	if window.CurrentVersion != version.Version || evidence.Historical != 10 || !strings.HasPrefix(evidence.Digest, "sha256:") {
 		t.Fatalf("unexpected compatibility evidence: %#v %#v", window, evidence)
 	}
 	raw, err := json.Marshal(window)
@@ -54,9 +54,9 @@ func TestBetaWindowRejectsMutationAndOmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, mutation := range map[string]string{
-		"wrong candidate": strings.Replace(string(raw), `"currentVersion": "0.19.0"`, `"currentVersion": "1.0.0"`, 1),
+		"wrong candidate": strings.Replace(string(raw), `"currentVersion": "0.20.0"`, `"currentVersion": "1.0.0"`, 1),
 		"duplicate key":   strings.Replace(string(raw), `"kind": "HistoricalBinaryMatrix"`, `"kind": "HistoricalBinaryMatrix", "kind": "HistoricalBinaryMatrix"`, 1),
-		"missing release": strings.Replace(string(raw), `    {"version": "0.18.0", "commit": "61e354f33e6522a94e5c2733c8f7e61791b63984"}`, "", 1),
+		"missing release": strings.Replace(string(raw), `    {"version": "0.19.0", "commit": "aad38b069814c02bdbc9955574f25dfa4ebb3c11"}`, "", 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Decode([]byte(mutation), version.Version); err == nil {

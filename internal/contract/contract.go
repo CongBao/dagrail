@@ -103,19 +103,19 @@ func Current() Report {
 			APIVersion:   compatibility.APIVersion,
 			Stability:    "closed-beta-window",
 			SchemaPath:   "schemas/historical-binary-matrix-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:d8ed021de4b1d4c09bcb72355d9ba2f33659f3ea6f3358a6a758944b4e6f9d59",
+			SchemaSHA256: "sha256:a9d6912990254306db61c23ba54b7824c39b2b3ed5b2af2bdfceb3fa5c00a147",
 		},
 		Readiness: DocumentedSurface{
 			APIVersion:   "dagrail.io/readiness-decision/v1alpha1",
 			Stability:    "additive-structural-decision",
 			SchemaPath:   "schemas/readiness-decision-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:b3f537f4885177ee704e43fe4240301df2cec519fb774b7fb8405f0899bcc2b3",
+			SchemaSHA256: "sha256:722f2125f52d74a790ed1d5fc0cbaa5c4c04f7bed4c6251438bbbbdb9591f924",
 		},
 		UI: DocumentedSurface{
 			APIVersion:   "dagrail.io/ui/v1beta1",
 			Stability:    "additive-read-only",
 			SchemaPath:   "schemas/ui-api-v1beta1.schema.json",
-			SchemaSHA256: "sha256:8831e13abdd73698f75e0f97b406f0cfba96c055a31223494272b6d69f0dd5d4",
+			SchemaSHA256: "sha256:9db480b5f6c07d831529611809b2e4d7f8eef79e9bc442a16780758b35ed622d",
 		},
 		Security: DocumentedSurface{
 			APIVersion:   "dagrail.io/security/v1alpha1",
@@ -133,7 +133,7 @@ func Current() Report {
 			APIVersion:   install.PluginConformanceAPIVersion,
 			Stability:    "additive-local-diagnostic",
 			SchemaPath:   "schemas/plugin-conformance-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:244b31c6daf83cd4451d15089c7a8db4027fd761f58aefc6c114ff9379ad829b",
+			SchemaSHA256: "sha256:ea770c501e2764bf266ce89f554c8816f57d39ffd38a4c968119eb1999020e47",
 		},
 		Support: DocumentedSurface{
 			APIVersion:   service.SupportAPIVersion,
@@ -167,7 +167,7 @@ func Current() Report {
 		},
 		Provider: VersionedSurface{APIVersion: sdk.APIVersion, Stability: "source-compatible"},
 		Journal: JournalContract{
-			ReadableSegmentSchemas: []int{journal.LegacySegmentSchemaVersion, journal.CurrentSegmentSchemaVersion},
+			ReadableSegmentSchemas: []int{journal.LegacySegmentSchemaVersion, journal.PreviousSegmentSchemaVersion, journal.CurrentSegmentSchemaVersion},
 			WriteSegmentSchema:     journal.CurrentSegmentSchemaVersion,
 			WriteEventSchema:       journal.CurrentEventSchemaVersion,
 		},
@@ -194,13 +194,16 @@ func Current() Report {
 			"command discovery and completion are generated from one bounded catalog",
 			"opt-in CLI error envelopes keep stable broad exit classes and preserve interruption",
 			"host plugin commands are output-bounded, time-bounded, and cancellation-aware",
-			"the v0.10 through v0.18 beta binaries are immutable inputs to the current upgrade and rollback matrix",
+			"the v0.10 through v0.19 beta binaries are immutable inputs to the current upgrade and rollback matrix",
 			"readiness can declare external-validation readiness but cannot infer production validation or 1.0 readiness",
 			"the loopback explorer rejects non-loopback Host values and cross-port Origin values without exposing CORS access",
 			"SQLite remains disposable and rebuildable from the verified journal",
 			"semantic and provider decisions are immutable revision-bound records rather than chat or opaque provider output",
 			"role capabilities are enforced at every lifecycle mutation boundary while older Graph definitions remain importable",
 			"resource capacity is released only after a confirmed closure receipt; ambiguous closure remains reconcilable",
+			"new mutation idempotency keys bind command kind, actor, object, and canonical request intent; changed retries fail closed",
+			"plugin conformance verifies that the textual hook launcher resolves to the same fresh-process runtime used for MCP",
+			"the explorer exposes typed decision and resource closure summaries without decision facts, evidence URIs, or receipt bodies",
 		},
 	}
 }

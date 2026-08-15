@@ -41,6 +41,9 @@ func TestIncidentProgressTripsCircuitAndCanResolve(t *testing.T) {
 	if err != nil || first.Status != "open" || first.NoProgressAttempts != 1 {
 		t.Fatalf("first progress: %+v %v", first, err)
 	}
+	if _, err := svc.ProgressIncident(incidentID, "worker", "different observation", true, "progress-1"); err == nil || !strings.Contains(err.Error(), "another command") {
+		t.Fatalf("incident idempotency key accepted different progress: %v", err)
+	}
 	second, err := svc.ProgressIncident(incidentID, "worker", "still same failure", false, "progress-2")
 	if err != nil || second.Status != "circuit-open" || second.CircuitReason != "no_progress_attempt_budget_exhausted" {
 		t.Fatalf("circuit did not trip: %+v %v", second, err)

@@ -54,15 +54,12 @@ func Run(harness, event, root string, reader io.Reader) (Output, bool, error) {
 	eventName := "SessionStart"
 	if event == "session-start" {
 		frontier, _ := svc.Frontier()
-		ready := strings.Join(frontier.Ready, ",")
-		if ready == "" {
-			ready = "none"
-		}
+		ready := boundedReadySummary(frontier.Ready, 8)
 		revision := state.GraphRevision
 		if len(revision) > 12 {
 			revision = revision[:12]
 		}
-		guidance = fmt.Sprintf("DAGrail project %s is authoritative outside chat (cursor %d, graph %s, ready %s). Use $govern-dag and dag_context; execute only returned allowed actions. Never edit lifecycle JSON by hand.", svc.Project.Config.Name, state.HeadSequence, revision, ready)
+		guidance = fmt.Sprintf("DAGrail project %s is authoritative outside chat (cursor %d, graph %s, ready %s). Use $govern-dag only for an assigned control Role, $execute-dag-node for assigned work, or $review-dag-node for assigned review. Read dag_context and execute only returned allowed actions; never infer or edit lifecycle state from chat.", svc.Project.Config.Name, state.HeadSequence, revision, ready)
 	} else {
 		prompt := stringField(payload, "prompt", "user_prompt", "userPrompt", "message", "text", "transformedPrompt")
 		if !looksTerminal(prompt) {
@@ -75,9 +72,7 @@ func Run(harness, event, root string, reader io.Reader) (Output, bool, error) {
 			eventName = "UserPromptSubmit"
 		}
 	}
-	if len(guidance) > 1900 {
-		guidance = guidance[:1900]
-	}
+	guidance = truncateUTF8(guidance, 1900)
 	switch harness {
 	case "codex", "claude-code":
 		return Output{HookSpecificOutput: &HookSpecificOutput{HookEventName: eventName, AdditionalContext: guidance}}, true, nil
@@ -86,6 +81,35 @@ func Run(harness, event, root string, reader io.Reader) (Output, bool, error) {
 	default:
 		return Output{AdditionalContext2: guidance}, true, nil
 	}
+}
+
+func boundedReadySummary(values []string, maximum int) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	count := len(values)
+	if count > maximum {
+		values = values[:maximum]
+	}
+	result := strings.Join(values, ",")
+	if count > len(values) {
+		result += fmt.Sprintf(",…(+%d)", count-len(values))
+	}
+	return result
+}
+
+func truncateUTF8(value string, maximum int) string {
+	if len(value) <= maximum {
+		return value
+	}
+	end := 0
+	for index := range value {
+		if index > maximum {
+			break
+		}
+		end = index
+	}
+	return value[:end]
 }
 
 func readObject(reader io.Reader) (map[string]any, error) {

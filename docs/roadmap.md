@@ -143,3 +143,16 @@ tag remains blocked on the four real-world evidence items in `docs/readiness.md`
 
 Delivered in v0.19.0. External projects remain read-only validation subjects and do
 not add project-specific types or adapters to the DAGrail kernel.
+
+## v0.20.0 — System hardening and prompt audit
+
+- bind idempotency keys to canonical command intent and reject changed retries;
+- require live Role ownership at graph, incident, and effect-reconcile boundaries;
+- propagate cancellation through policy/effect work and reduce repeated journal loads;
+- re-audit MCP descriptions, hooks, launcher resolution, and all bundled skills for
+  bounded context, closed actions, resource closure, evidence scope, and pre-wait;
+- extend compatibility through the exact v0.19 source commit and repeat independent
+  cold review plus repository-external shadow validation.
+
+Delivered in v0.20.0 without adding validation-subject vocabulary or adapters to the
+kernel. Cold-review and external-shadow evidence are release checks, not product state.

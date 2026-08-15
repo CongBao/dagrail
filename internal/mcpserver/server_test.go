@@ -51,6 +51,10 @@ func TestServerExposesOnlySixHighLevelTypedTools(t *testing.T) {
 	if inputBytes > 6144 {
 		t.Fatalf("MCP input schemas consume %d bytes, budget 6144", inputBytes)
 	}
+	invalid, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "dag_graph_change", Arguments: map[string]any{"mode": "replace", "patch": map[string]any{}}})
+	if err == nil && (invalid == nil || !invalid.IsError) {
+		t.Fatalf("unknown graph change mode was accepted: result=%+v err=%v", invalid, err)
+	}
 	if err := session.Close(); err != nil {
 		t.Fatal(err)
 	}

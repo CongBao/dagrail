@@ -135,6 +135,168 @@ func TestGatePersistsProviderBoundDecisionInsteadOfOpaqueOutput(t *testing.T) {
 	}
 }
 
+func TestForgedSignedActionStillRequiresRoleCapability(t *testing.T) {
+	svc, _ := governanceService(t, `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"capability-boundary"},"spec":{"roles":[{"id":"observer","capabilities":["observer"]}],"nodes":[{"id":"work","kind":"task","role":"observer","title":"work","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`)
+	lease, err := svc.BindRole("observer", "codex", "observer-session", time.Hour, false, "bind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _, err := svc.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, err := svc.actionSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := actionRefPayload{
+		ActionID:      "forged-action",
+		ProjectID:     state.ProjectID,
+		GraphRevision: state.GraphRevision,
+		ProviderSet:   providerFingerprint(state.Graph),
+		HeadHash:      state.HeadHash,
+		RoleID:        "observer",
+		SessionID:     lease.SessionID,
+		NodeID:        "work",
+		Kind:          "node.start",
+		ExpiresAt:     svc.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano),
+	}
+	ref, err := signActionRef(payload, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ApplyAction(ref, json.RawMessage(`{}`), "forged"); err == nil || !strings.Contains(err.Error(), "capability") {
+		t.Fatalf("signed action bypassed role capability: %v", err)
+	}
+	state, _ = svc.State()
+	if state.Nodes["work"].Status != "planned" || len(state.Attempts) != 0 {
+		t.Fatalf("rejected action changed authority state: %+v", state.Nodes["work"])
+	}
+}
+
+func TestIdempotencyKeyCannotMoveBetweenActionsOrRoles(t *testing.T) {
+	svc, _ := governanceService(t, `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"idempotency"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]},{"id":"reviewer","capabilities":["node.review"]}],"nodes":[{"id":"work","kind":"task","role":"worker","title":"work","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`)
+	if _, err := svc.BindRole("worker", "codex", "worker-session", time.Hour, false, "shared-bind"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.BindRole("worker", "claude-code", "another-session", time.Hour, false, "shared-bind"); err == nil || !strings.Contains(err.Error(), "another command") {
+		t.Fatalf("role binding reused a key with different request data: %v", err)
+	}
+	if _, err := svc.BindRole("reviewer", "codex", "reviewer-session", time.Hour, false, "shared-bind"); err == nil || !strings.Contains(err.Error(), "another command") {
+		t.Fatalf("role binding reused another role's idempotency key: %v", err)
+	}
+	startRef := findActionRef(t, svc, "worker", "work", "node.start")
+	if _, err := svc.ApplyAction(startRef, json.RawMessage(`{}`), "shared-action"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ApplyAction(startRef, json.RawMessage(`{"different":true}`), "shared-action"); err == nil || !strings.Contains(err.Error(), "another command") {
+		t.Fatalf("idempotency key accepted different input for the same action: %v", err)
+	}
+	checkpoint := findActionRef(t, svc, "worker", "work", "attempt.checkpoint")
+	if _, err := svc.ApplyAction(checkpoint, json.RawMessage(`{"summary":"durable"}`), "shared-action"); err == nil || !strings.Contains(err.Error(), "another command") {
+		t.Fatalf("idempotency key moved to a different action: %v", err)
+	}
+	state, _ := svc.State()
+	if len(state.Checkpoints) != 0 {
+		t.Fatalf("rejected idempotency collision created checkpoint: %+v", state.Checkpoints)
+	}
+}
+
+func TestGraphChangeRequiresCapabilityAndActiveLease(t *testing.T) {
+	svc, root := governanceService(t, `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"graph-boundary"},"spec":{"roles":[{"id":"governor","capabilities":["graph.change"]},{"id":"observer","capabilities":["observer"]}],"nodes":[],"edges":[]}}`)
+	patchPath := filepath.Join(root, "patch.json")
+	patch := `{"apiVersion":"dagrail.io/v1alpha1","kind":"GraphPatch","operations":[{"op":"addRole","role":{"id":"worker","capabilities":["node.run"]}},{"op":"addNode","node":{"id":"work","kind":"task","role":"worker","title":"work","outcomes":[{"id":"done","class":"success"}]}}]}`
+	if err := os.WriteFile(patchPath, []byte(patch), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	impact, err := svc.PreviewGraphChange(patchPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ApplyGraphChange(patchPath, impact.Token, "apply-unleased", "governor"); err == nil || !strings.Contains(err.Error(), "active lease") {
+		t.Fatalf("unleased graph actor changed authority: %v", err)
+	}
+	if _, err := svc.BindRole("observer", "codex", "observer-session", time.Hour, false, "bind-observer"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ApplyGraphChange(patchPath, impact.Token, "apply-observer", "observer"); err == nil || !strings.Contains(err.Error(), "capability") {
+		t.Fatalf("actor without graph.change changed authority: %v", err)
+	}
+	if _, err := svc.BindRole("governor", "codex", "governor-session", time.Hour, false, "bind-governor"); err != nil {
+		t.Fatal(err)
+	}
+	impact, err = svc.PreviewGraphChange(patchPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ApplyGraphChange(patchPath, impact.Token, "apply-governor", "governor"); err != nil {
+		t.Fatalf("leased graph governor could not apply preview: %v", err)
+	}
+}
+
+type cancellingGatePolicy struct {
+	metadata sdk.Metadata
+	entered  chan struct{}
+}
+
+func (p *cancellingGatePolicy) Metadata() sdk.Metadata { return p.metadata }
+func (*cancellingGatePolicy) InputSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","additionalProperties":false,"required":["policyId","input"],"properties":{"policyId":{"type":"string"},"input":{"type":"object"},"evidence":{"type":"array"}}}`)
+}
+func (p *cancellingGatePolicy) Decide(ctx context.Context, _ sdk.PolicyRequest) (sdk.PolicyDecision, error) {
+	close(p.entered)
+	<-ctx.Done()
+	return sdk.PolicyDecision{}, ctx.Err()
+}
+
+func TestCancelledPolicyDecisionDoesNotCommitAuthorityState(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := Init(root, "cancelled-policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &cancellingGatePolicy{metadata: sdk.Metadata{ID: "test.cancel", Version: "1.0.0", Stability: sdk.StabilityStable}, entered: make(chan struct{})}
+	provider.metadata.SchemaHash, err = sdk.InputSchemaHash(provider.InputSchema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Providers.RegisterPolicy(provider); err != nil {
+		t.Fatal(err)
+	}
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"cancelled-policy"},"spec":{"providers":[{"id":"test.cancel","version":"1.0.0","schemaHash":"` + provider.metadata.SchemaHash + `"}],"roles":[{"id":"controller","capabilities":["node.gate"]}],"nodes":[{"id":"quality","kind":"gate","role":"controller","title":"quality","decision":{"key":"quality","source":"provider","providerId":"test.cancel","policyId":"release"},"outcomes":[{"id":"pass","class":"success"}]}],"edges":[]}}`
+	graphPath := filepath.Join(root, "graph.json")
+	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "import", "bootstrap"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.BindRole("controller", "codex", "controller-session", time.Hour, false, "bind"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ApplyAction(findActionRef(t, svc, "controller", "quality", "node.start"), json.RawMessage(`{}`), "start"); err != nil {
+		t.Fatal(err)
+	}
+	ref := findActionRef(t, svc, "controller", "quality", "gate.evaluate")
+	before, _ := svc.State()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, applyErr := svc.ApplyActionContext(ctx, ref, json.RawMessage(`{"input":{}}`), "evaluate")
+		result <- applyErr
+	}()
+	<-provider.entered
+	cancel()
+	if err := <-result; err == nil || !strings.Contains(err.Error(), context.Canceled.Error()) {
+		t.Fatalf("cancelled provider invocation did not propagate cancellation: %v", err)
+	}
+	after, _ := svc.State()
+	if after.HeadHash != before.HeadHash || len(after.Decisions) != 0 || after.Nodes["quality"].Status != "active" {
+		t.Fatalf("cancelled provider invocation committed state: before=%s after=%s decisions=%d runtime=%+v", before.HeadHash, after.HeadHash, len(after.Decisions), after.Nodes["quality"])
+	}
+}
+
 func governanceService(t *testing.T, graph string) (*Service, string) {
 	t.Helper()
 	root := t.TempDir()

@@ -34,6 +34,10 @@ func (s *Service) ImportGraphFromProvider(ctx context.Context, providerID string
 		return domain.CommandResult{}, err
 	}
 	if existing, ok := state.Commands[idempotencyKey]; ok {
+		digest, digestErr := providerInputDigest(input)
+		if digestErr != nil || existing.Kind != "graph.import" || existing.ActorRole != actorRole || existing.RequestDigest != digest {
+			return domain.CommandResult{}, fmt.Errorf("idempotency key is already bound to another command")
+		}
 		return existing, nil
 	}
 	if state.Graph != nil {

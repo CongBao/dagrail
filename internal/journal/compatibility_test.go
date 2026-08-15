@@ -105,7 +105,7 @@ func TestMixedVersionJournalPreservesLegacyBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(mixed) != 2 || mixed[0].SchemaVersion != 1 || mixed[1].SchemaVersion != 2 {
+	if len(mixed) != 2 || mixed[0].SchemaVersion != LegacySegmentSchemaVersion || mixed[1].SchemaVersion != CurrentSegmentSchemaVersion {
 		t.Fatalf("mixed journal was not readable: %#v", mixed)
 	}
 	report, err := store.Compatibility()
@@ -114,6 +114,25 @@ func TestMixedVersionJournalPreservesLegacyBytes(t *testing.T) {
 	}
 	if !report.Compatible || report.LegacySegmentCount != 1 || report.UpcastedEventCount != 1 || report.EventCount != 2 {
 		t.Fatalf("unexpected compatibility report: %#v", report)
+	}
+}
+
+func TestPreviousV2SegmentWithoutCommandIntentFieldsRemainsReadable(t *testing.T) {
+	store, err := Open(t.TempDir(), "project-v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSegment(t, store, unsignedSegment{
+		SchemaVersion: PreviousSegmentSchemaVersion,
+		Sequence:      1,
+		ProjectID:     "project-v2",
+		Command:       Command{ID: "command-v2", Kind: "v2", ActorRole: "worker", IdempotencyKey: "v2"},
+		Events:        []Event{{Type: "v2.recorded", SchemaVersion: CurrentEventSchemaVersion, Payload: json.RawMessage(`{"ok":true}`)}},
+		CommittedAt:   "2026-01-01T00:00:00Z",
+	})
+	segments, err := store.ReadAll()
+	if err != nil || len(segments) != 1 || segments[0].SchemaVersion != PreviousSegmentSchemaVersion || segments[0].Command.ObjectRef != "" || segments[0].Command.RequestDigest != "" {
+		t.Fatalf("previous v2 segment did not remain readable: %+v %v", segments, err)
 	}
 }
 

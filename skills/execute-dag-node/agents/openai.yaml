@@ -4,4 +4,4 @@ interface:
   icon_small: "./assets/icon-small.svg"
   icon_large: "./assets/icon-large.svg"
   brand_color: "#2563EB"
-  default_prompt: "Use $execute-dag-node to resume and complete my assigned DAG node."
+  default_prompt: "Use $execute-dag-node to execute the Role and Node named in my DAGrail work package; recover from its checkpoint and apply only returned actions."

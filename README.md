@@ -51,7 +51,7 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 
 ## Status
 
-`v0.19.0` is a pre-1.0 release candidate: local-first and single-user, with one native Go
+`v0.20.0` is a pre-1.0 release candidate: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
 stdio MCP. Its operational surface adds explainable dependency blockers, incident
 circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
@@ -90,6 +90,13 @@ human/LLM/provider judgments as revision-bound Decision records, requires confir
 resource-closure receipts before releasing capacity, and automatically skips branches
 made permanently unreachable by closed positive predicates. Existing projects remain
 external validation subjects; repository-specific conversion stays outside DAGrail.
+
+The v0.20 hardening pass binds new idempotency keys to canonical command intent,
+requires active leases for graph, incident, and effect-reconcile mutations, propagates
+cancellation through provider and adapter work, and re-audits every bundled skill and
+hook instruction. Plugin conformance now proves that the textual hook launcher and the
+absolute MCP launcher reach the same verified runtime. Historical v0.10–v0.19 journal
+and runtime inputs remain immutable compatibility fixtures.
 
 The structural release report validates public source and automated gate
 declarations, but deliberately reports `productionValidated: false`. Independent

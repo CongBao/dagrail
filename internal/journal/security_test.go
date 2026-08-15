@@ -56,3 +56,30 @@ func TestAppendRejectsSensitiveCommandAndEventMaterial(t *testing.T) {
 		t.Fatalf("sensitive event was accepted: %v", err)
 	}
 }
+
+func TestAppendOnceRejectsChangedIntentWithTheSameCommandKind(t *testing.T) {
+	store, err := Open(t.TempDir(), reliabilityProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digestA := "sha256:" + strings.Repeat("a", 64)
+	digestB := "sha256:" + strings.Repeat("b", 64)
+	first := Command{ID: "command-a", Kind: "task.complete", ActorRole: "worker", IdempotencyKey: "shared", ObjectRef: "action:a", RequestDigest: digestA}
+	if _, _, err := store.AppendOnce(first, []Event{{Type: "test.recorded", Payload: json.RawMessage(`{"ok":true}`)}}, time.Now(), nil); err != nil {
+		t.Fatal(err)
+	}
+	for name, changed := range map[string]Command{
+		"actor":  {ID: "command-b", Kind: first.Kind, ActorRole: "reviewer", IdempotencyKey: first.IdempotencyKey, ObjectRef: first.ObjectRef, RequestDigest: first.RequestDigest},
+		"object": {ID: "command-b", Kind: first.Kind, ActorRole: first.ActorRole, IdempotencyKey: first.IdempotencyKey, ObjectRef: "action:b", RequestDigest: first.RequestDigest},
+		"input":  {ID: "command-b", Kind: first.Kind, ActorRole: first.ActorRole, IdempotencyKey: first.IdempotencyKey, ObjectRef: first.ObjectRef, RequestDigest: digestB},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := store.AppendOnce(changed, []Event{{Type: "test.recorded", Payload: json.RawMessage(`{"ok":false}`)}}, time.Now(), nil); err == nil || !strings.Contains(err.Error(), "another command intent") {
+				t.Fatalf("changed %s reused an idempotency key: %v", name, err)
+			}
+		})
+	}
+	if _, err := store.Append(Command{ID: "invalid", Kind: "test", IdempotencyKey: "invalid-digest", RequestDigest: "sha256:nope"}, []Event{{Type: "test.recorded", Payload: json.RawMessage(`{"ok":true}`)}}, time.Now()); err == nil || !strings.Contains(err.Error(), "digest is invalid") {
+		t.Fatalf("invalid request digest was accepted: %v", err)
+	}
+}

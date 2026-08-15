@@ -22,6 +22,7 @@ const (
 	maxTopologyNodes   = 500
 	maxHistoryPage     = 100
 	maxOperationsPage  = 200
+	maxNodeDetailItems = 100
 )
 
 type ExplorerOverview struct {
@@ -93,6 +94,19 @@ type EvidenceIndexView struct {
 	CreatedAt  string `json:"createdAt"`
 }
 
+type DecisionView struct {
+	ID              string `json:"id"`
+	NodeID          string `json:"nodeId"`
+	AttemptID       string `json:"attemptId"`
+	RoleID          string `json:"roleId"`
+	Key             string `json:"key"`
+	Source          string `json:"source"`
+	Outcome         string `json:"outcome"`
+	ProviderID      string `json:"providerId,omitempty"`
+	ProviderVersion string `json:"providerVersion,omitempty"`
+	CreatedAt       string `json:"createdAt"`
+}
+
 type EffectView struct {
 	ID               string `json:"id"`
 	NodeID           string `json:"nodeId"`
@@ -109,10 +123,26 @@ type EffectView struct {
 	UpdatedAt        string `json:"updatedAt"`
 }
 
+type ResourceView struct {
+	ID               string `json:"id"`
+	Kind             string `json:"kind"`
+	Quantity         int    `json:"quantity"`
+	NodeID           string `json:"nodeId"`
+	AttemptID        string `json:"attemptId"`
+	RoleID           string `json:"roleId,omitempty"`
+	Status           string `json:"status"`
+	ClosureStatus    string `json:"closureStatus,omitempty"`
+	ClosureUpdatedAt string `json:"closureUpdatedAt,omitempty"`
+	LeasedAt         string `json:"leasedAt"`
+	ReleasedAt       string `json:"releasedAt,omitempty"`
+}
+
 type NodeDetail struct {
 	APIVersion    string                       `json:"apiVersion"`
 	GraphRevision string                       `json:"graphRevision"`
 	HeadSequence  uint64                       `json:"headSequence"`
+	Counts        map[string]int               `json:"counts"`
+	Truncated     map[string]bool              `json:"truncated"`
 	Contract      NodeContractView             `json:"contract"`
 	Runtime       domain.NodeRuntime           `json:"runtime"`
 	Readiness     *domain.ReadinessExplanation `json:"readiness,omitempty"`
@@ -121,8 +151,9 @@ type NodeDetail struct {
 	Attempts      []domain.Attempt             `json:"attempts"`
 	Checkpoints   []domain.Checkpoint          `json:"checkpoints"`
 	Evidence      []EvidenceIndexView          `json:"evidence"`
+	Decisions     []DecisionView               `json:"decisions"`
 	Incidents     []domain.Incident            `json:"incidents"`
-	Resources     []domain.ResourceLease       `json:"resources"`
+	Resources     []ResourceView               `json:"resources"`
 	Effects       []EffectView                 `json:"effects"`
 }
 
@@ -137,17 +168,17 @@ type HistoryResponse struct {
 }
 
 type OperationsResponse struct {
-	APIVersion    string                 `json:"apiVersion"`
-	GraphRevision string                 `json:"graphRevision"`
-	HeadSequence  uint64                 `json:"headSequence"`
-	Limit         int                    `json:"limit"`
-	Counts        map[string]int         `json:"counts"`
-	Truncated     map[string]bool        `json:"truncated"`
-	Attempts      []domain.Attempt       `json:"attempts"`
-	Leases        []domain.RoleLease     `json:"leases"`
-	Incidents     []domain.Incident      `json:"incidents"`
-	Resources     []domain.ResourceLease `json:"resources"`
-	Effects       []EffectView           `json:"effects"`
+	APIVersion    string             `json:"apiVersion"`
+	GraphRevision string             `json:"graphRevision"`
+	HeadSequence  uint64             `json:"headSequence"`
+	Limit         int                `json:"limit"`
+	Counts        map[string]int     `json:"counts"`
+	Truncated     map[string]bool    `json:"truncated"`
+	Attempts      []domain.Attempt   `json:"attempts"`
+	Leases        []domain.RoleLease `json:"leases"`
+	Incidents     []domain.Incident  `json:"incidents"`
+	Resources     []ResourceView     `json:"resources"`
+	Effects       []EffectView       `json:"effects"`
 }
 
 type nodeFilter struct {
@@ -420,7 +451,7 @@ func buildNodeDetail(svc *service.Service, nodeID string) (NodeDetail, error) {
 		digest := sha256.Sum256(node.Inputs)
 		contract.InputSHA256 = "sha256:" + hex.EncodeToString(digest[:])
 	}
-	detail := NodeDetail{APIVersion: explorerAPIVersion, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Contract: contract, Runtime: state.Nodes[nodeID], Incoming: []domain.EdgeDefinition{}, Outgoing: []domain.EdgeDefinition{}, Attempts: []domain.Attempt{}, Checkpoints: []domain.Checkpoint{}, Evidence: []EvidenceIndexView{}, Incidents: []domain.Incident{}, Resources: []domain.ResourceLease{}, Effects: []EffectView{}}
+	detail := NodeDetail{APIVersion: explorerAPIVersion, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Counts: map[string]int{}, Truncated: map[string]bool{}, Contract: contract, Runtime: state.Nodes[nodeID], Incoming: []domain.EdgeDefinition{}, Outgoing: []domain.EdgeDefinition{}, Attempts: []domain.Attempt{}, Checkpoints: []domain.Checkpoint{}, Evidence: []EvidenceIndexView{}, Decisions: []DecisionView{}, Incidents: []domain.Incident{}, Resources: []ResourceView{}, Effects: []EffectView{}}
 	frontier := domain.ComputeFrontier(state)
 	for _, explanation := range frontier.Explanations {
 		if explanation.NodeID == nodeID {
@@ -452,6 +483,17 @@ func buildNodeDetail(svc *service.Service, nodeID string) (NodeDetail, error) {
 			detail.Evidence = append(detail.Evidence, EvidenceIndexView{ID: pack.ID, AttemptID: pack.AttemptID, CoreDigest: pack.CoreDigest, CreatedAt: pack.CreatedAt})
 		}
 	}
+	for _, decision := range state.Decisions {
+		if decision.NodeID != nodeID {
+			continue
+		}
+		view := DecisionView{ID: decision.ID, NodeID: decision.NodeID, AttemptID: decision.AttemptID, RoleID: decision.RoleID, Key: decision.Key, Source: decision.Source, Outcome: decision.Outcome, CreatedAt: decision.CreatedAt}
+		if decision.Provider != nil {
+			view.ProviderID = decision.Provider.ID
+			view.ProviderVersion = decision.Provider.Version
+		}
+		detail.Decisions = append(detail.Decisions, view)
+	}
 	for _, incident := range state.Incidents {
 		if incident.NodeID == nodeID {
 			detail.Incidents = append(detail.Incidents, incident)
@@ -459,7 +501,7 @@ func buildNodeDetail(svc *service.Service, nodeID string) (NodeDetail, error) {
 	}
 	for _, resource := range state.Resources {
 		if resource.NodeID == nodeID {
-			detail.Resources = append(detail.Resources, resource)
+			detail.Resources = append(detail.Resources, resourceView(resource))
 		}
 	}
 	for _, effect := range state.Effects {
@@ -472,10 +514,46 @@ func buildNodeDetail(svc *service.Service, nodeID string) (NodeDetail, error) {
 	sort.Slice(detail.Attempts, func(i, j int) bool { return detail.Attempts[i].Number < detail.Attempts[j].Number })
 	sort.Slice(detail.Checkpoints, func(i, j int) bool { return detail.Checkpoints[i].CreatedAt < detail.Checkpoints[j].CreatedAt })
 	sort.Slice(detail.Evidence, func(i, j int) bool { return detail.Evidence[i].ID < detail.Evidence[j].ID })
+	sort.Slice(detail.Decisions, func(i, j int) bool {
+		if detail.Decisions[i].CreatedAt == detail.Decisions[j].CreatedAt {
+			return detail.Decisions[i].ID < detail.Decisions[j].ID
+		}
+		return detail.Decisions[i].CreatedAt < detail.Decisions[j].CreatedAt
+	})
 	sort.Slice(detail.Incidents, func(i, j int) bool { return detail.Incidents[i].ID < detail.Incidents[j].ID })
 	sort.Slice(detail.Resources, func(i, j int) bool { return detail.Resources[i].ID < detail.Resources[j].ID })
 	sort.Slice(detail.Effects, func(i, j int) bool { return detail.Effects[i].ID < detail.Effects[j].ID })
+	detail.Counts = map[string]int{
+		"incoming": len(detail.Incoming), "outgoing": len(detail.Outgoing), "attempts": len(detail.Attempts),
+		"checkpoints": len(detail.Checkpoints), "evidence": len(detail.Evidence), "decisions": len(detail.Decisions),
+		"incidents": len(detail.Incidents), "resources": len(detail.Resources), "effects": len(detail.Effects),
+	}
+	detail.Incoming = capFirst(detail.Incoming, maxNodeDetailItems, detail.Truncated, "incoming")
+	detail.Outgoing = capFirst(detail.Outgoing, maxNodeDetailItems, detail.Truncated, "outgoing")
+	detail.Attempts = capLast(detail.Attempts, maxNodeDetailItems, detail.Truncated, "attempts")
+	detail.Checkpoints = capLast(detail.Checkpoints, maxNodeDetailItems, detail.Truncated, "checkpoints")
+	detail.Evidence = capLast(detail.Evidence, maxNodeDetailItems, detail.Truncated, "evidence")
+	detail.Decisions = capLast(detail.Decisions, maxNodeDetailItems, detail.Truncated, "decisions")
+	detail.Incidents = capLast(detail.Incidents, maxNodeDetailItems, detail.Truncated, "incidents")
+	detail.Resources = capLast(detail.Resources, maxNodeDetailItems, detail.Truncated, "resources")
+	detail.Effects = capLast(detail.Effects, maxNodeDetailItems, detail.Truncated, "effects")
 	return detail, nil
+}
+
+func capFirst[T any](items []T, limit int, truncated map[string]bool, key string) []T {
+	if len(items) <= limit {
+		return items
+	}
+	truncated[key] = true
+	return items[:limit]
+}
+
+func capLast[T any](items []T, limit int, truncated map[string]bool, key string) []T {
+	if len(items) <= limit {
+		return items
+	}
+	truncated[key] = true
+	return items[len(items)-limit:]
 }
 
 func buildHistory(svc *service.Service, before uint64, present bool, limit int) (HistoryResponse, error) {
@@ -521,7 +599,7 @@ func buildOperations(svc *service.Service, limit int) (OperationsResponse, error
 	if err != nil {
 		return OperationsResponse{}, err
 	}
-	result := OperationsResponse{APIVersion: explorerAPIVersion, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Limit: limit, Counts: map[string]int{"attempts": len(state.Attempts), "leases": len(state.Leases), "incidents": len(state.Incidents), "resources": len(state.Resources), "effects": len(state.Effects)}, Truncated: map[string]bool{}, Attempts: []domain.Attempt{}, Leases: []domain.RoleLease{}, Incidents: []domain.Incident{}, Resources: []domain.ResourceLease{}, Effects: []EffectView{}}
+	result := OperationsResponse{APIVersion: explorerAPIVersion, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Limit: limit, Counts: map[string]int{"attempts": len(state.Attempts), "leases": len(state.Leases), "incidents": len(state.Incidents), "resources": len(state.Resources), "effects": len(state.Effects)}, Truncated: map[string]bool{}, Attempts: []domain.Attempt{}, Leases: []domain.RoleLease{}, Incidents: []domain.Incident{}, Resources: []ResourceView{}, Effects: []EffectView{}}
 	for _, value := range state.Attempts {
 		result.Attempts = append(result.Attempts, value)
 	}
@@ -532,7 +610,7 @@ func buildOperations(svc *service.Service, limit int) (OperationsResponse, error
 		result.Incidents = append(result.Incidents, value)
 	}
 	for _, value := range state.Resources {
-		result.Resources = append(result.Resources, value)
+		result.Resources = append(result.Resources, resourceView(value))
 	}
 	for _, value := range state.Effects {
 		result.Effects = append(result.Effects, effectView(value))
@@ -661,6 +739,15 @@ func effectView(effect domain.EffectAction) EffectView {
 		view.AcceptanceStatus, view.CompletionStatus = receipt.AcceptanceStatus, receipt.CompletionStatus
 	}
 	return view
+}
+
+func resourceView(resource domain.ResourceLease) ResourceView {
+	return ResourceView{
+		ID: resource.ID, Kind: resource.Kind, Quantity: resource.Quantity, NodeID: resource.NodeID,
+		AttemptID: resource.AttemptID, RoleID: resource.RoleID, Status: resource.Status,
+		ClosureStatus: resource.ClosureStatus, ClosureUpdatedAt: resource.ClosureUpdatedAt,
+		LeasedAt: resource.LeasedAt, ReleasedAt: resource.ReleasedAt,
+	}
 }
 
 func countNodeRuntime(state domain.State) map[string]int {

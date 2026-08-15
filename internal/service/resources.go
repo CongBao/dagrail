@@ -15,7 +15,7 @@ type resourceClosureInput struct {
 	Receipt json.RawMessage `json:"receipt"`
 }
 
-func (s *Service) applyResourceAction(state domain.State, payload actionRefPayload, input json.RawMessage, idempotencyKey string) (ActionResult, error) {
+func (s *Service) applyResourceAction(state domain.State, payload actionRefPayload, input json.RawMessage, idempotencyKey, requestDigest string) (ActionResult, error) {
 	if _, err := s.requireRoleCapability(state, payload.RoleID, domain.CapabilityResourceClose); err != nil {
 		return ActionResult{}, err
 	}
@@ -77,7 +77,7 @@ func (s *Service) applyResourceAction(state domain.State, payload actionRefPaylo
 	actionRaw, _ := json.Marshal(action)
 	events = append(events, journal.Event{Type: "action.applied", Payload: actionRaw})
 	expectedHead := payload.HeadHash
-	segment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: payload.Kind, ActorRole: payload.RoleID, IdempotencyKey: idempotencyKey}, events, s.Now(), &expectedHead)
+	segment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: payload.Kind, ActorRole: payload.RoleID, IdempotencyKey: idempotencyKey, ObjectRef: "action:" + payload.ActionID, RequestDigest: requestDigest}, events, s.Now(), &expectedHead)
 	if err != nil {
 		return ActionResult{}, err
 	}
