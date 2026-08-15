@@ -1,1 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" rx="48" fill="#0F172A"/><path fill="#60A5FA" d="M32 44h76v32H64v52h52v32H32zm116 0h76v116h-84v-32h52V76h-44z"/><circle cx="128" cy="200" r="24" fill="#BFDBFE"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
+  <title id="title">DAGrail</title>
+  <desc id="description">A path branches safely between two rails on a dark surface.</desc>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M96 112h320M96 400h320" stroke="#CBD5E1" stroke-width="36"/>
+    <path d="M142 256h112m0 0 116-68M254 256l116 68" stroke="#60A5FA" stroke-width="28"/>
+    <circle cx="128" cy="256" r="30" fill="#60A5FA"/>
+    <circle cx="256" cy="256" r="30" fill="#60A5FA"/>
+    <circle cx="384" cy="180" r="30" fill="#38BDF8"/>
+    <circle cx="384" cy="332" r="30" fill="#38BDF8"/>
+  </g>
+</svg>

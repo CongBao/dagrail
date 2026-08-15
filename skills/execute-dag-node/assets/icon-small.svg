@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title description">
+  <title id="title">Execute DAG Node</title>
+  <desc id="description">One active node on a compact bounded path.</desc>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 24h84M22 104h84" stroke="#475569" stroke-width="10"/>
+    <path d="M32 64h64" stroke="#2563EB" stroke-width="8"/>
+    <circle cx="28" cy="64" r="8" fill="#2563EB"/>
+    <circle cx="64" cy="64" r="11" fill="#38BDF8" stroke="#2563EB" stroke-width="5"/>
+    <circle cx="100" cy="64" r="8" fill="#2563EB"/>
+  </g>
+</svg>

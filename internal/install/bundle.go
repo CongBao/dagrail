@@ -172,14 +172,26 @@ func linkedPluginBundle() ([]bundleFile, string, int, error) {
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	required := map[string]bool{
-		".agents/plugins/marketplace.json":           false,
-		".claude-plugin/marketplace.json":            false,
-		".github/plugin/marketplace.json":            false,
-		"plugins/dagrail/.codex-plugin/plugin.json":  false,
-		"plugins/dagrail/.claude-plugin/plugin.json": false,
-		"plugins/dagrail/.plugin/plugin.json":        false,
-		"plugins/dagrail/skills/govern-dag/SKILL.md": false,
-		"plugins/dagrail/hooks/hooks.json":           false,
+		".agents/plugins/marketplace.json":                              false,
+		".claude-plugin/marketplace.json":                               false,
+		".github/plugin/marketplace.json":                               false,
+		"plugins/dagrail/.codex-plugin/plugin.json":                     false,
+		"plugins/dagrail/.claude-plugin/plugin.json":                    false,
+		"plugins/dagrail/.plugin/plugin.json":                           false,
+		"plugins/dagrail/assets/composer-icon.svg":                      false,
+		"plugins/dagrail/assets/logo-dark.svg":                          false,
+		"plugins/dagrail/assets/logo.svg":                               false,
+		"plugins/dagrail/skills/govern-dag/SKILL.md":                    false,
+		"plugins/dagrail/skills/govern-dag/agents/openai.yaml":          false,
+		"plugins/dagrail/skills/govern-dag/assets/icon-large.svg":       false,
+		"plugins/dagrail/skills/govern-dag/assets/icon-small.svg":       false,
+		"plugins/dagrail/skills/execute-dag-node/agents/openai.yaml":    false,
+		"plugins/dagrail/skills/execute-dag-node/assets/icon-large.svg": false,
+		"plugins/dagrail/skills/execute-dag-node/assets/icon-small.svg": false,
+		"plugins/dagrail/skills/review-dag-node/agents/openai.yaml":     false,
+		"plugins/dagrail/skills/review-dag-node/assets/icon-large.svg":  false,
+		"plugins/dagrail/skills/review-dag-node/assets/icon-small.svg":  false,
+		"plugins/dagrail/hooks/hooks.json":                              false,
 	}
 	hash := sha256.New()
 	_, _ = hash.Write([]byte(pluginBundleDomain))

@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
-  <title id="title">DAGrail</title>
-  <desc id="description">A path branches safely between two rails.</desc>
+  <title id="title">Govern DAG</title>
+  <desc id="description">A governed path branches between two rails.</desc>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M96 112h320M96 400h320" stroke="#334155" stroke-width="36"/>
+    <path d="M96 112h320M96 400h320" stroke="#475569" stroke-width="36"/>
     <path d="M142 256h112m0 0 116-68M254 256l116 68" stroke="#2563EB" stroke-width="28"/>
     <circle cx="128" cy="256" r="30" fill="#2563EB"/>
     <circle cx="256" cy="256" r="30" fill="#2563EB"/>
