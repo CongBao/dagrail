@@ -470,18 +470,24 @@ func claudeMCPConfigurationMatches(output, runtimePath string) bool {
 	}
 	seen := map[string]bool{}
 	lines := strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n")
-	first := ""
-	for _, line := range lines {
+	sectionStart := -1
+	for index, line := range lines {
 		if strings.TrimSpace(line) != "" {
-			first = strings.TrimSpace(line)
+			if strings.TrimSpace(line) != MCPServerName+":" {
+				return false
+			}
+			sectionStart = index + 1
 			break
 		}
 	}
-	if first != MCPServerName+":" {
+	if sectionStart < 0 {
 		return false
 	}
-	for _, line := range lines {
-		if !strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "   ") {
+	for _, line := range lines[sectionStart:] {
+		if strings.TrimSpace(line) == "" || !strings.HasPrefix(line, "  ") {
+			break
+		}
+		if strings.HasPrefix(line, "   ") {
 			continue
 		}
 		field, value, found := strings.Cut(strings.TrimPrefix(line, "  "), ":")

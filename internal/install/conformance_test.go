@@ -251,6 +251,7 @@ func TestClaudeMCPConfigurationUsesNameSpecificClosedOutput(t *testing.T) {
 		strings.Replace(valid, "Args: mcp --stdio", "Args: mcp --http", 1),
 		valid + "  Command: " + runtimePath + "\n",
 		"dagrail:\n  Diagnostics: Command: " + runtimePath + " Args: mcp --stdio\n",
+		"dagrail:\ndiagnostics:\n  Type: stdio\n  Command: " + runtimePath + "\n  Args: mcp --stdio\n",
 		strings.Repeat("x", (1<<20)+1),
 	} {
 		if claudeMCPConfigurationMatches(invalid, runtimePath) {
