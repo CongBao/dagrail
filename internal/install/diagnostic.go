@@ -94,7 +94,14 @@ func Diagnose(ctx context.Context, options Options) (InstallationDiagnostic, err
 	}
 	add("bundle", bundleReady, "bundle_verified", bundleFailCode)
 
-	states, err := StatusContext(ctx, options)
+	statusOptions := options
+	if statusOptions.RuntimePath == "" && runtimeReady {
+		// Bind the harness probe to the exact runtime artifact already verified
+		// from the signed local receipt. Doctor callers should not have to repeat
+		// a path that the controller can authenticate itself.
+		statusOptions.RuntimePath = runtimeStatus.RuntimePath
+	}
+	states, err := StatusContext(ctx, statusOptions)
 	if err != nil {
 		return report, err
 	}

@@ -54,8 +54,19 @@ dagrail incident resolve --root . --incident INCIDENT --actor-role ROLE \
 ```
 
 Two consecutive no-progress reports trip the default circuit breaker. A missed deadline
-also trips on the next progress evaluation. A circuit-open effect incident must be
-resolved before that effect can reconcile; unrelated graph lanes remain available.
+also trips on the next progress evaluation. Resource and Effect Incidents resolve only
+when a confirmed observation removes the underlying ambiguity. To authorize another
+bounded attempt after a circuit opens, set `--disposition retry`; this explicitly resets
+the circuit budget and deadline before reconcile. Later automatic observations preserve
+that disposition, operator/time, progress audit, and reset deadline. Dispatch,
+reconcile, and Effect-sourced Incident mutation are serialized across local processes
+until the receipt is persisted, so a stale observation cannot downgrade a confirmed
+Effect or erase an operator circuit. Each external observation consumes one prior
+dispatch/reconcile admission; a `reconciling` receipt does not authorize another
+observation. CLI interrupt/caller cancellation also reaches an Incident command waiting
+for this lock; once cancellation is observed, no journal event is appended, and the same
+idempotency key may be retried after the lock is available. Other dispositions do not
+reopen the circuit, and unrelated graph lanes remain available.
 
 ## Back up and restore
 
@@ -151,3 +162,28 @@ rebuild, and live/rebuilt logical fingerprints to one head. If only SQLite is da
 whose prefix does not diverge. See `docs/recovery.md` for the bounded runbook.
 
 Verify authority before repair. Projection rebuild never edits journal segments.
+
+## Bootstrap authenticated lifecycle history
+
+Historical import is allowed only before the target graph starts work. First validate a
+converter-produced generic manifest against its canonical authority-statement digest
+obtained through a different trusted channel. That digest binds the target, normalized
+source chain, and native mapping. Import then commits the receipt and complete mapped
+prefix as one journal segment.
+
+```sh
+dagrail lifecycle validate-history --root . --file migration.json \
+  --source-authority-hash sha256:SOURCE_AUTHORITY_DIGEST
+dagrail lifecycle import-history --root . --file migration.json \
+  --source-authority-hash sha256:SOURCE_AUTHORITY_DIGEST \
+  --actor-role migration-operator --idempotency-key migration/source-prefix-1
+dagrail lifecycle projection --root .
+```
+
+Do not use a manifest to infer its own trust anchor. Do not import into a project with
+leases, Attempts, Decisions, effects, resources, Incidents, or graph revisions beyond
+the initial import. Deterministic join/milestone settlement from that initial import is
+allowed. Validation rejects non-ready Attempts, missing Role capabilities, leases over
+24 hours, project-specific native vocabulary, contradictory Decisions, invalid event
+time order, and Effect histories that do not match a recoverable writer prefix. See
+[`migration.md`](migration.md) for conversion and cutover bounds.

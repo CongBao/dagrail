@@ -67,6 +67,17 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
   writing to, controlling, or migrating the source project.
 - **External validation subject**: any repository or workflow observed through public DAGrail contracts. Its local vocabulary never becomes a kernel type merely because it is used for qualification.
 - **Qualification driver**: disposable, repository-external conversion and comparison logic that exercises public CLI, MCP, or SDK surfaces against an External validation subject.
+- **Lifecycle migration manifest**: a bounded mapping of one complete external
+  append-only prefix to closed DAGrail native events. Its records digest and source
+  chain are portable input; source-specific conversion stays outside the kernel.
+- **Source command proof ledger**: the per-record, one-shot association between one
+  current-writer command shape, its optional `action.applied`, and every native event
+  that proves that action. A proof cannot be reused by another action or left orphaned.
+- **Source authority trust anchor**: an out-of-band SHA-256 digest supplied separately
+  from a migration manifest. Import fails unless it exactly matches the manifest's
+  claimed source authority.
+- **Lifecycle projection**: a deterministic, redacted view of imported and native
+  runtime state. Raw action inputs and effect/resource receipts are omitted or digested.
 - **DAG Explorer**: loopback-only, mutation-free browser projection over bounded,
   deterministic v1beta1 query APIs. A selected Node deep link is a view locator, never
   a lifecycle capability.
@@ -160,6 +171,39 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 30. A new mutation command binds its idempotency key to actor, object, command kind,
     and normalized request intent; a changed retry fails closed instead of returning an
     unrelated earlier result.
+31. A validation subject may supply an external converter and acceptance evidence, but
+    its names, repository paths, requirement system, and lifecycle vocabulary never
+    become DAGrail kernel, schema, MCP, hook, or skill contracts.
+32. Historical lifecycle import requires a pristine graph-only target, a complete
+    bounded source prefix, an out-of-band authority digest, reducer/invariant preflight,
+    and one atomic journal segment. It is not a normal agent action or implicit cutover.
+33. A migratable native history must preserve the same ready-frontier, Role capability,
+    24-hour lease ceiling, event-time partial order, Decision/completion binding, and
+    Effect crash prefixes as the current writer; project-specific action or Incident
+    vocabulary is rejected before journal commit.
+34. One normalized source record represents one source command. Its `action.applied`
+    summary must bind the exact checkpoint, evidence package, reuse/semantic Decision,
+    terminal outcome, Effect preparation, or Resource closure events emitted by that
+    same record. Every support event is consumed exactly once, the record must be
+    closed at its end, and final projection equality cannot substitute for command
+    causality.
+35. A persisted mutation has one authoritative event time. Slow policy/effect
+    preparation must recheck the original head, action expiry, session binding, and
+    Role lease at that persistence boundary; external observations after an authorized
+    dispatch remain recordable for reconcile without inventing a new authorization.
+36. Resource and Effect Incidents are resolved only by the confirmed observation that
+    closes their underlying ambiguity; an operator may disposition or trip them but
+    cannot manually resolve and later reopen them. Imported Effect preparation must
+    equal its Graph-declared adapter/request, and an Effect receipt's closed body status
+    must equal its observation status.
+37. Dispatch, reconcile, and Effect-sourced Incident mutation share one cross-process
+    observation lease from prepared publication through receipt persistence. Each
+    observation consumes exactly one dispatch/reconcile admission; a `reconciling`
+    receipt is not a new admission. Automatic observations preserve an explicit retry
+    disposition, its actor/time, progress audit, and reset deadline; a stale observation
+    cannot downgrade a confirmed Effect or erase an operator circuit. Incident lock
+    waits carry caller cancellation end to end and never commit after cancellation is
+    observed.
 
 ## Bounded contexts
 
@@ -176,6 +220,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
   support diagnostics, and a local read-only UI derived from authority.
 - **Migration observation**: bounded source digests, private locators, isolated shadow
   import, and repeatable drift verification without lifecycle control.
+- **Lifecycle bootstrap**: external native-event conversion, out-of-band trust anchor,
+  complete-prefix validation, atomic import receipt, and redacted rebuildable projection.
 - **Release readiness**: closed historical binary inputs, source qualification,
   optional project/install evidence, and explicitly outstanding adoption evidence.
 

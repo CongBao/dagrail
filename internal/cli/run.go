@@ -116,10 +116,12 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 		return runSignature(args[1:], stdout, stderr)
 	case "journal":
 		return runJournal(args[1:], stdout, stderr)
+	case "lifecycle":
+		return runLifecycle(args[1:], stdout, stderr)
 	case "evidence":
 		return runEvidence(args[1:], stdout, stderr)
 	case "incident":
-		return runIncident(args[1:], stdout, stderr)
+		return runIncident(ctx, args[1:], stdout, stderr)
 	case "projection":
 		return runProjection(ctx, args[1:], stdout, stderr)
 	case "qualify":
@@ -141,6 +143,67 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 		return writeJSON(stdout, map[string]string{"version": version.Version, "commit": version.Commit, "date": version.Date})
 	default:
 		return usagef("unknown command %q", args[0])
+	}
+}
+
+func runLifecycle(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return usagef("usage: dagrail lifecycle <validate-history|import-history|projection>")
+	}
+	flags := flag.NewFlagSet("lifecycle "+args[0], flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	root := flags.String("root", ".", "project root")
+	filePath := flags.String("file", "", "lifecycle migration manifest")
+	trustedAuthority := flags.String("source-authority-hash", "", "trusted out-of-band SHA-256 digest of the source authority")
+	actorRole := flags.String("actor-role", "", "migration actor role")
+	idempotencyKey := flags.String("idempotency-key", "", "stable migration idempotency key")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return usagef("usage: dagrail lifecycle %s [flags]", args[0])
+	}
+	switch args[0] {
+	case "projection":
+		s, err := service.OpenForRecovery(*root)
+		if err != nil {
+			return err
+		}
+		report, err := s.LifecycleProjection()
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, report)
+	case "validate-history", "import-history":
+		if *filePath == "" || *trustedAuthority == "" {
+			return usagef("--file and --source-authority-hash are required")
+		}
+		manifest, err := service.DecodeLifecycleMigrationFile(*filePath)
+		if err != nil {
+			return err
+		}
+		if args[0] == "validate-history" {
+			s, err := service.OpenForRecovery(*root)
+			if err != nil {
+				return err
+			}
+			report, err := s.ValidateLifecycleMigration(manifest, *trustedAuthority)
+			if err != nil {
+				return err
+			}
+			return writeJSON(stdout, report)
+		}
+		s, err := service.OpenForMigration(*root)
+		if err != nil {
+			return err
+		}
+		receipt, err := s.ImportLifecycleHistory(manifest, *trustedAuthority, *actorRole, *idempotencyKey)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, receipt)
+	default:
+		return usagef("unknown lifecycle command %q", args[0])
 	}
 }
 
@@ -355,7 +418,7 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 	}
 }
 
-func runIncident(args []string, stdout, stderr io.Writer) error {
+func runIncident(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: dagrail incident <progress|trip|disposition|resolve>")
 	}
@@ -380,13 +443,13 @@ func runIncident(args []string, stdout, stderr io.Writer) error {
 	var incident any
 	switch args[0] {
 	case "progress":
-		incident, err = s.ProgressIncident(*id, *role, *note, *madeProgress, *key)
+		incident, err = s.ProgressIncidentContext(ctx, *id, *role, *note, *madeProgress, *key)
 	case "trip":
-		incident, err = s.TripIncident(*id, *role, *reason, *key)
+		incident, err = s.TripIncidentContext(ctx, *id, *role, *reason, *key)
 	case "resolve":
-		incident, err = s.ResolveIncident(*id, *role, *resolution, *key)
+		incident, err = s.ResolveIncidentContext(ctx, *id, *role, *resolution, *key)
 	case "disposition":
-		incident, err = s.SetIncidentDisposition(*id, *role, *disposition, *note, *key)
+		incident, err = s.SetIncidentDispositionContext(ctx, *id, *role, *disposition, *note, *key)
 	default:
 		return fmt.Errorf("unknown incident command %q", args[0])
 	}

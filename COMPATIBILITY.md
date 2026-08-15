@@ -20,6 +20,12 @@ digests, context budgets, and command inventory implemented by the current binar
   keys remain accepted. The Explorer remains loopback-only and has no mutation route.
 - Graph Definition v1alpha1 remains importable. A future graph format uses another
   `apiVersion` rather than silently changing existing semantics.
+- Graph capability discovery is bound to the exact Graph schema path and digest in the
+  compatibility contract. Consumers must not infer missing capabilities from one
+  adapter, harness, prompt, or example.
+- LifecycleMigration and LifecycleProjection v1alpha1 are governed by their published
+  schema paths and digests. Import remains an operator-only, pristine-target bootstrap;
+  it does not add another MCP tool or a source-specific converter.
 - DecisionRecord v1alpha1 is append-only authority. Fields are additive; the record
   continues to bind Project, Graph Revision, Node, Attempt, Role, input digest, closed
   outcome, and exact provider identity when the source is a provider.
@@ -43,7 +49,7 @@ digests, context budgets, and command inventory implemented by the current binar
   additive in-version; the four broad error classes and their exit codes remain stable
   through the beta line. Completion is generated from the catalog, not an independent
   authority. Installation diagnostics remain path-free and omit raw host output.
-- HistoricalBinaryMatrix v1alpha1 closes the v0.10–v0.19 input window by exact commit.
+- HistoricalBinaryMatrix v1alpha1 closes the v0.10–v0.20 input window by exact commit.
   ReadinessDecision v1alpha1 may declare external-validation readiness but cannot set
   production validation or 1.0 readiness. Changing a pinned historical commit or
   weakening an adoption gap requires a new contract version and explicit rationale.

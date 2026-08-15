@@ -156,3 +156,16 @@ not add project-specific types or adapters to the DAGrail kernel.
 
 Delivered in v0.20.0 without adding validation-subject vocabulary or adapters to the
 kernel. Cold-review and external-shadow evidence are release checks, not product state.
+
+## v0.21.0 — Generic lifecycle bootstrap and integration repair
+
+- validate and atomically import one complete external lifecycle prefix through closed
+  native DAGrail events and a separately trusted source-authority digest;
+- publish a deterministic redacted lifecycle projection and exact Graph capability
+  discovery instead of relying on adapter inference;
+- repair receipt-derived MCP installation diagnosis and automate upgrades across
+  immutable local marketplace paths;
+- extend the exact historical-binary window through v0.20.
+
+The first real adoption remains an external validation subject. Its converter,
+vocabulary, repository paths, and cutover policy are not shipped as DAGrail contracts.

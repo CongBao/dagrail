@@ -10,6 +10,11 @@ version, top-level CLI commands, exactly six MCP tools, context budgets, readabl
 journal versions, projection schema, provider SDK version, and the path plus SHA-256
 digest of every governed JSON report schema.
 
+The Graph entry also publishes its exact schema path/digest and a sorted closed
+capability list. Consumers must use that entry to discover resource capacities,
+resource requests, dynamic graph changes, and lifecycle migration support; an adapter
+omission or prompt example is not evidence that the capability is absent.
+
 The beta line is additive unless a surface selects a new `apiVersion`. Automation
 should select API versions and schema digests, never human wording or JSON key order.
 
@@ -52,6 +57,12 @@ two-minute ceiling and a 64-KiB combined-output cap.
 plugin bundle, selected harness registrations, and MCP launchers. It reports closed
 status codes without including executable paths or raw host output.
 
+`lifecycle validate-history|import-history` is a separate operator surface. Both require
+an external manifest and an independently supplied source-authority digest; import also
+requires an actor Role label and stable idempotency key. It is deliberately absent from
+MCP so an agent cannot turn source-specific conversion or cutover into an ordinary
+allowed action. `lifecycle projection` is read-only and deterministic.
+
 `dagrail readiness` returns ReadinessDecision v1alpha1. It combines source
 qualification with the closed beta compatibility window and optional project or local
 installation checks. A successful process exit means `externalValidationReady`, not
@@ -87,7 +98,8 @@ generic provider invocation output alone never advances a Node.
 
 ## JSON schemas
 
-Published schemas live in `schemas/`. Current governed reports include the Explorer UI
+Published schemas live in `schemas/`. Current governed reports include lifecycle
+migration/projection, the Explorer UI
 API, security audit, journal verification, plugin conformance, support report, recovery
 rehearsal, release qualification, and the compatibility contract itself. Reports use
 closed objects so misspelled or silently added fields fail validation. ReleaseManifest

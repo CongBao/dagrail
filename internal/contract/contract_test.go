@@ -27,7 +27,7 @@ func TestBetaContractIsDeterministicAndNamesExactlySixMCPTools(t *testing.T) {
 	if first.APIVersion != "dagrail.io/v1beta1" || first.Kind != "CompatibilityContract" || first.UI.APIVersion != "dagrail.io/ui/v1beta1" || len(first.MCP) != 6 {
 		t.Fatalf("unexpected beta contract: %#v", first)
 	}
-	for name, surface := range map[string]DocumentedSurface{"command catalog": first.CommandCatalog, "CLI error": first.CLIError, "decision record": first.DecisionRecord, "installation diagnostic": first.Installation, "historical binary matrix": first.HistoricalMatrix, "readiness decision": first.Readiness, "ui": first.UI, "security": first.Security, "journal verification": first.JournalVerification, "plugin conformance": first.PluginConformance, "support": first.Support, "recovery": first.Recovery, "release qualification": first.ReleaseQualification, "release manifest": first.ReleaseManifest, "release verification": first.ReleaseVerification} {
+	for name, surface := range map[string]DocumentedSurface{"command catalog": first.CommandCatalog, "CLI error": first.CLIError, "decision record": first.DecisionRecord, "installation diagnostic": first.Installation, "historical binary matrix": first.HistoricalMatrix, "readiness decision": first.Readiness, "ui": first.UI, "security": first.Security, "journal verification": first.JournalVerification, "plugin conformance": first.PluginConformance, "support": first.Support, "recovery": first.Recovery, "release qualification": first.ReleaseQualification, "release manifest": first.ReleaseManifest, "release verification": first.ReleaseVerification, "lifecycle migration": first.LifecycleMigration, "lifecycle projection": first.LifecycleProjection} {
 		schemaRaw, err := os.ReadFile("../../" + surface.SchemaPath)
 		if err != nil {
 			t.Fatal(err)
@@ -36,6 +36,18 @@ func TestBetaContractIsDeterministicAndNamesExactlySixMCPTools(t *testing.T) {
 		if got := "sha256:" + fmt.Sprintf("%x", digest); got != surface.SchemaSHA256 {
 			t.Fatalf("%s schema digest drift: contract=%s file=%s", name, surface.SchemaSHA256, got)
 		}
+	}
+	graphSchema, err := os.ReadFile("../../" + first.Graph.SchemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graphDigest := sha256.Sum256(graphSchema)
+	if got := "sha256:" + fmt.Sprintf("%x", graphDigest); got != first.Graph.SchemaSHA256 {
+		t.Fatalf("graph schema digest drift: contract=%s file=%s", first.Graph.SchemaSHA256, got)
+	}
+	wantCapabilities := []string{"dynamic-graph", "historical-lifecycle-import", "lifecycle-projection", "positive-predicate-ast", "resource-capacities", "resource-requests", "role-leases"}
+	if !reflect.DeepEqual(first.Graph.Capabilities, wantCapabilities) {
+		t.Fatalf("graph capabilities are not closed and deterministic: %v", first.Graph.Capabilities)
 	}
 	want := []string{"dag_context", "dag_inspect", "dag_apply", "dag_graph_change", "dag_reconcile", "dag_pre_wait"}
 	for index, tool := range first.MCP {

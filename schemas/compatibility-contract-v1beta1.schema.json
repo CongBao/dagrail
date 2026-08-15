@@ -4,13 +4,13 @@
   "title": "DAGrail Compatibility Contract v1beta1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiVersion", "kind", "version", "stability", "graph", "cli", "commandCatalog", "cliError", "decisionRecord", "installationDiagnostic", "historicalBinaryMatrix", "readinessDecision", "ui", "security", "journalVerification", "pluginConformance", "support", "recovery", "releaseQualification", "releaseManifest", "releaseVerification", "providerSdk", "journal", "projectionSchema", "mcpTools", "contextBudgets", "topLevelCommands", "compatibilityPromises"],
+  "required": ["apiVersion", "kind", "version", "stability", "graph", "cli", "commandCatalog", "cliError", "decisionRecord", "installationDiagnostic", "historicalBinaryMatrix", "readinessDecision", "ui", "security", "journalVerification", "pluginConformance", "support", "recovery", "releaseQualification", "releaseManifest", "releaseVerification", "lifecycleMigration", "lifecycleProjection", "providerSdk", "journal", "projectionSchema", "mcpTools", "contextBudgets", "topLevelCommands", "compatibilityPromises"],
   "properties": {
     "apiVersion": {"const": "dagrail.io/v1beta1"},
     "kind": {"const": "CompatibilityContract"},
     "version": {"type": "string", "minLength": 1},
     "stability": {"const": "beta"},
-    "graph": {"$ref": "#/$defs/surface"},
+    "graph": {"$ref": "#/$defs/graphSurface"},
     "cli": {"$ref": "#/$defs/surface"},
     "commandCatalog": {"$ref": "#/$defs/documentedSurface"},
     "cliError": {"$ref": "#/$defs/documentedSurface"},
@@ -27,6 +27,8 @@
     "releaseQualification": {"$ref": "#/$defs/documentedSurface"},
     "releaseManifest": {"$ref": "#/$defs/documentedSurface"},
     "releaseVerification": {"$ref": "#/$defs/documentedSurface"},
+    "lifecycleMigration": {"$ref": "#/$defs/documentedSurface"},
+    "lifecycleProjection": {"$ref": "#/$defs/documentedSurface"},
     "providerSdk": {"$ref": "#/$defs/surface"},
     "journal": {
       "type": "object",
@@ -68,6 +70,18 @@
     "compatibilityPromises": {"type": "array", "items": {"type": "string", "minLength": 1}}
   },
   "$defs": {
+    "graphSurface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "stability", "schemaPath", "schemaSha256", "capabilities"],
+      "properties": {
+        "apiVersion": {"type": "string", "minLength": 1},
+        "stability": {"type": "string", "minLength": 1},
+        "schemaPath": {"type": "string", "minLength": 1},
+        "schemaSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "capabilities": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"}}
+      }
+    },
     "surface": {
       "type": "object",
       "additionalProperties": false,

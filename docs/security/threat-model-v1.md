@@ -1,6 +1,6 @@
 # Threat model v1
 
-This model applies to DAGrail v0.20's local CLI, stdio MCP server, compile-in
+This model applies to DAGrail v0.21's local CLI, stdio MCP server, compile-in
 providers, harness subprocesses, loopback Explorer, immutable journal, SQLite
 projection, portable exports, and plugin runtime. It is versioned because changing a
 trust boundary is an architecture change, not a documentation edit.
@@ -27,6 +27,7 @@ diagnostic format and never contain journal payloads or graph identifiers.
 | Effects | external systems | prepare/dispatch/receipt/reconcile saga and stable action ID | a remote system may not expose enough evidence to resolve `unknown` |
 | Portable files | backup/export bytes | digest plus optional detached Ed25519 signature | signature trust depends on separately distributed public keys |
 | Artifact bodies and secrets | external stores | only digest, size, type, provenance, and credential-free URI enter authority | field screening cannot detect every secret or PII form |
+| Imported lifecycle prefix | external authority plus operator trust anchor | separate authority digest, complete-prefix chain, closed event mapping, reducer/invariant preflight, atomic append | DAGrail cannot prove that an external converter understood its source correctly |
 
 The project locator is repository content and may be world-readable, but must not be
 group/other writable on POSIX. Runtime data, journal segments, projections, observation
@@ -72,6 +73,15 @@ proved by the portable binary.
 - Reconciliation uses a per-action OS/process lock around adapter observation, not the
   journal lock; concurrent retries share the first committed result and a crash releases
   the observation lock for recovery.
+- Lifecycle migration requires a source-authority digest supplied separately from the
+  manifest, accepts only a complete bounded prefix into a graph-bootstrap-only target,
+  closes every native event envelope and source-command proof ledger, and reduces the
+  candidate before one atomic append. Support events are consumed once; orphan or
+  duplicated proofs and non-writer Incident companions fail closed. Resource/Effect
+  Incidents require confirmed-observation resolution; imported Effects bind their Graph
+  declaration and closed receipt status. Slow policy/effect preparation is reauthorized
+  at its journal persistence time. Source-specific conversion and semantic equivalence
+  remain operator evidence, not a controller claim.
 - Support output pseudonymizes project identity and excludes absolute paths, Graph and
   event payloads, Node/Role IDs, prompts, artifacts, and raw harness output before an
   owner-only exclusive export is allowed.

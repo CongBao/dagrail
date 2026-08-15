@@ -2,6 +2,74 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.21.0 — 2026-08-15
+
+### Added
+
+- `lifecycle validate-history|import-history|projection` for one complete, bounded
+  external lifecycle prefix mapped to generic DAGrail native events;
+- an out-of-band authority-statement trust anchor binding the target, normalized source
+  chain, and native mapping; strict per-event transition/global-invariant preflight;
+  atomic journal commit; and deterministic redacted lifecycle projection;
+- current-writer prefix equivalence for ready/capability admission, 24-hour leases,
+  same-session lease renewal, causal event time, checkpoint/evidence/Decision/action
+  binding, resource closure, Incident management, and Effect dispatch/reconcile crash
+  recovery; the executable matrix covers task, review, resource, Incident, evidence,
+  and Effect writer paths and validates every emitted prefix against the public schema;
+- schema-bound Graph capability discovery, including dynamic graph, positive predicate,
+  resource capacity/request, Role lease, lifecycle import, and lifecycle projection support.
+
+### Fixed
+
+- lifecycle preflight now binds each `action.applied` to the concrete native events in
+  the same normalized source record, so a later final map cannot hide substituted
+  checkpoint text, package/Decision IDs, completion outcomes, or resource/effect targets;
+- source-command proofs are now single-use and record-closing: duplicate action use,
+  orphan Resource/Effect observations, missing release/Incident companions, and
+  unrelated native events fail before import;
+- Incident replay now matches the closed writer state machine and exact automatic
+  companions, including circuit-open behavior and observation-bound resolution time;
+- Resource and Effect Incidents can no longer be manually resolved ahead of their
+  underlying ambiguity; only the matching confirmed observation resolves them, while
+  an explicit `retry` disposition resets a circuit for another bounded reconcile and
+  its operator, time, deadline, and progress audit survive later automatic observations;
+- Effect dispatch, reconcile, and Effect-sourced Incident mutations now share one
+  per-action, cross-process observation lock from the prepared commit through receipt
+  persistence; Incident mutations reload authorization after waiting, so a late or
+  stale observation cannot downgrade a confirmed Effect or erase an operator circuit;
+- all four Incident mutation APIs now have context-aware variants and the CLI passes
+  its signal context through lock acquisition; interruption leaves the journal head
+  unchanged and an exact same-key retry commits once after the lock becomes available;
+- lifecycle preflight now treats each dispatch/reconcile admission as a one-shot proof:
+  an observation consumes it, a `reconciling` receipt does not mint another, and a
+  circuit-open/resolved Incident rejects new reconcile admission until explicit retry;
+- imported Effect preparation now binds the Graph-declared adapter and canonical
+  request, prepared adapter identity, a closed typed receipt whose inner/outer status
+  agrees, and completion failure classification where the action retains that input;
+- the public migration schema and generated Resource allowed actions now accept the
+  same arbitrary non-null JSON receipt shapes and reject null Resource receipts and
+  Effect requests;
+- slow policy and Effect preparation recheck head, action expiry, session, and Role
+  lease at the authoritative persistence time, while ordinary actions use one timestamp
+  for native events and their journal segment;
+- same-session Role renewal, active-lease Incident updates, arbitrary valid JSON action
+  input, Effect request, Resource receipt, and closed action/Incident projection
+  vocabularies now match the current writer and published schemas;
+- `doctor install` now checks MCP configuration against the exact runtime path already
+  verified by the local runtime receipt instead of reporting a false missing launcher;
+- upgrades from an existing immutable local bundled marketplace now perform a bounded
+  remove/register/install rotation and no longer call a remote-only in-place update.
+
+### Boundaries
+
+- lifecycle import is a high-risk operator CLI bootstrap, not a seventh MCP tool;
+- source-specific converters, vocabulary, authority discovery, and cutover policy remain
+  outside the kernel. Validation subjects do not define DAGrail product contracts.
+- projection schemas prohibit evidence URIs as well as redacting them in the reference
+  implementation.
+- the validation-subject boundary remains in its original ADR 0017, extended for the
+  v0.21 migration surface instead of duplicating the same decision under a new number.
+
 ## 0.20.0 — 2026-08-15
 
 ### Added

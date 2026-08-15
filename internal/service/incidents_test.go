@@ -1,13 +1,27 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+type observedDoneContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (ctx *observedDoneContext) Done() <-chan struct{} {
+	ctx.once.Do(func() { close(ctx.entered) })
+	return ctx.Context.Done()
+}
 
 func TestIncidentProgressTripsCircuitAndCanResolve(t *testing.T) {
 	root := t.TempDir()
@@ -73,6 +87,99 @@ func TestIncidentTextRejectsSensitiveMaterialBeforeStateAccess(t *testing.T) {
 	}
 	if _, err := svc.TripIncident("incident", "worker", "github_pat_abcdefghijklmnopqrstuvwxyz", "trip"); err == nil || !strings.Contains(err.Error(), "prohibited") {
 		t.Fatalf("sensitive circuit reason was accepted: %v", err)
+	}
+}
+
+func TestIncidentContextMethodsHonorCancellationBeforeStateAccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	svc := &Service{}
+	checks := []func() error{
+		func() error {
+			_, err := svc.ProgressIncidentContext(ctx, "incident", "worker", "progress", false, "progress")
+			return err
+		},
+		func() error {
+			_, err := svc.TripIncidentContext(ctx, "incident", "worker", "circuit", "trip")
+			return err
+		},
+		func() error {
+			_, err := svc.ResolveIncidentContext(ctx, "incident", "worker", "resolved", "resolve")
+			return err
+		},
+		func() error {
+			_, err := svc.SetIncidentDispositionContext(ctx, "incident", "worker", "retry", "retry", "disposition")
+			return err
+		},
+	}
+	for index, check := range checks {
+		if err := check(); !errors.Is(err, context.Canceled) {
+			t.Fatalf("incident context method %d ignored cancellation: %v", index, err)
+		}
+	}
+}
+
+func TestEffectIncidentContextCancellationWhileWaitingDoesNotCommit(t *testing.T) {
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"incident-wait-cancellation"},"spec":{"roles":[{"id":"worker","capabilities":["effect.apply","effect.reconcile","incident.manage"]}],"nodes":[{"id":"effect","kind":"effect","role":"worker","title":"effect","inputs":{"adapter":"manual","request":true},"outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
+	svc, _ := lifecycleWriterService(t, "incident-wait-cancellation", graph)
+	_, _ = svc.BindRole("worker", "codex", "session", time.Hour, false, "bind")
+	_, _ = svc.ApplyAction(findActionRef(t, svc, "worker", "effect", "node.start"), json.RawMessage(`{}`), "start")
+	prepared, err := svc.ApplyAction(findActionRef(t, svc, "worker", "effect", "effect.prepare"), json.RawMessage(`{}`), "prepare")
+	if err != nil || prepared.Status != "unknown" {
+		t.Fatalf("manual Effect did not open an Incident: %+v %v", prepared, err)
+	}
+	incidentID := "effect:" + prepared.ActionID
+	release, err := svc.acquireEffectReconcileLock(context.Background(), prepared.ActionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := svc.State()
+	base, cancel := context.WithCancel(context.Background())
+	ctx := &observedDoneContext{Context: base, entered: make(chan struct{})}
+	result := make(chan error, 1)
+	go func() {
+		_, tripErr := svc.TripIncidentContext(ctx, incidentID, "worker", "operator", "cancelled-trip")
+		result <- tripErr
+	}()
+	select {
+	case <-ctx.entered:
+	case <-time.After(time.Second):
+		cancel()
+		release()
+		<-result
+		t.Fatal("Effect Incident mutation never consulted the caller context while waiting for its lock")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			release()
+			t.Fatalf("lock wait returned the wrong cancellation: %v", err)
+		}
+	case <-time.After(time.Second):
+		release()
+		<-result
+		t.Fatal("Effect Incident mutation ignored cancellation while waiting for its lock")
+	}
+	afterCancel, _ := svc.State()
+	if afterCancel.HeadHash != before.HeadHash || afterCancel.HeadSequence != before.HeadSequence {
+		release()
+		t.Fatalf("cancelled Effect Incident mutation committed authority: before=%d/%s after=%d/%s", before.HeadSequence, before.HeadHash, afterCancel.HeadSequence, afterCancel.HeadHash)
+	}
+	release()
+	if _, err := svc.TripIncidentContext(context.Background(), incidentID, "worker", "operator", "cancelled-trip"); err != nil {
+		t.Fatal(err)
+	}
+	afterRetry, _ := svc.State()
+	if afterRetry.HeadSequence != before.HeadSequence+1 {
+		t.Fatalf("same-key retry did not commit exactly once: before=%d after=%d", before.HeadSequence, afterRetry.HeadSequence)
+	}
+	if _, err := svc.TripIncidentContext(context.Background(), incidentID, "worker", "operator", "cancelled-trip"); err != nil {
+		t.Fatal(err)
+	}
+	afterIdempotent, _ := svc.State()
+	if afterIdempotent.HeadSequence != afterRetry.HeadSequence {
+		t.Fatalf("idempotent retry appended another command: before=%d after=%d", afterRetry.HeadSequence, afterIdempotent.HeadSequence)
 	}
 }
 

@@ -144,8 +144,22 @@ func validateDecisionRecord(record domain.DecisionRecord, state domain.State) er
 	}
 	node, ok := state.NodeDefinition(record.NodeID)
 	attempt, attemptOK := state.Attempts[record.AttemptID]
-	if !ok || !attemptOK || attempt.NodeID != node.ID || !declaresOutcome(node, record.Outcome) {
+	if !ok || !attemptOK || attempt.NodeID != node.ID || attempt.RoleID != record.RoleID || node.Role != record.RoleID || !oneOf(node.Kind, "review", "decision", "gate") || !declaresOutcome(node, record.Outcome) {
 		return fmt.Errorf("decision record references an invalid node, attempt or outcome")
+	}
+	expectedKey, expectedSource := "verdict", "llm"
+	if node.Decision != nil {
+		expectedKey, expectedSource = node.Decision.Key, node.Decision.Source
+	}
+	if record.Key != expectedKey || record.Source != expectedSource || !oneOf(record.Source, "human", "llm", "provider") {
+		return fmt.Errorf("decision record does not match the node decision contract")
+	}
+	if record.Source == "provider" {
+		if record.Facts.Policy[record.Key] != record.Outcome {
+			return fmt.Errorf("provider decision fact does not match its outcome")
+		}
+	} else if record.Facts.Decision[record.Key] != record.Outcome {
+		return fmt.Errorf("decision fact does not match its outcome")
 	}
 	if err := validateEvidenceRefs(record.EvidenceRefs); err != nil {
 		return err
@@ -154,7 +168,7 @@ func validateDecisionRecord(record domain.DecisionRecord, state domain.State) er
 		return fmt.Errorf("decision input digest is invalid")
 	}
 	if record.Source == "provider" {
-		if record.Provider == nil || record.Provider.ID == "" || record.Provider.Version == "" || record.Provider.SchemaHash == "" {
+		if record.Provider == nil || record.Provider.ID == "" || record.Provider.Version == "" || record.Provider.SchemaHash == "" || node.Decision == nil || record.Provider.ID != node.Decision.ProviderID {
 			return fmt.Errorf("provider decision binding is incomplete")
 		}
 	} else if record.Provider != nil {

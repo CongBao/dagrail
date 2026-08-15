@@ -43,8 +43,8 @@
     },
     "checks": {
       "type": "array",
-      "minItems": 12,
-      "maxItems": 12,
+      "minItems": 13,
+      "maxItems": 13,
       "items": { "$ref": "#/$defs/check" }
     },
     "externalGates": {
@@ -72,6 +72,7 @@
             "source-layout",
             "compatibility-contract",
             "published-schema-digests",
+            "validation-subject-boundary",
             "plugin-metadata-versions",
             "linked-plugin-bundle",
             "ci-workflow",
@@ -92,6 +93,8 @@
             "contract_schema_invalid",
             "all_schema_digests_match",
             "schema_digest_mismatch",
+            "generic_boundary_contracts_closed",
+            "generic_boundary_contract_invalid",
             "all_versions_match",
             "plugin_version_mismatch",
             "closed_bundle_valid",

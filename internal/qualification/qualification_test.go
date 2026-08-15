@@ -16,7 +16,7 @@ func TestSourceQualificationIsStructuralAndExplicitlyNotProductionValidation(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !report.StructuralCandidate || report.ProductionValidated || report.ProjectEvidence || len(report.Checks) != 12 || len(report.ExternalGates) != 10 || len(report.AdoptionGaps) != 4 {
+	if !report.StructuralCandidate || report.ProductionValidated || report.ProjectEvidence || len(report.Checks) != 13 || len(report.ExternalGates) != 10 || len(report.AdoptionGaps) != 4 {
 		t.Fatalf("unexpected release qualification: %+v", report)
 	}
 	for _, gap := range report.AdoptionGaps {
@@ -68,6 +68,15 @@ func TestWorkflowYAMLRequiresExactlyOneDocument(t *testing.T) {
 	}
 	if validYAMLDocument([]byte("name: [\n")) || validYAMLDocument([]byte("name: one\n---\nname: two\n")) {
 		t.Fatal("invalid or multi-document YAML was accepted")
+	}
+}
+
+func TestValidationSubjectBoundaryRejectsRemoteSchemaDefinitions(t *testing.T) {
+	if onlyLocalSchemaRefs(map[string]any{"$ref": "https://example.invalid/project-schema.json"}) {
+		t.Fatal("validation-subject boundary accepted a remote project schema")
+	}
+	if !onlyLocalSchemaRefs(map[string]any{"properties": map[string]any{"event": map[string]any{"$ref": "#/$defs/nativeEvent"}}}) {
+		t.Fatal("validation-subject boundary rejected a local closed definition")
 	}
 }
 

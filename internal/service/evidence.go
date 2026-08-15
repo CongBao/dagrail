@@ -357,7 +357,8 @@ func normalizeArtifacts(values []domain.ArtifactRef) ([]domain.ArtifactRef, erro
 	if len(values) > 256 {
 		return nil, fmt.Errorf("artifacts cannot exceed 256 entries")
 	}
-	result := append([]domain.ArtifactRef(nil), values...)
+	result := make([]domain.ArtifactRef, len(values))
+	copy(result, values)
 	sort.Slice(result, func(i, j int) bool {
 		left, right := result[i].Digest+"\x00"+result[i].Type+"\x00"+result[i].URI, result[j].Digest+"\x00"+result[j].Type+"\x00"+result[j].URI
 		return left < right

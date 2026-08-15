@@ -355,10 +355,11 @@ func (s *Service) ApplyActionContext(ctx context.Context, ref string, input json
 		return ActionResult{}, fmt.Errorf("action reference is stale")
 	}
 	expires, err := time.Parse(time.RFC3339Nano, payload.ExpiresAt)
-	if err != nil || !s.Now().UTC().Before(expires) {
+	authorizedAt := s.Now().UTC()
+	if err != nil || !authorizedAt.Before(expires) {
 		return ActionResult{}, fmt.Errorf("action reference is expired")
 	}
-	lease, err := s.validLease(state, payload.RoleID)
+	lease, err := validLeaseAt(state, payload.RoleID, authorizedAt)
 	if err != nil {
 		return ActionResult{}, err
 	}
@@ -378,7 +379,7 @@ func (s *Service) ApplyActionContext(ctx context.Context, ref string, input json
 	if payload.Kind == "effect.prepare" {
 		return s.applyEffectAction(ctx, state, payload, input, idempotencyKey, requestDigest, node)
 	}
-	now := s.Now().UTC().Format(time.RFC3339Nano)
+	now := authorizedAt.Format(time.RFC3339Nano)
 	events := make([]journal.Event, 0, 2)
 	attemptID := payload.AttemptID
 	actionInput := input
@@ -426,7 +427,7 @@ func (s *Service) ApplyActionContext(ctx context.Context, ref string, input json
 		if err != nil {
 			return ActionResult{}, err
 		}
-		pack, err := s.buildExecutionPackage(state, node, attempt, input, s.Now())
+		pack, err := s.buildExecutionPackage(state, node, attempt, input, authorizedAt)
 		if err != nil {
 			return ActionResult{}, err
 		}
@@ -441,7 +442,7 @@ func (s *Service) ApplyActionContext(ctx context.Context, ref string, input json
 		if err != nil {
 			return ActionResult{}, err
 		}
-		decision, err := s.buildReuseDecision(state, attempt, input, s.Now())
+		decision, err := s.buildReuseDecision(state, attempt, input, authorizedAt)
 		if err != nil {
 			return ActionResult{}, err
 		}
@@ -476,9 +477,18 @@ func (s *Service) ApplyActionContext(ctx context.Context, ref string, input json
 		value := completionInput{}
 		var decision *domain.DecisionRecord
 		if payload.Kind == "gate.evaluate" {
-			record, decisionErr := s.buildGateDecision(ctx, state, node, attempt, payload.RoleID, input, s.Now())
+			record, decisionErr := s.buildGateDecision(ctx, state, node, attempt, payload.RoleID, input, authorizedAt)
 			if decisionErr != nil {
 				return ActionResult{}, decisionErr
+			}
+			refreshed, commitAt, refreshErr := s.revalidateActionAuthorization(payload, expires)
+			if refreshErr != nil {
+				return ActionResult{}, fmt.Errorf("gate decision finished outside its action authorization: %w", refreshErr)
+			}
+			state, authorizedAt, now = refreshed, commitAt, commitAt.Format(time.RFC3339Nano)
+			record.CreatedAt = now
+			if assignErr := assignDecisionID(&record); assignErr != nil {
+				return ActionResult{}, assignErr
 			}
 			decision = &record
 			value.Outcome, value.Facts, value.EvidenceRefs = record.Outcome, record.Facts, record.EvidenceRefs
@@ -498,7 +508,7 @@ func (s *Service) ApplyActionContext(ctx context.Context, ref string, input json
 				}
 			}
 			if node.Kind == "review" || node.Kind == "decision" {
-				record, decisionErr := s.buildRoleDecision(state, node, attempt, payload.RoleID, value, input, s.Now())
+				record, decisionErr := s.buildRoleDecision(state, node, attempt, payload.RoleID, value, input, authorizedAt)
 				if decisionErr != nil {
 					return ActionResult{}, decisionErr
 				}
@@ -540,7 +550,7 @@ func (s *Service) ApplyActionContext(ctx context.Context, ref string, input json
 				postState.Nodes[nodeID] = runtime
 			}
 			postState.Nodes[node.ID] = domain.NodeRuntime{Status: "terminal", Outcome: value.Outcome, OutcomeClass: outcomeClass, Facts: value.Facts}
-			incident := domain.Incident{ID: "attempt:" + attempt.ID, SourceType: "attempt", SourceID: attempt.ID, NodeID: node.ID, OwnerRole: payload.RoleID, Status: "open", Classification: classification, Deadline: s.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano), AttemptBudget: 2, ProgressMetric: "new candidate or changed failure classification", DependencyCut: domain.DependencyCut(postState, node.ID), OpenedAt: now, UpdatedAt: now}
+			incident := domain.Incident{ID: "attempt:" + attempt.ID, SourceType: "attempt", SourceID: attempt.ID, NodeID: node.ID, OwnerRole: payload.RoleID, Status: "open", Classification: classification, Deadline: authorizedAt.Add(time.Hour).Format(time.RFC3339Nano), AttemptBudget: 2, ProgressMetric: "new candidate or changed failure classification", DependencyCut: domain.DependencyCut(postState, node.ID), OpenedAt: now, UpdatedAt: now}
 			incidentRaw, _ := json.Marshal(incident)
 			events = append(events, journal.Event{Type: "incident.opened", Payload: incidentRaw})
 		}
@@ -551,7 +561,7 @@ func (s *Service) ApplyActionContext(ctx context.Context, ref string, input json
 	actionRaw, _ := json.Marshal(action)
 	events = append(events, journal.Event{Type: "action.applied", Payload: actionRaw})
 	expectedHead := payload.HeadHash
-	segment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: payload.Kind, ActorRole: payload.RoleID, IdempotencyKey: idempotencyKey, ObjectRef: "action:" + payload.ActionID, RequestDigest: requestDigest}, events, s.Now(), &expectedHead)
+	segment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: payload.Kind, ActorRole: payload.RoleID, IdempotencyKey: idempotencyKey, ObjectRef: "action:" + payload.ActionID, RequestDigest: requestDigest}, events, authorizedAt, &expectedHead)
 	if err != nil {
 		return ActionResult{}, err
 	}
@@ -570,6 +580,32 @@ func (s *Service) ApplyActionContext(ctx context.Context, ref string, input json
 		return actionResultForSequence(state, segment.Sequence)
 	}
 	return ActionResult{ActionID: actionRecord.ID, Kind: actionRecord.Kind, NodeID: actionRecord.NodeID, AttemptID: actionRecord.AttemptID, ObjectRef: objectRefForSequence(state, actionRecord.Sequence), Status: actionRecord.Status, Sequence: actionRecord.Sequence}, nil
+}
+
+// revalidateActionAuthorization closes the window created by a slow semantic
+// provider. Provider output is only a proposal until the original journal head,
+// graph/provider binding, action-ref expiry, and Role lease are all rechecked at
+// the exact time that will be written into the authoritative events.
+func (s *Service) revalidateActionAuthorization(payload actionRefPayload, expires time.Time) (domain.State, time.Time, error) {
+	state, _, err := s.load()
+	if err != nil {
+		return domain.State{}, time.Time{}, err
+	}
+	if payload.ProjectID != state.ProjectID || payload.GraphRevision != state.GraphRevision || payload.ProviderSet != providerFingerprint(state.Graph) || payload.HeadHash != state.HeadHash {
+		return domain.State{}, time.Time{}, fmt.Errorf("action reference is stale")
+	}
+	commitAt := s.Now().UTC()
+	if !commitAt.Before(expires) {
+		return domain.State{}, time.Time{}, fmt.Errorf("action reference is expired")
+	}
+	lease, err := validLeaseAt(state, payload.RoleID, commitAt)
+	if err != nil {
+		return domain.State{}, time.Time{}, err
+	}
+	if lease.SessionID != payload.SessionID {
+		return domain.State{}, time.Time{}, fmt.Errorf("action reference session no longer owns the role")
+	}
+	return state, commitAt, nil
 }
 
 func actionResultForSequence(state domain.State, sequence uint64) (ActionResult, error) {
@@ -640,12 +676,17 @@ func activeResourceIDs(state domain.State, attemptID string) []string {
 }
 
 func (s *Service) validLease(state domain.State, roleID string) (domain.RoleLease, error) {
+	return validLeaseAt(state, roleID, s.Now().UTC())
+}
+
+func validLeaseAt(state domain.State, roleID string, instant time.Time) (domain.RoleLease, error) {
 	lease, ok := state.Leases[roleID]
 	if !ok || !lease.Active {
 		return domain.RoleLease{}, fmt.Errorf("role %s has no active lease", roleID)
 	}
 	expires, err := time.Parse(time.RFC3339Nano, lease.ExpiresAt)
-	if err != nil || !s.Now().UTC().Before(expires) {
+	bound, boundErr := time.Parse(time.RFC3339Nano, lease.BoundAt)
+	if err != nil || boundErr != nil || instant.Before(bound) || !instant.Before(expires) {
 		return domain.RoleLease{}, fmt.Errorf("role %s lease is expired", roleID)
 	}
 	return lease, nil
@@ -786,7 +827,7 @@ func actionInputSchema(kind string, node domain.NodeDefinition) map[string]any {
 	case "gate.evaluate":
 		return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"input"}, "properties": map[string]any{"input": map[string]any{}, "evidence": map[string]any{"type": "array", "maxItems": 128}, "evidenceRefs": map[string]any{"type": "array", "maxItems": 128}}}
 	case "resource.close", "resource.reconcile":
-		return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"status", "receipt"}, "properties": map[string]any{"status": map[string]any{"enum": []string{"confirmed", "failed", "unknown"}}, "receipt": map[string]any{"type": "object"}}}
+		return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"status", "receipt"}, "properties": map[string]any{"status": map[string]any{"enum": []string{"confirmed", "failed", "unknown"}}, "receipt": map[string]any{"not": map[string]any{"type": "null"}}}}
 	case "evidence.publish":
 		observations := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"exact", "clean", "depthComplete", "sourceUnmodified", "resourcesClosed"}, "properties": map[string]any{"exact": map[string]any{"type": "boolean"}, "clean": map[string]any{"type": "boolean"}, "depthComplete": map[string]any{"type": "boolean"}, "sourceUnmodified": map[string]any{"type": "boolean"}, "resourcesClosed": map[string]any{"type": "boolean"}}}
 		return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"candidate", "prospectiveTree", "commandGraphDigest", "protectedInputs", "observations", "artifacts"}, "properties": map[string]any{"candidate": artifact, "prospectiveTree": artifact, "commandGraphDigest": digest, "protectedInputs": map[string]any{"type": "array", "minItems": 1, "maxItems": 128, "items": protectedInput}, "observations": observations, "artifacts": map[string]any{"type": "array", "maxItems": 256, "items": artifact}}}

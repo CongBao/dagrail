@@ -7,9 +7,77 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/CongBao/dagrail/internal/cli"
+	"github.com/CongBao/dagrail/internal/service"
 )
+
+func TestLifecycleCLIRequiresIndependentTrustAnchorAndImportsAtomically(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".test-data"))
+	graphPath := filepath.Join(root, "graph.json")
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"migration"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"task","kind":"task","role":"worker","title":"task","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
+	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) (string, error) {
+		var stdout, stderr bytes.Buffer
+		err := cli.Run(args, strings.NewReader(""), &stdout, &stderr)
+		return stdout.String(), err
+	}
+	if _, err := run("init", "--root", root, "--name", "migration"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("graph", "import", "--root", root, "--file", graphPath, "--idempotency-key", "graph/import"); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := service.OpenForRecovery(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := svc.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 15, 2, 3, 4, 0, time.UTC).Format(time.RFC3339Nano)
+	payload := json.RawMessage(`{"roleId":"worker","harness":"manual","sessionId":"imported-session","boundAt":"2026-08-15T02:03:04Z","expiresAt":"2026-08-16T02:03:04Z","active":true}`)
+	records := []service.LifecycleMigrationRecord{{SourceSequence: 1, SourceEventID: "source-1", OccurredAt: now, Events: []service.LifecycleMigrationEvent{{Type: "role.bound", Payload: payload}}}}
+	eventHash, err := service.LifecycleSourceEventHash(records[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	records[0].SourceEventHash = eventHash
+	recordsDigest, err := service.LifecycleRecordsDigest(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := service.LifecycleMigrationManifest{APIVersion: service.LifecycleMigrationAPIVersion, Kind: "LifecycleMigration", ProjectID: state.ProjectID, GraphRevision: state.GraphRevision, ExpectedJournalHead: state.HeadHash, Source: service.LifecycleMigrationSource{System: "external", Project: "source", HeadSequence: 1, HeadEventID: "source-1", HeadEventHash: eventHash}, RecordsDigest: recordsDigest, Records: records}
+	authority, err := service.LifecycleSourceAuthorityHash(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Source.AuthorityHash = authority
+	manifestRaw, _ := json.Marshal(manifest)
+	manifestPath := filepath.Join(root, "migration.json")
+	if err := os.WriteFile(manifestPath, manifestRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("lifecycle", "validate-history", "--root", root, "--file", manifestPath); err == nil {
+		t.Fatal("lifecycle validation accepted a self-asserted manifest without an out-of-band trust anchor")
+	}
+	validated, err := run("lifecycle", "validate-history", "--root", root, "--file", manifestPath, "--source-authority-hash", authority)
+	if err != nil || !strings.Contains(validated, `"valid":true`) {
+		t.Fatalf("lifecycle validation failed: %v %s", err, validated)
+	}
+	if _, err := run("lifecycle", "import-history", "--root", root, "--file", manifestPath, "--source-authority-hash", authority, "--actor-role", "migration-operator", "--idempotency-key", "migration/source-1"); err != nil {
+		t.Fatal(err)
+	}
+	projection, err := run("lifecycle", "projection", "--root", root)
+	if err != nil || !strings.Contains(projection, `"kind":"LifecycleProjection"`) || !strings.Contains(projection, `"sourceAuthorityHash":"`+authority+`"`) {
+		t.Fatalf("lifecycle projection failed: %v %s", err, projection)
+	}
+}
 
 func TestUserCanInitializeImportGraphAndReadFrontier(t *testing.T) {
 	root := t.TempDir()

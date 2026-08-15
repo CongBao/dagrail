@@ -1,6 +1,6 @@
 ---
 name: govern-dag
-description: Govern a DAGrail project as the orchestration role. Use when inspecting the ready frontier, binding or replacing a control session, assigning nodes, applying typed graph changes, reconciling external effects, or checking whether it is safe to wait.
+description: Govern a DAGrail project as the orchestration role. Use when inspecting the ready frontier, binding or replacing a control session, assigning nodes, applying typed graph changes, supervising a trusted lifecycle bootstrap, reconciling external effects, or checking whether it is safe to wait.
 ---
 
 # Govern a DAGrail project
@@ -34,6 +34,11 @@ Treat DAGrail—not chat, a roadmap projection, or a harness thread—as runtime
 9. Call `dag_pre_wait` before yielding, waiting, or declaring blocked. Do not wait while
    ready Nodes, submitted Attempts, stale/expired leases, incidents, resource closure,
    or unreconciled effects still require a bounded action.
+
+Historical lifecycle import is an operator bootstrap, not an MCP lifecycle action. Use
+the CLI only for a pristine graph-only project, require a separately trusted source
+authority digest, and validate the complete mapped source prefix before one atomic
+import. Keep source-specific conversion code and vocabulary outside DAGrail.
 
 Never edit the journal, SQLite, action secret, or generated projections. Hooks may add
 bounded guidance but cannot assign, accept, merge, complete, or infer a lifecycle result.

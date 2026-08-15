@@ -33,6 +33,7 @@ type Options struct {
 type PlanResult struct {
 	Harness           string   `json:"harness"`
 	Executable        string   `json:"executable,omitempty"`
+	MarketplaceLocal  bool     `json:"marketplaceLocal"`
 	MarketplaceAdd    []string `json:"marketplaceAdd"`
 	MarketplaceUpdate []string `json:"marketplaceUpdate"`
 	MarketplaceRemove []string `json:"marketplaceRemove"`
@@ -75,6 +76,7 @@ func Plan(options Options) ([]PlanResult, error) {
 		plan := PlanResult{Harness: harness}
 		marketplaceName, pluginID := MarketplaceName, PluginID
 		localMarketplace := filepath.IsAbs(options.MarketplaceSource)
+		plan.MarketplaceLocal = localMarketplace
 		if localMarketplace {
 			marketplaceName, pluginID = BundledMarketplaceName, "dagrail@"+BundledMarketplaceName
 		}
@@ -146,33 +148,73 @@ func Install(ctx context.Context, options Options) ([]Result, error) {
 			failures = append(failures, runtimeValidationErr)
 			continue
 		}
-		marketplaceOutput, marketplaceErr := run(ctx, executable, plan.MarketplaceAdd...)
-		if marketplaceErr != nil && !alreadyRegistered(marketplaceOutput) {
-			results = append(results, Result{Harness: plan.Harness, Status: "failed", Executable: executable, Message: marketplaceErr.Error()})
-			failures = append(failures, marketplaceErr)
-			continue
-		}
-		if marketplaceErr != nil || marketplaceAlreadyAdded(marketplaceOutput) {
-			if _, updateErr := run(ctx, executable, plan.MarketplaceUpdate...); updateErr != nil {
-				results = append(results, Result{Harness: plan.Harness, Status: "failed", Executable: executable, Message: updateErr.Error()})
-				failures = append(failures, updateErr)
-				continue
-			}
-		}
-		if _, runErr := run(ctx, executable, plan.PluginInstall...); runErr != nil {
-			results = append(results, Result{Harness: plan.Harness, Status: "failed", Executable: executable, Message: runErr.Error()})
-			failures = append(failures, runErr)
-			continue
-		}
-		_, _ = run(ctx, executable, plan.MCPRemove...)
-		if _, runErr := run(ctx, executable, plan.MCPAdd...); runErr != nil {
-			results = append(results, Result{Harness: plan.Harness, Status: "failed", Executable: executable, Message: runErr.Error()})
-			failures = append(failures, runErr)
+		if applyErr := applyInstallPlan(ctx, executable, plan, run); applyErr != nil {
+			results = append(results, Result{Harness: plan.Harness, Status: "failed", Executable: executable, Message: applyErr.Error()})
+			failures = append(failures, applyErr)
 			continue
 		}
 		results = append(results, Result{Harness: plan.Harness, Status: "installed_or_updated", Executable: executable, MCPConfigured: true})
 	}
 	return results, errors.Join(failures...)
+}
+
+type hostRunner func(context.Context, string, ...string) (string, error)
+
+func applyInstallPlan(ctx context.Context, executable string, plan PlanResult, runner hostRunner) error {
+	if err := ensureMarketplace(ctx, executable, plan, runner); err != nil {
+		return err
+	}
+	if _, err := runner(ctx, executable, plan.PluginInstall...); err != nil {
+		return err
+	}
+	_, _ = runner(ctx, executable, plan.MCPRemove...)
+	if _, err := runner(ctx, executable, plan.MCPAdd...); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ensureMarketplace treats versioned local bundles differently from remote
+// marketplaces. A local marketplace cannot be refreshed in place: each
+// verified DAGrail runtime materializes a new immutable path. When the stable
+// marketplace name already exists, rotate the plugin and marketplace before
+// registering that exact new path. This is intentionally ordered before MCP
+// changes so a failed rotation is explicit and safely retryable.
+func ensureMarketplace(ctx context.Context, executable string, plan PlanResult, runner hostRunner) error {
+	output, addErr := runner(ctx, executable, plan.MarketplaceAdd...)
+	already := marketplaceAlreadyAdded(output)
+	if addErr != nil && !already {
+		return addErr
+	}
+	if !already {
+		return nil
+	}
+	if !plan.MarketplaceLocal {
+		if _, err := runner(ctx, executable, plan.MarketplaceUpdate...); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// Removing a plugin that is already absent is harmless. Any other failure
+	// must stop the rotation: silently continuing could leave a host plugin
+	// registered against marketplace state that is about to be replaced.
+	pluginOutput, pluginErr := runner(ctx, executable, plan.PluginRemove...)
+	if pluginErr != nil && !alreadyAbsent(pluginOutput) {
+		return fmt.Errorf("remove plugin before local marketplace rotation: %w", pluginErr)
+	}
+	removeOutput, removeErr := runner(ctx, executable, plan.MarketplaceRemove...)
+	if removeErr != nil && !alreadyAbsent(removeOutput) {
+		return fmt.Errorf("rotate local marketplace: %w", removeErr)
+	}
+	addOutput, retryErr := runner(ctx, executable, plan.MarketplaceAdd...)
+	if retryErr != nil || marketplaceAlreadyAdded(addOutput) {
+		if retryErr != nil {
+			return fmt.Errorf("register rotated local marketplace: %w", retryErr)
+		}
+		return fmt.Errorf("register rotated local marketplace: host still reports the old marketplace name")
+	}
+	return nil
 }
 
 func Status(options Options) ([]Result, error) {

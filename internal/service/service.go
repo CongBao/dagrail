@@ -32,16 +32,22 @@ type Service struct {
 }
 
 func Open(root string) (*Service, error) {
-	return open(root, false)
+	return open(root, false, true)
 }
 
 // OpenForRecovery opens existing authority and projection state without automatic
 // node settlement, projection migration, repair, or synchronization.
 func OpenForRecovery(root string) (*Service, error) {
-	return open(root, true)
+	return open(root, true, false)
 }
 
-func open(root string, recoveryInspection bool) (*Service, error) {
+// OpenForMigration opens writable local projections without running derived
+// automatic Node settlement before a migration's expected-head validation.
+func OpenForMigration(root string) (*Service, error) {
+	return open(root, false, false)
+}
+
+func open(root string, recoveryInspection, settle bool) (*Service, error) {
 	p, err := project.Open(root)
 	if err != nil {
 		return nil, err
@@ -104,8 +110,10 @@ func open(root string, recoveryInspection bool) (*Service, error) {
 	if recoveryInspection {
 		return service, nil
 	}
-	if err := service.settleAutomatic(); err != nil {
-		return nil, err
+	if settle {
+		if err := service.settleAutomatic(); err != nil {
+			return nil, err
+		}
 	}
 	state, segments, err := service.load()
 	if err != nil {
@@ -233,21 +241,44 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 	if err != nil {
 		return domain.State{}, nil, err
 	}
-	state := domain.NewState(s.Project.Config.ProjectID)
+	state, err := reduceSegments(s.Project.Config.ProjectID, segments)
+	if err != nil {
+		return domain.State{}, nil, err
+	}
+	return state, segments, nil
+}
+
+// reduceSegments is the one replay path for both committed authority and a
+// lifecycle migration preflight. A migration is never appended until the exact
+// candidate segment has reduced successfully through this function.
+func reduceSegments(projectID string, segments []journal.Segment) (domain.State, error) {
+	state := domain.NewState(projectID)
 	for _, segment := range segments {
 		for _, storedEvent := range segment.Events {
 			event, err := journal.UpcastEvent(segment.SchemaVersion, storedEvent)
 			if err != nil {
-				return domain.State{}, nil, fmt.Errorf("upcast journal event at sequence %d: %w", segment.Sequence, err)
+				return domain.State{}, fmt.Errorf("upcast journal event at sequence %d: %w", segment.Sequence, err)
 			}
 			switch event.Type {
+			case "lifecycle.history-imported":
+				var receipt domain.LifecycleMigrationReceipt
+				if err := json.Unmarshal(event.Payload, &receipt); err != nil {
+					return domain.State{}, err
+				}
+				if receipt.ID == "" || receipt.GraphRevision != state.GraphRevision || receipt.TargetSequence != segment.Sequence || receipt.RecordCount <= 0 || receipt.NativeEventCount <= 0 {
+					return domain.State{}, fmt.Errorf("lifecycle migration receipt is invalid at sequence %d", segment.Sequence)
+				}
+				if _, exists := state.LifecycleMigrations[receipt.ID]; exists {
+					return domain.State{}, fmt.Errorf("lifecycle migration %s is duplicated", receipt.ID)
+				}
+				state.LifecycleMigrations[receipt.ID] = receipt
 			case "graph.imported":
 				var payload struct {
 					Graph    domain.GraphDefinition `json:"graph"`
 					Revision string                 `json:"revision"`
 				}
 				if err := json.Unmarshal(event.Payload, &payload); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				state.Graph, state.GraphRevision = &payload.Graph, payload.Revision
 				state.Nodes = map[string]domain.NodeRuntime{}
@@ -261,7 +292,7 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 					Superseded []string               `json:"superseded"`
 				}
 				if err := json.Unmarshal(event.Payload, &payload); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				previousNodes := state.Nodes
 				state.Graph, state.GraphRevision = &payload.Graph, payload.Revision
@@ -292,7 +323,7 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 			case "role.bound":
 				var lease domain.RoleLease
 				if err := json.Unmarshal(event.Payload, &lease); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				state.Leases[lease.RoleID] = lease
 			case "role.released":
@@ -300,7 +331,7 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 					RoleID string `json:"roleId"`
 				}
 				if err := json.Unmarshal(event.Payload, &payload); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				lease := state.Leases[payload.RoleID]
 				lease.Active = false
@@ -308,7 +339,7 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 			case "attempt.started", "attempt.leased":
 				var attempt domain.Attempt
 				if err := json.Unmarshal(event.Payload, &attempt); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				state.Attempts[attempt.ID] = attempt
 				state.NodeAttempts[attempt.NodeID] = append(state.NodeAttempts[attempt.NodeID], attempt.ID)
@@ -320,11 +351,11 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 					CompletedAt string `json:"completedAt"`
 				}
 				if err := json.Unmarshal(event.Payload, &payload); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				runtime, ok := state.Nodes[payload.NodeID]
 				if !ok || runtime.Status != "planned" {
-					return domain.State{}, nil, fmt.Errorf("automatic completion references non-planned node %s", payload.NodeID)
+					return domain.State{}, fmt.Errorf("automatic completion references non-planned node %s", payload.NodeID)
 				}
 				state.Nodes[payload.NodeID] = domain.NodeRuntime{Status: "terminal", Outcome: payload.Outcome, OutcomeClass: "success"}
 			case "node.auto-skipped":
@@ -334,17 +365,17 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 					SkippedAt string `json:"skippedAt"`
 				}
 				if err := json.Unmarshal(event.Payload, &payload); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				runtime, ok := state.Nodes[payload.NodeID]
 				if !ok || runtime.Status != "planned" {
-					return domain.State{}, nil, fmt.Errorf("automatic skip references non-planned node %s", payload.NodeID)
+					return domain.State{}, fmt.Errorf("automatic skip references non-planned node %s", payload.NodeID)
 				}
 				state.Nodes[payload.NodeID] = domain.NodeRuntime{Status: "skipped", Outcome: payload.Reason, OutcomeClass: "cancelled"}
 			case "attempt.checkpointed":
 				var checkpoint domain.Checkpoint
 				if err := json.Unmarshal(event.Payload, &checkpoint); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				state.Checkpoints[checkpoint.ID] = checkpoint
 				attempt := state.Attempts[checkpoint.AttemptID]
@@ -354,18 +385,18 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 			case "evidence.package-published":
 				var pack domain.ExecutionPackage
 				if err := json.Unmarshal(event.Payload, &pack); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				attempt, ok := state.Attempts[pack.AttemptID]
 				node, nodeExists := state.NodeDefinition(pack.NodeID)
 				if !ok || !nodeExists || attempt.NodeID != pack.NodeID || pack.ProjectID != state.ProjectID || pack.GraphRevision != state.GraphRevision {
-					return domain.State{}, nil, fmt.Errorf("execution package %s references an invalid attempt", pack.ID)
+					return domain.State{}, fmt.Errorf("execution package %s references an invalid attempt", pack.ID)
 				}
 				if err := validateExecutionPackageRecord(pack, node); err != nil {
-					return domain.State{}, nil, fmt.Errorf("execution package %s: %w", pack.ID, err)
+					return domain.State{}, fmt.Errorf("execution package %s: %w", pack.ID, err)
 				}
 				if _, exists := state.EvidencePackages[pack.ID]; exists {
-					return domain.State{}, nil, fmt.Errorf("execution package %s is duplicated", pack.ID)
+					return domain.State{}, fmt.Errorf("execution package %s is duplicated", pack.ID)
 				}
 				pack.Sequence = segment.Sequence
 				state.EvidencePackages[pack.ID] = pack
@@ -373,24 +404,24 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 			case "evidence.reuse-assessed":
 				var decision domain.ReuseDecision
 				if err := json.Unmarshal(event.Payload, &decision); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				if _, exists := state.EvidencePackages[decision.PackageID]; !exists {
-					return domain.State{}, nil, fmt.Errorf("reuse decision %s references unknown package %s", decision.ID, decision.PackageID)
+					return domain.State{}, fmt.Errorf("reuse decision %s references unknown package %s", decision.ID, decision.PackageID)
 				}
 				if _, exists := state.Attempts[decision.AssessedByAttempt]; !exists {
-					return domain.State{}, nil, fmt.Errorf("reuse decision %s references unknown assessor attempt", decision.ID)
+					return domain.State{}, fmt.Errorf("reuse decision %s references unknown assessor attempt", decision.ID)
 				}
 				pack := state.EvidencePackages[decision.PackageID]
 				node, exists := state.NodeDefinition(pack.NodeID)
 				if !exists {
-					return domain.State{}, nil, fmt.Errorf("reuse decision %s references an unavailable package node", decision.ID)
+					return domain.State{}, fmt.Errorf("reuse decision %s references an unavailable package node", decision.ID)
 				}
 				if err := validateReuseDecisionRecord(decision, pack, node); err != nil {
-					return domain.State{}, nil, fmt.Errorf("reuse decision %s: %w", decision.ID, err)
+					return domain.State{}, fmt.Errorf("reuse decision %s: %w", decision.ID, err)
 				}
 				if _, exists := state.ReuseDecisions[decision.ID]; exists {
-					return domain.State{}, nil, fmt.Errorf("reuse decision %s is duplicated", decision.ID)
+					return domain.State{}, fmt.Errorf("reuse decision %s is duplicated", decision.ID)
 				}
 				decision.Sequence = segment.Sequence
 				state.ReuseDecisions[decision.ID] = decision
@@ -398,13 +429,13 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 			case "decision.recorded":
 				var decision domain.DecisionRecord
 				if err := json.Unmarshal(event.Payload, &decision); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				if err := validateDecisionRecord(decision, state); err != nil {
-					return domain.State{}, nil, fmt.Errorf("decision record %s: %w", decision.ID, err)
+					return domain.State{}, fmt.Errorf("decision record %s: %w", decision.ID, err)
 				}
 				if _, exists := state.Decisions[decision.ID]; exists {
-					return domain.State{}, nil, fmt.Errorf("decision record %s is duplicated", decision.ID)
+					return domain.State{}, fmt.Errorf("decision record %s is duplicated", decision.ID)
 				}
 				decision.Sequence = segment.Sequence
 				state.Decisions[decision.ID] = decision
@@ -416,7 +447,7 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 					UpdatedAt string `json:"updatedAt"`
 				}
 				if err := json.Unmarshal(event.Payload, &payload); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				attempt := state.Attempts[payload.AttemptID]
 				attempt.Status = payload.Status
@@ -431,7 +462,7 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 					UpdatedAt    string                `json:"updatedAt"`
 				}
 				if err := json.Unmarshal(event.Payload, &payload); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				attempt := state.Attempts[payload.AttemptID]
 				attempt.Status = "terminal"
@@ -446,7 +477,7 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 			case "resource.leased":
 				var lease domain.ResourceLease
 				if err := json.Unmarshal(event.Payload, &lease); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				state.Resources[lease.ID] = lease
 			case "resource.closure-observed":
@@ -457,11 +488,11 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 					UpdatedAt  string          `json:"updatedAt"`
 				}
 				if err := json.Unmarshal(event.Payload, &payload); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				lease, ok := state.Resources[payload.ResourceID]
 				if !ok || lease.Status != "active" || (payload.Status != "confirmed" && payload.Status != "failed" && payload.Status != "unknown") {
-					return domain.State{}, nil, fmt.Errorf("closure observation references invalid resource lease %s", payload.ResourceID)
+					return domain.State{}, fmt.Errorf("closure observation references invalid resource lease %s", payload.ResourceID)
 				}
 				lease.ClosureStatus, lease.ClosureReceipt, lease.ClosureUpdatedAt = payload.Status, payload.Receipt, payload.UpdatedAt
 				state.Resources[lease.ID] = lease
@@ -471,28 +502,28 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 					ReleasedAt string `json:"releasedAt"`
 				}
 				if err := json.Unmarshal(event.Payload, &payload); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				lease, ok := state.Resources[payload.ResourceID]
 				if !ok {
-					return domain.State{}, nil, fmt.Errorf("release references unknown resource lease %s", payload.ResourceID)
+					return domain.State{}, fmt.Errorf("release references unknown resource lease %s", payload.ResourceID)
 				}
 				if lease.ClosureStatus != "" && lease.ClosureStatus != "confirmed" {
-					return domain.State{}, nil, fmt.Errorf("resource lease %s cannot release without a confirmed closure", payload.ResourceID)
+					return domain.State{}, fmt.Errorf("resource lease %s cannot release without a confirmed closure", payload.ResourceID)
 				}
 				lease.Status, lease.ReleasedAt = "released", payload.ReleasedAt
 				state.Resources[lease.ID] = lease
 			case "action.applied":
 				var action domain.ActionRecord
 				if err := json.Unmarshal(event.Payload, &action); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				action.Sequence = segment.Sequence
 				state.Actions[action.ID] = action
 			case "effect.prepared":
 				var effect domain.EffectAction
 				if err := json.Unmarshal(event.Payload, &effect); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				effect.Sequence = segment.Sequence
 				state.Effects[effect.ID] = effect
@@ -502,11 +533,11 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 					DispatchedAt string `json:"dispatchedAt"`
 				}
 				if err := json.Unmarshal(event.Payload, &payload); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				effect, ok := state.Effects[payload.ActionID]
 				if !ok {
-					return domain.State{}, nil, fmt.Errorf("dispatch references unknown effect %s", payload.ActionID)
+					return domain.State{}, fmt.Errorf("dispatch references unknown effect %s", payload.ActionID)
 				}
 				effect.Status, effect.UpdatedAt, effect.Sequence = "dispatched", payload.DispatchedAt, segment.Sequence
 				state.Effects[payload.ActionID] = effect
@@ -516,11 +547,11 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 					ReconcilingAt string `json:"reconcilingAt"`
 				}
 				if err := json.Unmarshal(event.Payload, &payload); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				effect, ok := state.Effects[payload.ActionID]
 				if !ok {
-					return domain.State{}, nil, fmt.Errorf("reconcile references unknown effect %s", payload.ActionID)
+					return domain.State{}, fmt.Errorf("reconcile references unknown effect %s", payload.ActionID)
 				}
 				effect.Status, effect.UpdatedAt, effect.Sequence = "reconciling", payload.ReconcilingAt, segment.Sequence
 				state.Effects[payload.ActionID] = effect
@@ -536,7 +567,7 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 					UpdatedAt string          `json:"updatedAt"`
 				}
 				if err := json.Unmarshal(event.Payload, &payload); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				effect := state.Effects[payload.ActionID]
 				effect.Status, effect.Receipt, effect.UpdatedAt, effect.Sequence = payload.Status, payload.Receipt, payload.UpdatedAt, segment.Sequence
@@ -548,16 +579,16 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 			case "incident.opened":
 				var incident domain.Incident
 				if err := json.Unmarshal(event.Payload, &incident); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				state.Incidents[incident.ID] = incident
 			case "incident.updated":
 				var incident domain.Incident
 				if err := json.Unmarshal(event.Payload, &incident); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				if _, ok := state.Incidents[incident.ID]; !ok {
-					return domain.State{}, nil, fmt.Errorf("update references unknown incident %s", incident.ID)
+					return domain.State{}, fmt.Errorf("update references unknown incident %s", incident.ID)
 				}
 				state.Incidents[incident.ID] = incident
 			case "incident.resolved":
@@ -566,16 +597,16 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 					ResolvedAt string `json:"resolvedAt"`
 				}
 				if err := json.Unmarshal(event.Payload, &payload); err != nil {
-					return domain.State{}, nil, err
+					return domain.State{}, err
 				}
 				incident, ok := state.Incidents[payload.IncidentID]
 				if !ok {
-					return domain.State{}, nil, fmt.Errorf("resolve references unknown incident %s", payload.IncidentID)
+					return domain.State{}, fmt.Errorf("resolve references unknown incident %s", payload.IncidentID)
 				}
 				incident.Status, incident.UpdatedAt = "resolved", payload.ResolvedAt
 				state.Incidents[incident.ID] = incident
 			default:
-				return domain.State{}, nil, fmt.Errorf("unsupported journal event type %q at sequence %d", event.Type, segment.Sequence)
+				return domain.State{}, fmt.Errorf("unsupported journal event type %q at sequence %d", event.Type, segment.Sequence)
 			}
 		}
 		if segment.Command.IdempotencyKey != "" {
@@ -592,7 +623,7 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 		state.HeadSequence = segment.Sequence
 		state.HeadHash = segment.SegmentHash
 	}
-	return state, segments, nil
+	return state, nil
 }
 
 func commandObjectRef(segment journal.Segment, state domain.State) string {

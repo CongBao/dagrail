@@ -42,6 +42,8 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 - bounded compile-in providers with schema and stability contracts;
 - recoverable external effects and resource closure with explicit `unknown` and `reconcile` states;
 - an immutable RFC 8785 journal with disposable SQLite projections;
+- one atomic, trust-anchor-bound path for importing a complete external lifecycle
+  prefix into a pristine graph, plus a deterministic redacted lifecycle projection;
 - explainable readiness, owned incidents, bounded history, verified backups, and a
   browser-opened read-only DAG Explorer with focused topology and deep links;
 - a path-redacted local security audit, strict hostile-input limits, and schema-bound
@@ -51,7 +53,7 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 
 ## Status
 
-`v0.20.0` is a pre-1.0 release candidate: local-first and single-user, with one native Go
+`v0.21.0` is a pre-1.0 release candidate: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
 stdio MCP. Its operational surface adds explainable dependency blockers, incident
 circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
@@ -97,6 +99,25 @@ cancellation through provider and adapter work, and re-audits every bundled skil
 hook instruction. Plugin conformance now proves that the textual hook launcher and the
 absolute MCP launcher reach the same verified runtime. Historical v0.10–v0.19 journal
 and runtime inputs remain immutable compatibility fixtures.
+
+The v0.21 migration surface can validate and atomically import one complete external
+lifecycle prefix into a pristine graph-only project. Import requires a canonical
+authority-statement digest that binds the target, normalized source chain, and native
+mapping, supplied through a separate trusted channel; source-specific conversion
+remains outside DAGrail. Preflight applies the same ready-frontier, Role capability,
+lease, Decision, resource, and Effect-prefix constraints as the current writer rather
+than trusting only the final reduced map. It also binds every action summary to the
+checkpoint, evidence, Decision, completion, Effect, or Resource events from the same
+normalized source command, consumes each proof exactly once, rejects orphan companion
+events at record end, and checks real writer prefixes against the published schema.
+Incident transitions and automatic companions are writer-equivalent, and slow provider
+or Effect preparation is reauthorized at the exact persistence boundary. Resource and
+Effect Incidents resolve only with their confirmed observation; imported Effects bind
+the Graph declaration, prepared adapter, closed receipt status, and failure classification.
+`dagrail contract` now publishes the exact
+Graph schema digest and a closed capability list, including resource capacity and
+request support. This release also fixes path-free installation diagnosis and
+automatically rotates an older immutable local plugin marketplace during upgrade.
 
 The structural release report validates public source and automated gate
 declarations, but deliberately reports `productionValidated: false`. Independent
@@ -245,7 +266,9 @@ For a larger executable walkthrough, see
 [`examples/beta-project`](examples/beta-project) and the
 [`beta operations guide`](docs/beta-operations.md). Existing DAGs can be assessed with
 the strictly separate [`observe-only workflow`](docs/observe.md); it validates byte
-identity and Graph structure, not semantic migration.
+identity and Graph structure, not semantic migration. After an external converter has
+produced a generic native-event manifest, follow the separate
+[`lifecycle migration runbook`](docs/migration.md); observation never implies cutover.
 
 Portable exports can optionally be signed and verified over their exact bytes with
 `dagrail signature keygen|sign|verify`. Signatures are detached, never required for

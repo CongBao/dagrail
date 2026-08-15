@@ -63,6 +63,7 @@ var commands = []Command{
 	{Name: "init", Summary: "Initialize a DAGrail project", Effect: "write", Project: "optional", Output: "json", Subcommands: []string{}},
 	{Name: "inspect", Summary: "Inspect an object by opaque reference", Effect: "read", Project: "required", Output: "json", Subcommands: []string{}},
 	{Name: "journal", Summary: "Verify, export, replay, or inspect journal compatibility", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"compatibility", "export", "replay", "verify"}},
+	{Name: "lifecycle", Summary: "Validate or atomically import authenticated history and export its projection", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"import-history", "projection", "validate-history"}},
 	{Name: "mcp", Summary: "Serve the six high-level tools over stdio", Effect: "serve", Project: "required", Output: "transport", Subcommands: []string{}},
 	{Name: "observe", Summary: "Assess or verify an isolated shadow project", Effect: "mixed", Project: "optional", Output: "json", Subcommands: []string{"assess", "create-shadow", "verify-shadow"}},
 	{Name: "plugin", Summary: "Manage runtime and harness plugin projections", Effect: "mixed", Project: "none", Output: "json", Subcommands: []string{"bundle-status", "conformance", "install", "materialize", "rollback", "runtime-status", "status", "uninstall"}},

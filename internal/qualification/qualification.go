@@ -91,8 +91,9 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 	required := []string{
 		"LICENSE", "README.md", "SECURITY.md", "SUPPORT.md", "GOVERNANCE.md",
 		"CODE_OF_CONDUCT.md", "CONTRIBUTING.md", "COMPATIBILITY.md", "CONTEXT.md",
-		"CHANGELOG.md", "docs/api.md", "docs/tutorial.md", "docs/release.md", "docs/readiness.md",
+		"CHANGELOG.md", "docs/api.md", "docs/tutorial.md", "docs/release.md", "docs/readiness.md", "docs/migration.md",
 		"docs/qualification.md", "docs/recovery.md", "schemas/compatibility-contract-v1beta1.schema.json",
+		"schemas/lifecycle-migration-v1alpha1.schema.json", "schemas/lifecycle-projection-v1alpha1.schema.json",
 		"internal/compatibility/beta-window.json",
 	}
 	layoutOK := true
@@ -108,10 +109,11 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 	add("compatibility-contract", contractOK, chooseCode(contractOK, "contract_schema_valid", "contract_schema_invalid"))
 
 	surfaces := []contract.DocumentedSurface{
-		contractReport.CommandCatalog, contractReport.CLIError, contractReport.Installation, contractReport.HistoricalMatrix, contractReport.Readiness,
+		contractReport.CommandCatalog, contractReport.CLIError, contractReport.DecisionRecord, contractReport.Installation, contractReport.HistoricalMatrix, contractReport.Readiness,
 		contractReport.UI, contractReport.Security, contractReport.JournalVerification,
 		contractReport.PluginConformance, contractReport.Support, contractReport.Recovery,
 		contractReport.ReleaseQualification, contractReport.ReleaseManifest, contractReport.ReleaseVerification,
+		contractReport.LifecycleMigration, contractReport.LifecycleProjection,
 	}
 	digestsOK := true
 	for _, surface := range surfaces {
@@ -125,7 +127,14 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 			digestsOK = false
 		}
 	}
+	graphRaw, graphErr := readSourceFile(root, contractReport.Graph.SchemaPath)
+	graphDigest := sha256.Sum256(graphRaw)
+	if graphErr != nil || !json.Valid(graphRaw) || "sha256:"+hex.EncodeToString(graphDigest[:]) != contractReport.Graph.SchemaSHA256 {
+		digestsOK = false
+	}
 	add("published-schema-digests", digestsOK, chooseCode(digestsOK, "all_schema_digests_match", "schema_digest_mismatch"))
+	neutral := validationSubjectBoundary(root)
+	add("validation-subject-boundary", neutral, chooseCode(neutral, "generic_boundary_contracts_closed", "generic_boundary_contract_invalid"))
 
 	metadataOK := validateMetadataVersions(root, version.Version)
 	add("plugin-metadata-versions", metadataOK, chooseCode(metadataOK, "all_versions_match", "plugin_version_mismatch"))
@@ -176,6 +185,95 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 		}
 	}
 	return report, nil
+}
+
+func validationSubjectBoundary(root string) bool {
+	adr, adrErr := readSourceFile(root, "docs/adr/0017-validation-subjects-do-not-define-kernel-contracts.md")
+	migration, migrationErr := readSourceFile(root, "docs/migration.md")
+	schemaRaw, schemaErr := readSourceFile(root, "schemas/lifecycle-migration-v1alpha1.schema.json")
+	if adrErr != nil || migrationErr != nil || schemaErr != nil || !containsAll(string(adr), []string{"repository-neutral", "external converter", "outside DAGrail"}) || !containsAll(string(migration), []string{"Project-neutral boundary", "outside the DAGrail repository and binary"}) {
+		return false
+	}
+	var schema map[string]any
+	if json.Unmarshal(schemaRaw, &schema) != nil {
+		return false
+	}
+	if !onlyLocalSchemaRefs(schema) {
+		return false
+	}
+	definitions, ok := schema["$defs"].(map[string]any)
+	if !ok {
+		return false
+	}
+	native, ok := definitions["nativeEvent"].(map[string]any)
+	if !ok {
+		return false
+	}
+	branches, ok := native["oneOf"].([]any)
+	if !ok {
+		return false
+	}
+	declared := map[string]bool{}
+	for _, branchValue := range branches {
+		branch, ok := branchValue.(map[string]any)
+		if !ok {
+			return false
+		}
+		properties, ok := branch["properties"].(map[string]any)
+		if !ok {
+			return false
+		}
+		typeSchema, ok := properties["type"].(map[string]any)
+		if !ok {
+			return false
+		}
+		if value, ok := typeSchema["const"].(string); ok {
+			declared[value] = true
+		}
+		if values, ok := typeSchema["enum"].([]any); ok {
+			for _, value := range values {
+				text, ok := value.(string)
+				if !ok {
+					return false
+				}
+				declared[text] = true
+			}
+		}
+	}
+	want := service.MigratableLifecycleEventTypes()
+	if len(declared) != len(want) {
+		return false
+	}
+	for _, eventType := range want {
+		if !declared[eventType] {
+			return false
+		}
+	}
+	return true
+}
+
+func onlyLocalSchemaRefs(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if key == "$ref" {
+				ref, ok := child.(string)
+				if !ok || !strings.HasPrefix(ref, "#/") {
+					return false
+				}
+			}
+			if !onlyLocalSchemaRefs(child) {
+				return false
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if !onlyLocalSchemaRefs(child) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func validateContractSchema(root string, report contract.Report) error {

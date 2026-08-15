@@ -30,8 +30,11 @@ func (s *Service) applyResourceAction(state domain.State, payload actionRefPaylo
 		return ActionResult{}, fmt.Errorf("resource closure is not reconcilable")
 	}
 	incidentID := "resource:" + resource.ID
-	if incident, exists := state.Incidents[incidentID]; exists && incident.Status == "circuit-open" {
-		return ActionResult{}, fmt.Errorf("resource incident circuit is open: %s", incident.CircuitReason)
+	if incident, exists := state.Incidents[incidentID]; exists && incident.Status != "open" {
+		if incident.Status == "circuit-open" {
+			return ActionResult{}, fmt.Errorf("resource incident circuit is open: %s", incident.CircuitReason)
+		}
+		return ActionResult{}, fmt.Errorf("resource incident is %s and cannot be reopened by reconciliation", incident.Status)
 	}
 	var value resourceClosureInput
 	if err := json.Unmarshal(input, &value); err != nil {
@@ -40,10 +43,14 @@ func (s *Service) applyResourceAction(state domain.State, payload actionRefPaylo
 	if value.Status != "confirmed" && value.Status != "failed" && value.Status != "unknown" {
 		return ActionResult{}, fmt.Errorf("resource closure status must be confirmed, failed or unknown")
 	}
-	if len(value.Receipt) == 0 || string(value.Receipt) == "null" {
+	if len(value.Receipt) == 0 || isNullAuthorityJSON(value.Receipt) {
 		return ActionResult{}, fmt.Errorf("resource closure receipt is required")
 	}
-	now := s.Now().UTC().Format(time.RFC3339Nano)
+	observedAt := s.Now().UTC()
+	if _, err := validLeaseAt(state, payload.RoleID, observedAt); err != nil {
+		return ActionResult{}, err
+	}
+	now := observedAt.Format(time.RFC3339Nano)
 	observed, _ := json.Marshal(map[string]any{"resourceId": resource.ID, "status": value.Status, "receipt": value.Receipt, "updatedAt": now})
 	events := []journal.Event{{Type: "resource.closure-observed", Payload: observed}}
 	if value.Status == "confirmed" {
@@ -54,11 +61,14 @@ func (s *Service) applyResourceAction(state domain.State, payload actionRefPaylo
 			events = append(events, journal.Event{Type: "incident.resolved", Payload: resolved})
 		}
 	} else {
-		incident := domain.Incident{ID: incidentID, SourceType: "resource", SourceID: resource.ID, NodeID: resource.NodeID, OwnerRole: resource.RoleID, Status: "open", Classification: "infrastructure", Deadline: s.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano), AttemptBudget: 2, Attempts: 1, NoProgressAttempts: 1, ProgressMetric: "new closure receipt or changed observation", DependencyCut: domain.DependencyCut(state, resource.NodeID), OpenedAt: now, UpdatedAt: now}
+		incident := domain.Incident{ID: incidentID, SourceType: "resource", SourceID: resource.ID, NodeID: resource.NodeID, OwnerRole: resource.RoleID, Status: "open", Classification: "infrastructure", Deadline: observedAt.Add(time.Hour).Format(time.RFC3339Nano), AttemptBudget: 2, Attempts: 1, NoProgressAttempts: 1, ProgressMetric: "new closure receipt or changed observation", DependencyCut: domain.DependencyCut(state, resource.NodeID), OpenedAt: now, UpdatedAt: now}
 		if existing, exists := state.Incidents[incidentID]; exists {
 			incident.OpenedAt = existing.OpenedAt
+			incident.Deadline = existing.Deadline
 			incident.Attempts = existing.Attempts + 1
 			incident.NoProgressAttempts = existing.NoProgressAttempts + 1
+			incident.LastProgress = existing.LastProgress
+			incident.LastProgressAt = existing.LastProgressAt
 			incident.Disposition = existing.Disposition
 			incident.DispositionBy = existing.DispositionBy
 			incident.DispositionAt = existing.DispositionAt
@@ -77,7 +87,7 @@ func (s *Service) applyResourceAction(state domain.State, payload actionRefPaylo
 	actionRaw, _ := json.Marshal(action)
 	events = append(events, journal.Event{Type: "action.applied", Payload: actionRaw})
 	expectedHead := payload.HeadHash
-	segment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: payload.Kind, ActorRole: payload.RoleID, IdempotencyKey: idempotencyKey, ObjectRef: "action:" + payload.ActionID, RequestDigest: requestDigest}, events, s.Now(), &expectedHead)
+	segment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: payload.Kind, ActorRole: payload.RoleID, IdempotencyKey: idempotencyKey, ObjectRef: "action:" + payload.ActionID, RequestDigest: requestDigest}, events, observedAt, &expectedHead)
 	if err != nil {
 		return ActionResult{}, err
 	}

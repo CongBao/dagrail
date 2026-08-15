@@ -25,6 +25,16 @@ type DocumentedSurface struct {
 	SchemaSHA256 string `json:"schemaSha256"`
 }
 
+// GraphSurface makes graph capabilities discoverable without requiring a
+// consumer to infer support from a harness adapter, prompt, or example file.
+type GraphSurface struct {
+	APIVersion   string   `json:"apiVersion"`
+	Stability    string   `json:"stability"`
+	SchemaPath   string   `json:"schemaPath"`
+	SchemaSHA256 string   `json:"schemaSha256"`
+	Capabilities []string `json:"capabilities"`
+}
+
 type JournalContract struct {
 	ReadableSegmentSchemas []int `json:"readableSegmentSchemas"`
 	WriteSegmentSchema     int   `json:"writeSegmentSchema"`
@@ -41,7 +51,7 @@ type Report struct {
 	Kind                 string                   `json:"kind"`
 	Version              string                   `json:"version"`
 	Stability            string                   `json:"stability"`
-	Graph                VersionedSurface         `json:"graph"`
+	Graph                GraphSurface             `json:"graph"`
 	CLI                  VersionedSurface         `json:"cli"`
 	CommandCatalog       DocumentedSurface        `json:"commandCatalog"`
 	CLIError             DocumentedSurface        `json:"cliError"`
@@ -58,6 +68,8 @@ type Report struct {
 	ReleaseQualification DocumentedSurface        `json:"releaseQualification"`
 	ReleaseManifest      DocumentedSurface        `json:"releaseManifest"`
 	ReleaseVerification  DocumentedSurface        `json:"releaseVerification"`
+	LifecycleMigration   DocumentedSurface        `json:"lifecycleMigration"`
+	LifecycleProjection  DocumentedSurface        `json:"lifecycleProjection"`
 	Provider             VersionedSurface         `json:"providerSdk"`
 	Journal              JournalContract          `json:"journal"`
 	Projection           int                      `json:"projectionSchema"`
@@ -73,8 +85,14 @@ func Current() Report {
 		Kind:       "CompatibilityContract",
 		Version:    version.Version,
 		Stability:  "beta",
-		Graph:      VersionedSurface{APIVersion: "dagrail.io/v1alpha1", Stability: "additive"},
-		CLI:        VersionedSurface{APIVersion: "dagrail.io/cli/v1beta1", Stability: "additive"},
+		Graph: GraphSurface{
+			APIVersion:   "dagrail.io/v1alpha1",
+			Stability:    "additive",
+			SchemaPath:   "schemas/graph-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:33282af1ce75d9cc0ab2bf570144ff0e80ff7ec52599327851a7dd0107793c9e",
+			Capabilities: []string{"dynamic-graph", "historical-lifecycle-import", "lifecycle-projection", "positive-predicate-ast", "resource-capacities", "resource-requests", "role-leases"},
+		},
+		CLI: VersionedSurface{APIVersion: "dagrail.io/cli/v1beta1", Stability: "additive"},
 		CommandCatalog: DocumentedSurface{
 			APIVersion:   commandcatalog.APIVersion,
 			Stability:    "additive-machine-discovery",
@@ -103,13 +121,13 @@ func Current() Report {
 			APIVersion:   compatibility.APIVersion,
 			Stability:    "closed-beta-window",
 			SchemaPath:   "schemas/historical-binary-matrix-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:a9d6912990254306db61c23ba54b7824c39b2b3ed5b2af2bdfceb3fa5c00a147",
+			SchemaSHA256: "sha256:88f4cf5f44ef604698d58f315696291fd8d94ea00a26ba699e5b94be3b570f7c",
 		},
 		Readiness: DocumentedSurface{
 			APIVersion:   "dagrail.io/readiness-decision/v1alpha1",
 			Stability:    "additive-structural-decision",
 			SchemaPath:   "schemas/readiness-decision-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:722f2125f52d74a790ed1d5fc0cbaa5c4c04f7bed4c6251438bbbbdb9591f924",
+			SchemaSHA256: "sha256:3accab79286031db41164b8dee5217ba8295ddd8af066101101e6e55fa500565",
 		},
 		UI: DocumentedSurface{
 			APIVersion:   "dagrail.io/ui/v1beta1",
@@ -151,7 +169,7 @@ func Current() Report {
 			APIVersion:   "dagrail.io/release-qualification/v1alpha1",
 			Stability:    "additive-structural-candidate",
 			SchemaPath:   "schemas/release-qualification-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:e67bd9429f5d0376028f081aa8d4bf19084851d33a1ecfbe147e62002ddeb4a9",
+			SchemaSHA256: "sha256:6a7d06ede063f82112389f0f801a8a756088175fb4c93a7527bda55fce9c5ea9",
 		},
 		ReleaseManifest: DocumentedSurface{
 			APIVersion:   dagrelease.ManifestAPIVersion,
@@ -164,6 +182,18 @@ func Current() Report {
 			Stability:    "additive-offline-verification",
 			SchemaPath:   "schemas/release-verification-v1alpha1.schema.json",
 			SchemaSHA256: "sha256:9a23a60cdef7b2444f5deb0ed802935b1f2052aea3156582eb3e0244989cb283",
+		},
+		LifecycleMigration: DocumentedSurface{
+			APIVersion:   service.LifecycleMigrationAPIVersion,
+			Stability:    "alpha-operator-import",
+			SchemaPath:   "schemas/lifecycle-migration-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:ba1ba1b15c72624a9ffe3d15e6397655016c73665a390b5881d80fa2e47a827e",
+		},
+		LifecycleProjection: DocumentedSurface{
+			APIVersion:   service.LifecycleProjectionAPIVersion,
+			Stability:    "alpha-rebuildable-projection",
+			SchemaPath:   "schemas/lifecycle-projection-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:a4bcbeca02e9649c18e9ebad13e1cc8d0b1ed7f11de6f1c92a2a23c899615514",
 		},
 		Provider: VersionedSurface{APIVersion: sdk.APIVersion, Stability: "source-compatible"},
 		Journal: JournalContract{
@@ -194,7 +224,7 @@ func Current() Report {
 			"command discovery and completion are generated from one bounded catalog",
 			"opt-in CLI error envelopes keep stable broad exit classes and preserve interruption",
 			"host plugin commands are output-bounded, time-bounded, and cancellation-aware",
-			"the v0.10 through v0.19 beta binaries are immutable inputs to the current upgrade and rollback matrix",
+			"the v0.10 through v0.20 beta binaries are immutable inputs to the current upgrade and rollback matrix",
 			"readiness can declare external-validation readiness but cannot infer production validation or 1.0 readiness",
 			"the loopback explorer rejects non-loopback Host values and cross-port Origin values without exposing CORS access",
 			"SQLite remains disposable and rebuildable from the verified journal",
@@ -204,6 +234,10 @@ func Current() Report {
 			"new mutation idempotency keys bind command kind, actor, object, and canonical request intent; changed retries fail closed",
 			"plugin conformance verifies that the textual hook launcher resolves to the same fresh-process runtime used for MCP",
 			"the explorer exposes typed decision and resource closure summaries without decision facts, evidence URIs, or receipt bodies",
+			"graph capability discovery is schema-bound and does not depend on harness adapter inference",
+			"historical lifecycle import accepts only one authenticated complete source prefix into a pristine graph-only project",
+			"historical lifecycle preflight preserves current writer ready, capability, lease, causal time, decision, resource, incident, and effect-prefix invariants",
+			"lifecycle projection omits action inputs and external evidence locators and digests effect and resource receipt bodies",
 		},
 	}
 }

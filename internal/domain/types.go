@@ -751,6 +751,25 @@ type Incident struct {
 	UpdatedAt          string   `json:"updatedAt"`
 }
 
+// LifecycleMigrationReceipt binds one atomic historical import to the
+// authenticated external authority prefix it represents. Source event bodies
+// are not duplicated here; their canonical mapping digest is journal-bound.
+type LifecycleMigrationReceipt struct {
+	ID                  string `json:"id"`
+	SourceSystem        string `json:"sourceSystem"`
+	SourceProject       string `json:"sourceProject"`
+	SourceAuthorityHash string `json:"sourceAuthorityHash"`
+	SourceHeadSequence  uint64 `json:"sourceHeadSequence"`
+	SourceHeadEventID   string `json:"sourceHeadEventId"`
+	SourceHeadEventHash string `json:"sourceHeadEventHash"`
+	RecordsDigest       string `json:"recordsDigest"`
+	RecordCount         int    `json:"recordCount"`
+	NativeEventCount    int    `json:"nativeEventCount"`
+	GraphRevision       string `json:"graphRevision"`
+	TargetSequence      uint64 `json:"targetSequence"`
+	ImportedAt          string `json:"importedAt"`
+}
+
 var incidentClassifications = map[string]bool{
 	"work-product": true, "policy": true, "fixture": true,
 	"infrastructure": true, "evidence": true, "external-effect": true,
@@ -767,27 +786,28 @@ func ValidIncidentClassification(value string) bool { return incidentClassificat
 func ValidIncidentDisposition(value string) bool { return incidentDispositions[value] }
 
 type State struct {
-	ProjectID        string                      `json:"projectId"`
-	Graph            *GraphDefinition            `json:"graph,omitempty"`
-	GraphRevision    string                      `json:"graphRevision,omitempty"`
-	HeadSequence     uint64                      `json:"headSequence"`
-	HeadHash         string                      `json:"headHash,omitempty"`
-	Nodes            map[string]NodeRuntime      `json:"nodes"`
-	Attempts         map[string]Attempt          `json:"attempts"`
-	NodeAttempts     map[string][]string         `json:"nodeAttempts"`
-	Leases           map[string]RoleLease        `json:"leases"`
-	Checkpoints      map[string]Checkpoint       `json:"checkpoints"`
-	Decisions        map[string]DecisionRecord   `json:"decisions"`
-	AttemptDecisions map[string][]string         `json:"attemptDecisions"`
-	EvidencePackages map[string]ExecutionPackage `json:"evidencePackages"`
-	AttemptPackages  map[string][]string         `json:"attemptPackages"`
-	ReuseDecisions   map[string]ReuseDecision    `json:"reuseDecisions"`
-	PackageDecisions map[string][]string         `json:"packageDecisions"`
-	Actions          map[string]ActionRecord     `json:"actions"`
-	Effects          map[string]EffectAction     `json:"effects"`
-	Resources        map[string]ResourceLease    `json:"resources"`
-	Incidents        map[string]Incident         `json:"incidents"`
-	Commands         map[string]CommandResult    `json:"commands"`
+	ProjectID           string                               `json:"projectId"`
+	Graph               *GraphDefinition                     `json:"graph,omitempty"`
+	GraphRevision       string                               `json:"graphRevision,omitempty"`
+	HeadSequence        uint64                               `json:"headSequence"`
+	HeadHash            string                               `json:"headHash,omitempty"`
+	Nodes               map[string]NodeRuntime               `json:"nodes"`
+	Attempts            map[string]Attempt                   `json:"attempts"`
+	NodeAttempts        map[string][]string                  `json:"nodeAttempts"`
+	Leases              map[string]RoleLease                 `json:"leases"`
+	Checkpoints         map[string]Checkpoint                `json:"checkpoints"`
+	Decisions           map[string]DecisionRecord            `json:"decisions"`
+	AttemptDecisions    map[string][]string                  `json:"attemptDecisions"`
+	EvidencePackages    map[string]ExecutionPackage          `json:"evidencePackages"`
+	AttemptPackages     map[string][]string                  `json:"attemptPackages"`
+	ReuseDecisions      map[string]ReuseDecision             `json:"reuseDecisions"`
+	PackageDecisions    map[string][]string                  `json:"packageDecisions"`
+	Actions             map[string]ActionRecord              `json:"actions"`
+	Effects             map[string]EffectAction              `json:"effects"`
+	Resources           map[string]ResourceLease             `json:"resources"`
+	Incidents           map[string]Incident                  `json:"incidents"`
+	LifecycleMigrations map[string]LifecycleMigrationReceipt `json:"lifecycleMigrations"`
+	Commands            map[string]CommandResult             `json:"commands"`
 }
 
 type CommandResult struct {
@@ -804,7 +824,7 @@ func NewState(projectID string) State {
 		ProjectID: projectID, Nodes: map[string]NodeRuntime{}, Attempts: map[string]Attempt{},
 		NodeAttempts: map[string][]string{}, Leases: map[string]RoleLease{}, Checkpoints: map[string]Checkpoint{}, Decisions: map[string]DecisionRecord{}, AttemptDecisions: map[string][]string{},
 		EvidencePackages: map[string]ExecutionPackage{}, AttemptPackages: map[string][]string{}, ReuseDecisions: map[string]ReuseDecision{}, PackageDecisions: map[string][]string{},
-		Actions: map[string]ActionRecord{}, Effects: map[string]EffectAction{}, Resources: map[string]ResourceLease{}, Incidents: map[string]Incident{}, Commands: map[string]CommandResult{},
+		Actions: map[string]ActionRecord{}, Effects: map[string]EffectAction{}, Resources: map[string]ResourceLease{}, Incidents: map[string]Incident{}, LifecycleMigrations: map[string]LifecycleMigrationReceipt{}, Commands: map[string]CommandResult{},
 	}
 }
 
