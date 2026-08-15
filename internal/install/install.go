@@ -1,10 +1,12 @@
 package install
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -206,7 +208,7 @@ func StatusContext(ctx context.Context, options Options) ([]Result, error) {
 			} else if pluginErr != nil {
 				message = "plugin status probe unavailable: " + pluginErr.Error()
 			}
-			mcpOutput, mcpErr := run(ctx, path, "mcp", "list")
+			mcpOutput, mcpErr := run(ctx, path, "mcp", "list", "--json")
 			mcpConfigured = mcpErr == nil && mcpConfigurationMatches(mcpOutput, options.RuntimePath)
 		}
 		results = append(results, Result{Harness: harness, Status: status, Executable: path, MCPConfigured: mcpConfigured, Message: message})
@@ -270,78 +272,141 @@ func mcpConfigurationMatches(output, runtimePath string) bool {
 	if !filepath.IsAbs(runtimePath) {
 		return false
 	}
-	var value any
-	if json.Unmarshal([]byte(output), &value) == nil {
-		return mcpJSONContains(value, runtimePath)
-	}
-	trimmed := strings.TrimSpace(output)
-	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+	raw := []byte(output)
+	if validateHostJSON(raw) != nil {
 		return false
 	}
-	for _, line := range strings.Split(output, "\n") {
-		lower := strings.ToLower(line)
-		if strings.Contains(lower, "dagrail") && strings.Contains(line, runtimePath) && strings.Contains(lower, "mcp") && strings.Contains(lower, "--stdio") {
-			return true
-		}
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return false
 	}
-	return false
+	candidates := []mcpLauncherCandidate{}
+	collectMCPLauncherCandidates(value, &candidates)
+	return len(candidates) == 1 && candidates[0].Valid && candidates[0].Command == runtimePath && len(candidates[0].Args) == 2 && candidates[0].Args[0] == "mcp" && candidates[0].Args[1] == "--stdio"
 }
 
-func mcpJSONContains(value any, runtimePath string) bool {
-	return mcpJSONContainsNamed(value, runtimePath, false)
+type mcpLauncherCandidate struct {
+	Command string
+	Args    []string
+	Valid   bool
 }
 
-func mcpJSONContainsNamed(value any, runtimePath string, inheritedName bool) bool {
+func collectMCPLauncherCandidates(value any, candidates *[]mcpLauncherCandidate) {
 	switch typed := value.(type) {
 	case map[string]any:
-		stringsInObject := collectDirectStrings(typed)
-		hasName, hasRuntime, hasMCP, hasStdio := inheritedName, false, false, false
 		for _, field := range []string{"name", "id", "server", "serverName"} {
-			if candidate, ok := typed[field].(string); ok && strings.EqualFold(strings.TrimSpace(candidate), MCPServerName) {
-				hasName = true
+			if name, ok := typed[field].(string); ok && strings.EqualFold(strings.TrimSpace(name), MCPServerName) {
+				*candidates = append(*candidates, parseMCPLauncherCandidate(typed))
+				return
 			}
-		}
-		for _, candidate := range stringsInObject {
-			trimmed := strings.TrimSpace(candidate)
-			lower := strings.ToLower(trimmed)
-			hasRuntime = hasRuntime || trimmed == runtimePath
-			hasMCP = hasMCP || lower == "mcp"
-			hasStdio = hasStdio || lower == "--stdio"
-		}
-		if hasName && hasRuntime && hasMCP && hasStdio {
-			return true
 		}
 		for key, child := range typed {
-			childName := hasName || strings.EqualFold(strings.TrimSpace(key), MCPServerName)
-			if mcpJSONContainsNamed(child, runtimePath, childName) {
-				return true
+			if strings.EqualFold(strings.TrimSpace(key), MCPServerName) {
+				if entry, ok := child.(map[string]any); ok {
+					*candidates = append(*candidates, parseMCPLauncherCandidate(entry))
+				} else {
+					*candidates = append(*candidates, mcpLauncherCandidate{})
+				}
+				continue
 			}
+			collectMCPLauncherCandidates(child, candidates)
 		}
 	case []any:
 		for _, child := range typed {
-			if mcpJSONContainsNamed(child, runtimePath, inheritedName) {
-				return true
-			}
+			collectMCPLauncherCandidates(child, candidates)
 		}
 	}
-	return false
 }
 
-func collectDirectStrings(value map[string]any) []string {
-	result := make([]string, 0, len(value))
-	for _, child := range value {
-		switch typed := child.(type) {
-		case string:
-			result = append(result, typed)
-		case []any:
-			for _, item := range typed {
-				if text, ok := item.(string); ok {
-					result = append(result, text)
-				}
-			}
+func parseMCPLauncherCandidate(value map[string]any) mcpLauncherCandidate {
+	result := mcpLauncherCandidate{Valid: true}
+	if enabled, ok := value["enabled"].(bool); ok && !enabled {
+		result.Valid = false
+	}
+	launcher := value
+	if transport, ok := value["transport"].(map[string]any); ok {
+		launcher = transport
+	}
+	if transportType, ok := launcher["type"].(string); ok && transportType != "stdio" {
+		result.Valid = false
+	}
+	result.Command, _ = launcher["command"].(string)
+	items, ok := launcher["args"].([]any)
+	if !ok {
+		return result
+	}
+	for _, item := range items {
+		text, ok := item.(string)
+		if !ok {
+			result.Valid = false
+			result.Args = nil
+			return result
 		}
+		result.Args = append(result.Args, text)
 	}
 	return result
+}
+
+func validateHostJSON(raw []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	values := 0
+	var walk func(int) error
+	walk = func(depth int) error {
+		if depth > 64 {
+			return fmt.Errorf("host JSON exceeds 64 nesting levels")
+		}
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		values++
+		if values > 100_000 {
+			return fmt.Errorf("host JSON exceeds 100000 values")
+		}
+		if delimiter, ok := token.(json.Delim); ok {
+			switch delimiter {
+			case '{':
+				seen := map[string]bool{}
+				for decoder.More() {
+					keyToken, err := decoder.Token()
+					if err != nil {
+						return err
+					}
+					key, ok := keyToken.(string)
+					if !ok || seen[key] {
+						return fmt.Errorf("host JSON contains an invalid or duplicate object key")
+					}
+					seen[key] = true
+					if err := walk(depth + 1); err != nil {
+						return err
+					}
+				}
+				if closing, err := decoder.Token(); err != nil || closing != json.Delim('}') {
+					return fmt.Errorf("invalid host JSON object terminator")
+				}
+			case '[':
+				for decoder.More() {
+					if err := walk(depth + 1); err != nil {
+						return err
+					}
+				}
+				if closing, err := decoder.Token(); err != nil || closing != json.Delim(']') {
+					return fmt.Errorf("invalid host JSON array terminator")
+				}
+			default:
+				return fmt.Errorf("invalid host JSON delimiter")
+			}
+		}
+		return nil
+	}
+	if err := walk(0); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return fmt.Errorf("invalid trailing host JSON")
+	}
+	return nil
 }
 
 func Uninstall(ctx context.Context, options Options) ([]Result, error) {

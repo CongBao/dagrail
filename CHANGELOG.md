@@ -24,13 +24,14 @@ All notable changes to DAGrail are documented here. The project follows Semantic
 - hook and Explorer startup use a journal-derived read-only open and cannot settle
   automatic Nodes or repair projections as a hidden lifecycle action;
 - effect reconciliation is serialized per stable action across goroutines and local
-  processes without holding the journal writer lock during adapter I/O;
+  processes without holding the journal writer lock during adapter I/O; subprocess
+  competition and lock-holder crash recovery are executable regression tests;
 - context construction reuses one loaded state, hooks emit a bounded eight-Node ready
   summary, and every hook instruction names the exact governing, execution, or review
   skill without guessing Role identity;
 - plugin installation and conformance require the textual `dagrail` hook launcher to
   resolve in a fresh process to the same receipt- and digest-verified runtime used by
-  a structurally inspected absolute MCP launcher;
+  a structurally inspected absolute MCP `command` with exact `mcp --stdio` arguments;
 - all three bundled skills were rewritten around current allowed-action refs, closed
   NodeKind outcomes, resource/effect reconciliation, evidence boundaries, and mandatory
   pre-wait liveness checks.

@@ -193,9 +193,22 @@ func TestMCPConfigurationMustBindOneExactRuntimeObject(t *testing.T) {
 	if !mcpConfigurationMatches(string(keyed), runtimePath) {
 		t.Fatal("name-keyed exact MCP runtime configuration was rejected")
 	}
+	transport, _ := json.Marshal([]any{map[string]any{"name": "dagrail", "enabled": true, "transport": map[string]any{"type": "stdio", "command": runtimePath, "args": []any{"mcp", "--stdio"}}, "startup_timeout_sec": 120.0}})
+	if !mcpConfigurationMatches(string(transport), runtimePath) {
+		t.Fatal("transport-wrapped exact MCP runtime configuration was rejected")
+	}
 	crossObject, _ := json.Marshal(map[string]any{"servers": []any{map[string]any{"name": "dagrail"}, map[string]any{"command": runtimePath, "args": []any{"mcp", "--stdio"}}}})
+	fieldSpoof, _ := json.Marshal(map[string]any{"servers": []any{map[string]any{"name": "dagrail", "command": "/wrong/dagrail", "description": runtimePath, "args": []any{"mcp", "--stdio"}}}})
+	nestedSpoof, _ := json.Marshal(map[string]any{"servers": []any{map[string]any{"name": "dagrail", "launcher": map[string]any{"command": runtimePath, "args": []any{"mcp", "--stdio"}}}}})
+	duplicate, _ := json.Marshal(map[string]any{"servers": []any{map[string]any{"name": "dagrail", "command": runtimePath, "args": []any{"mcp", "--stdio"}}, map[string]any{"name": "dagrail", "command": runtimePath, "args": []any{"mcp", "--stdio"}}}})
+	disabled, _ := json.Marshal([]any{map[string]any{"name": "dagrail", "enabled": false, "transport": map[string]any{"type": "stdio", "command": runtimePath, "args": []any{"mcp", "--stdio"}}}})
 	for _, invalid := range []string{
 		string(crossObject),
+		string(fieldSpoof),
+		string(nestedSpoof),
+		string(duplicate),
+		string(disabled),
+		`{"servers":[{"name":"dagrail","name":"dagrail","command":"` + runtimePath + `","args":["mcp","--stdio"]}]}`,
 		`{"servers":[{"name":"dagrail","command":"/wrong/dagrail","args":["mcp","--stdio"]}]}`,
 		`{"servers":[{"name":"dagrail"}`,
 		`dagrail installed`,

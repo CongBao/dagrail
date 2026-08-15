@@ -36,7 +36,7 @@ func (s *Service) ContextSince(view, roleID, nodeID string, budget int, cursor u
 	if !ok {
 		return nil, fmt.Errorf("context view must be orchestrator, worker, or reviewer")
 	}
-	if budget <= 0 {
+	if budget == 0 {
 		budget = maximum
 	}
 	if budget < 512 {

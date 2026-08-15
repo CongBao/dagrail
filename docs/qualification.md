@@ -16,6 +16,7 @@ candidate still reports production adoption gaps explicitly.
 | Journal before rename | create, write, fsync, rename failure; hard process exit | no committed segment; retry commits sequence once |
 | Journal after rename | hard process exit or directory-sync ambiguity | segment verifies; same idempotency key returns it without another event |
 | Writer lease | 12 OS processes use one key, then 12 unique keys | one shared result, then a contiguous hash chain with no duplicate keys |
+| Effect reconcile lease | two OS processes compete; lock holder exits after durable begin | one concurrent adapter call; successor acquires the released OS lock and commits one final observation |
 | Authority corruption | truncation, byte mutation, non-canonical JSON, wrong filename | verification fails closed |
 | Projection corruption | invalid SQLite bytes after a valid journal commit | corrupt file is quarantined and the projection is rebuilt from the journal |
 | Longevity | 256 sequential segments and a repeated final command | sequence/hash chain verifies and retry remains idempotent |

@@ -380,6 +380,9 @@ func TestContextBudgetInspectAndPreWaitAreMachineDecidable(t *testing.T) {
 	if len(context) > 1025 || !strings.Contains(context, `"truncated":true`) {
 		t.Fatalf("context must honor budget: %d %s", len(context), context)
 	}
+	if _, err := run("context", "--root", root, "--view", "worker", "--budget-bytes", "-1"); err == nil {
+		t.Fatal("CLI accepted a negative context budget")
+	}
 	inspected, err := run("inspect", "--root", root, "node:A")
 	if err != nil || !strings.Contains(inspected, `"objective":"bounded-`) {
 		t.Fatalf("inspect must provide opt-in detail: %v %s", err, inspected)

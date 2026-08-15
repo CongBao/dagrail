@@ -133,6 +133,9 @@ func TestContextViewsAndBudgetsAreClosed(t *testing.T) {
 	if _, err := svc.Context("worker", "", "", 8193); err == nil {
 		t.Fatal("worker context exceeded its fixed budget")
 	}
+	if _, err := svc.Context("worker", "", "", -1); err == nil {
+		t.Fatal("negative context budget was treated as a default")
+	}
 	if raw, err := svc.Context("worker", "", "", 0); err != nil || len(raw) > 8192 {
 		t.Fatalf("default worker context violated budget: bytes=%d err=%v", len(raw), err)
 	}

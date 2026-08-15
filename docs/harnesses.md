@@ -20,7 +20,9 @@ detected.
 receipt, the textual hook launcher resolved through `PATH`, and the parsed MCP command
 plus `mcp --stdio` arguments must all identify the same real executable and SHA-256.
 Ambiguous host output or a same-version executable at another path fails closed and
-leaves the manual fallback available.
+leaves the manual fallback available. Conformance requests machine-readable MCP status;
+hosts that cannot return one closed `dagrail` entry with explicit `command` and `args`
+remain unverified.
 
 Native support is intentionally asymmetric:
 
