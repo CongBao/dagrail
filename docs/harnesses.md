@@ -20,9 +20,11 @@ detected.
 receipt, the textual hook launcher resolved through `PATH`, and the parsed MCP command
 plus `mcp --stdio` arguments must all identify the same real executable and SHA-256.
 Ambiguous host output or a same-version executable at another path fails closed and
-leaves the manual fallback available. Conformance requests machine-readable MCP status;
-hosts that cannot return one closed `dagrail` entry with explicit `command` and `args`
-remain unverified.
+leaves the manual fallback available. Codex and Copilot conformance accept only one
+`dagrail` entry from an explicitly supported top-level JSON server collection. Claude
+Code conformance uses the public, name-specific `mcp get dagrail` command and requires
+one exact `Type`, `Command`, and `Args` field set. Hosts whose current output does not
+match their closed probe remain unverified.
 
 Native support is intentionally asymmetric:
 

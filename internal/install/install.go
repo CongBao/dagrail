@@ -208,8 +208,15 @@ func StatusContext(ctx context.Context, options Options) ([]Result, error) {
 			} else if pluginErr != nil {
 				message = "plugin status probe unavailable: " + pluginErr.Error()
 			}
-			mcpOutput, mcpErr := run(ctx, path, "mcp", "list", "--json")
-			mcpConfigured = mcpErr == nil && mcpConfigurationMatches(mcpOutput, options.RuntimePath)
+			var mcpOutput string
+			var mcpErr error
+			if harness == "claude-code" {
+				mcpOutput, mcpErr = run(ctx, path, "mcp", "get", MCPServerName)
+				mcpConfigured = mcpErr == nil && claudeMCPConfigurationMatches(mcpOutput, options.RuntimePath)
+			} else {
+				mcpOutput, mcpErr = run(ctx, path, "mcp", "list", "--json")
+				mcpConfigured = mcpErr == nil && mcpConfigurationMatches(mcpOutput, options.RuntimePath)
+			}
 		}
 		results = append(results, Result{Harness: harness, Status: status, Executable: path, MCPConfigured: mcpConfigured, Message: message})
 	}
@@ -280,8 +287,10 @@ func mcpConfigurationMatches(output, runtimePath string) bool {
 	if json.Unmarshal(raw, &value) != nil {
 		return false
 	}
-	candidates := []mcpLauncherCandidate{}
-	collectMCPLauncherCandidates(value, &candidates)
+	candidates, supported := extractMCPLauncherCandidates(value)
+	if !supported {
+		return false
+	}
 	return len(candidates) == 1 && candidates[0].Valid && candidates[0].Command == runtimePath && len(candidates[0].Args) == 2 && candidates[0].Args[0] == "mcp" && candidates[0].Args[1] == "--stdio"
 }
 
@@ -291,48 +300,122 @@ type mcpLauncherCandidate struct {
 	Valid   bool
 }
 
-func collectMCPLauncherCandidates(value any, candidates *[]mcpLauncherCandidate) {
+func extractMCPLauncherCandidates(value any) ([]mcpLauncherCandidate, bool) {
+	candidates := []mcpLauncherCandidate{}
 	switch typed := value.(type) {
-	case map[string]any:
-		for _, field := range []string{"name", "id", "server", "serverName"} {
-			if name, ok := typed[field].(string); ok && strings.EqualFold(strings.TrimSpace(name), MCPServerName) {
-				*candidates = append(*candidates, parseMCPLauncherCandidate(typed))
-				return
+	case []any:
+		for _, item := range typed {
+			entry, ok := item.(map[string]any)
+			if ok && isNamedMCPEntry(entry) {
+				candidates = append(candidates, parseMCPLauncherCandidate(entry))
 			}
 		}
-		for key, child := range typed {
-			if strings.EqualFold(strings.TrimSpace(key), MCPServerName) {
-				if entry, ok := child.(map[string]any); ok {
-					*candidates = append(*candidates, parseMCPLauncherCandidate(entry))
-				} else {
-					*candidates = append(*candidates, mcpLauncherCandidate{})
-				}
+		return candidates, true
+	case map[string]any:
+		recognized := false
+		if child, exists := typed[MCPServerName]; exists {
+			recognized = true
+			entry, ok := child.(map[string]any)
+			if !ok {
+				candidates = append(candidates, mcpLauncherCandidate{})
+			} else {
+				candidates = append(candidates, parseMCPLauncherCandidate(entry))
+			}
+		}
+		for _, collectionKey := range []string{"servers", "mcpServers"} {
+			collection, exists := typed[collectionKey]
+			if !exists {
 				continue
 			}
-			collectMCPLauncherCandidates(child, candidates)
+			recognized = true
+			switch entries := collection.(type) {
+			case []any:
+				for _, item := range entries {
+					entry, ok := item.(map[string]any)
+					if ok && isNamedMCPEntry(entry) {
+						candidates = append(candidates, parseMCPLauncherCandidate(entry))
+					}
+				}
+			case map[string]any:
+				if child, exists := entries[MCPServerName]; exists {
+					entry, ok := child.(map[string]any)
+					if !ok {
+						candidates = append(candidates, mcpLauncherCandidate{})
+					} else {
+						candidates = append(candidates, parseMCPLauncherCandidate(entry))
+					}
+				}
+			default:
+				candidates = append(candidates, mcpLauncherCandidate{})
+			}
 		}
-	case []any:
-		for _, child := range typed {
-			collectMCPLauncherCandidates(child, candidates)
-		}
+		return candidates, recognized
 	}
+	return nil, false
+}
+
+func isNamedMCPEntry(value map[string]any) bool {
+	found := false
+	for _, field := range []string{"name", "id", "server", "serverName"} {
+		candidate, exists := value[field]
+		if !exists {
+			continue
+		}
+		name, ok := candidate.(string)
+		if !ok || !strings.EqualFold(strings.TrimSpace(name), MCPServerName) {
+			return false
+		}
+		found = true
+	}
+	return found
 }
 
 func parseMCPLauncherCandidate(value map[string]any) mcpLauncherCandidate {
 	result := mcpLauncherCandidate{Valid: true}
-	if enabled, ok := value["enabled"].(bool); ok && !enabled {
+	for key, child := range value {
+		if key == "name" || key == "id" || key == "server" || key == "serverName" {
+			continue
+		}
+		if containsNestedMCPIdentity(child) {
+			result.Valid = false
+			return result
+		}
+	}
+	if enabledValue, exists := value["enabled"]; exists {
+		enabled, ok := enabledValue.(bool)
+		if !ok || !enabled {
+			result.Valid = false
+		}
+	}
+	directLauncher := value["command"] != nil || value["args"] != nil
+	transportValue, hasTransport := value["transport"]
+	if directLauncher && hasTransport {
 		result.Valid = false
+		return result
 	}
 	launcher := value
-	if transport, ok := value["transport"].(map[string]any); ok {
+	if hasTransport {
+		transport, ok := transportValue.(map[string]any)
+		if !ok {
+			result.Valid = false
+			return result
+		}
 		launcher = transport
 	}
-	if transportType, ok := launcher["type"].(string); ok && transportType != "stdio" {
+	if transportTypeValue, exists := launcher["type"]; exists {
+		transportType, ok := transportTypeValue.(string)
+		if !ok || transportType != "stdio" {
+			result.Valid = false
+		}
+	}
+	command, ok := launcher["command"].(string)
+	if !ok {
 		result.Valid = false
 	}
-	result.Command, _ = launcher["command"].(string)
+	result.Command = command
 	items, ok := launcher["args"].([]any)
 	if !ok {
+		result.Valid = false
 		return result
 	}
 	for _, item := range items {
@@ -345,6 +428,73 @@ func parseMCPLauncherCandidate(value map[string]any) mcpLauncherCandidate {
 		result.Args = append(result.Args, text)
 	}
 	return result
+}
+
+func containsNestedMCPIdentity(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if strings.EqualFold(strings.TrimSpace(key), MCPServerName) {
+				return true
+			}
+			for _, field := range []string{"name", "id", "server", "serverName"} {
+				if key == field {
+					name, ok := child.(string)
+					if ok && strings.EqualFold(strings.TrimSpace(name), MCPServerName) {
+						return true
+					}
+				}
+			}
+			if containsNestedMCPIdentity(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if containsNestedMCPIdentity(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func claudeMCPConfigurationMatches(output, runtimePath string) bool {
+	if !filepath.IsAbs(runtimePath) || len(output) > 1<<20 {
+		return false
+	}
+	wanted := map[string]string{
+		"Type":    "stdio",
+		"Command": runtimePath,
+		"Args":    "mcp --stdio",
+	}
+	seen := map[string]bool{}
+	lines := strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n")
+	first := ""
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			first = strings.TrimSpace(line)
+			break
+		}
+	}
+	if first != MCPServerName+":" {
+		return false
+	}
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "   ") {
+			continue
+		}
+		field, value, found := strings.Cut(strings.TrimPrefix(line, "  "), ":")
+		expected, tracked := wanted[field]
+		if !found || !tracked {
+			continue
+		}
+		if seen[field] || value != " "+expected {
+			return false
+		}
+		seen[field] = true
+	}
+	return len(seen) == len(wanted)
 }
 
 func validateHostJSON(raw []byte) error {

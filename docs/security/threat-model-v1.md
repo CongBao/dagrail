@@ -65,8 +65,10 @@ proved by the portable binary.
 - Plugin materialization uses a closed embedded file set, host-specific relative local
   marketplace sources, a digest-addressed destination, and exact mutation detection.
   Conformance binds the receipt artifact, hook PATH resolution, and structurally parsed
-  MCP `command` plus exact argument array to one real path and SHA-256; unrelated JSON
-  fields, duplicate server entries, malformed JSON, and free text cannot provide proof.
+  MCP `command` plus exact arguments to one real path and SHA-256. Codex/Copilot parsing
+  is limited to supported top-level JSON collections; Claude parsing is limited to the
+  name-specific `mcp get dagrail` field grammar. Unrelated or nested objects, conflicting
+  launchers, duplicate entries, malformed JSON, and arbitrary free text cannot provide proof.
 - Reconciliation uses a per-action OS/process lock around adapter observation, not the
   journal lock; concurrent retries share the first committed result and a crash releases
   the observation lock for recovery.

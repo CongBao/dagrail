@@ -32,6 +32,8 @@ All notable changes to DAGrail are documented here. The project follows Semantic
 - plugin installation and conformance require the textual `dagrail` hook launcher to
   resolve in a fresh process to the same receipt- and digest-verified runtime used by
   a structurally inspected absolute MCP `command` with exact `mcp --stdio` arguments;
+  Codex/Copilot use closed top-level JSON shapes while Claude Code uses its name-specific
+  `mcp get dagrail` fields because its public CLI has no JSON listing contract;
 - all three bundled skills were rewritten around current allowed-action refs, closed
   NodeKind outcomes, resource/effect reconciliation, evidence boundaries, and mandatory
   pre-wait liveness checks.

@@ -104,17 +104,31 @@ func TestFreshHostFixturesConformAcrossAllThreeHarnesses(t *testing.T) {
 	if _, err := MaterializePluginBundle(); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"codex", "claude", "copilot"} {
-		path := filepath.Join(binRoot, name)
+	fixtures := []struct {
+		name     string
+		mcpProbe string
+	}{
+		{name: "codex", mcpProbe: `if [ "$1" = mcp ] && [ "$2" = list ] && [ "$3" = --json ] && [ -z "$4" ]; then
+  echo '{"servers":[{"name":"dagrail","command":"` + runtimePath + `","args":["mcp","--stdio"]}]}'
+  exit 0
+fi`},
+		{name: "copilot", mcpProbe: `if [ "$1" = mcp ] && [ "$2" = list ] && [ "$3" = --json ] && [ -z "$4" ]; then
+  echo '{"servers":[{"name":"dagrail","command":"` + runtimePath + `","args":["mcp","--stdio"]}]}'
+  exit 0
+fi`},
+		{name: "claude", mcpProbe: `if [ "$1" = mcp ] && [ "$2" = get ] && [ "$3" = dagrail ] && [ -z "$4" ]; then
+  printf 'dagrail:\n  Scope: User config (available in all your projects)\n  Status: connected\n  Type: stdio\n  Command: %s\n  Args: mcp --stdio\n  Environment:\n' '` + runtimePath + `'
+  exit 0
+fi`},
+	}
+	for _, fixture := range fixtures {
+		path := filepath.Join(binRoot, fixture.name)
 		script := `#!/bin/sh
 if [ "$1" = plugin ] && [ "$2" = list ]; then
   echo '{"plugins":[{"name":"dagrail"}]}'
   exit 0
 fi
-if [ "$1" = mcp ] && [ "$2" = list ]; then
-  echo '{"servers":[{"name":"dagrail","command":"` + runtimePath + `","args":["mcp","--stdio"]}]}'
-  exit 0
-fi
+` + fixture.mcpProbe + `
 case "$1" in
   --version) echo "fixture 1.0.0" ;;
   --help) echo "--print --output-format --session-id --resume" ;;
@@ -200,12 +214,18 @@ func TestMCPConfigurationMustBindOneExactRuntimeObject(t *testing.T) {
 	crossObject, _ := json.Marshal(map[string]any{"servers": []any{map[string]any{"name": "dagrail"}, map[string]any{"command": runtimePath, "args": []any{"mcp", "--stdio"}}}})
 	fieldSpoof, _ := json.Marshal(map[string]any{"servers": []any{map[string]any{"name": "dagrail", "command": "/wrong/dagrail", "description": runtimePath, "args": []any{"mcp", "--stdio"}}}})
 	nestedSpoof, _ := json.Marshal(map[string]any{"servers": []any{map[string]any{"name": "dagrail", "launcher": map[string]any{"command": runtimePath, "args": []any{"mcp", "--stdio"}}}}})
+	diagnosticSpoof, _ := json.Marshal(map[string]any{"diagnostics": map[string]any{"name": "dagrail", "command": runtimePath, "args": []any{"mcp", "--stdio"}}})
+	hiddenDuplicate, _ := json.Marshal([]any{map[string]any{"name": "dagrail", "command": runtimePath, "args": []any{"mcp", "--stdio"}, "diagnostics": map[string]any{"name": "dagrail", "command": runtimePath, "args": []any{"mcp", "--stdio"}}}})
+	conflictingLaunchers, _ := json.Marshal([]any{map[string]any{"name": "dagrail", "command": runtimePath, "args": []any{"mcp", "--stdio"}, "transport": map[string]any{"type": "stdio", "command": runtimePath, "args": []any{"mcp", "--stdio"}}}})
 	duplicate, _ := json.Marshal(map[string]any{"servers": []any{map[string]any{"name": "dagrail", "command": runtimePath, "args": []any{"mcp", "--stdio"}}, map[string]any{"name": "dagrail", "command": runtimePath, "args": []any{"mcp", "--stdio"}}}})
 	disabled, _ := json.Marshal([]any{map[string]any{"name": "dagrail", "enabled": false, "transport": map[string]any{"type": "stdio", "command": runtimePath, "args": []any{"mcp", "--stdio"}}}})
 	for _, invalid := range []string{
 		string(crossObject),
 		string(fieldSpoof),
 		string(nestedSpoof),
+		string(diagnosticSpoof),
+		string(hiddenDuplicate),
+		string(conflictingLaunchers),
 		string(duplicate),
 		string(disabled),
 		`{"servers":[{"name":"dagrail","name":"dagrail","command":"` + runtimePath + `","args":["mcp","--stdio"]}]}`,
@@ -215,6 +235,26 @@ func TestMCPConfigurationMustBindOneExactRuntimeObject(t *testing.T) {
 	} {
 		if mcpConfigurationMatches(invalid, runtimePath) {
 			t.Fatalf("ambiguous MCP configuration was accepted: %s", invalid)
+		}
+	}
+}
+
+func TestClaudeMCPConfigurationUsesNameSpecificClosedOutput(t *testing.T) {
+	runtimePath := filepath.Join(t.TempDir(), "dagrail")
+	valid := "dagrail:\n  Scope: User config (available in all your projects)\n  Status: connected\n  Type: stdio\n  Command: " + runtimePath + "\n  Args: mcp --stdio\n  Environment:\n"
+	if !claudeMCPConfigurationMatches(valid, runtimePath) {
+		t.Fatal("current Claude name-specific MCP output was rejected")
+	}
+	for _, invalid := range []string{
+		strings.Replace(valid, "dagrail:", "diagnostics:", 1),
+		strings.Replace(valid, "Command: "+runtimePath, "Command: /wrong/dagrail", 1),
+		strings.Replace(valid, "Args: mcp --stdio", "Args: mcp --http", 1),
+		valid + "  Command: " + runtimePath + "\n",
+		"dagrail:\n  Diagnostics: Command: " + runtimePath + " Args: mcp --stdio\n",
+		strings.Repeat("x", (1<<20)+1),
+	} {
+		if claudeMCPConfigurationMatches(invalid, runtimePath) {
+			t.Fatalf("ambiguous Claude MCP output was accepted: %.256q", invalid)
 		}
 	}
 }
