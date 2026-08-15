@@ -30,6 +30,8 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 ## What it provides
 
 - typed nodes, positive edge predicates, computed frontiers, and dependency cuts;
+- capability-enforced Roles and NodeKind-specific lifecycle actions;
+- immutable human, LLM, and provider Decision records with closed outcomes;
 - replaceable sessions through stable roles, leases, attempts, and checkpoints;
 - revision-bound allowed actions instead of hand-written lifecycle envelopes;
 - bounded role-specific context through CLI or six high-level MCP tools;
@@ -38,7 +40,7 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 - a machine-readable beta compatibility contract and digest-bound observe-only shadows;
 - immutable execution packages and deterministic evidence-reuse decisions;
 - bounded compile-in providers with schema and stability contracts;
-- recoverable external effects with explicit `unknown` and `reconcile` states;
+- recoverable external effects and resource closure with explicit `unknown` and `reconcile` states;
 - an immutable RFC 8785 journal with disposable SQLite projections;
 - explainable readiness, owned incidents, bounded history, verified backups, and a
   browser-opened read-only DAG Explorer with focused topology and deep links;
@@ -49,7 +51,7 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 
 ## Status
 
-`v0.18.0` is a pre-1.0 release candidate: local-first and single-user, with one native Go
+`v0.19.0` is a pre-1.0 release candidate: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
 stdio MCP. Its operational surface adds explainable dependency blockers, incident
 circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
@@ -81,6 +83,13 @@ binary can verify and recover a journal created by v0.10. `dagrail readiness` ag
 that structural evidence without overstating it: the current decision is
 `ready_for_external_validation`, while `oneDotZeroReady` and `productionValidated`
 remain false. See the [readiness and external-validation runbook](docs/readiness.md).
+
+The v0.19 governance-closure surface turns Role capabilities into enforced mutation
+authorization, replaces generic completion with NodeKind-specific actions, journals
+human/LLM/provider judgments as revision-bound Decision records, requires confirmed
+resource-closure receipts before releasing capacity, and automatically skips branches
+made permanently unreachable by closed positive predicates. Existing projects remain
+external validation subjects; repository-specific conversion stays outside DAGrail.
 
 The structural release report validates public source and automated gate
 declarations, but deliberately reports `productionValidated: false`. Independent

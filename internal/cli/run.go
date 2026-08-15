@@ -355,7 +355,7 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 
 func runIncident(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: dagrail incident <progress|trip|resolve>")
+		return fmt.Errorf("usage: dagrail incident <progress|trip|disposition|resolve>")
 	}
 	flags := flag.NewFlagSet("incident "+args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -367,6 +367,7 @@ func runIncident(args []string, stdout, stderr io.Writer) error {
 	madeProgress := flags.Bool("made-progress", false, "reset consecutive no-progress attempts")
 	reason := flags.String("reason", "", "circuit-breaker reason")
 	resolution := flags.String("resolution", "", "resolution summary")
+	disposition := flags.String("disposition", "", "retry, rollback, lkg, quarantine, off-critical-path, or escalate")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -382,6 +383,8 @@ func runIncident(args []string, stdout, stderr io.Writer) error {
 		incident, err = s.TripIncident(*id, *role, *reason, *key)
 	case "resolve":
 		incident, err = s.ResolveIncident(*id, *role, *resolution, *key)
+	case "disposition":
+		incident, err = s.SetIncidentDisposition(*id, *role, *disposition, *note, *key)
 	default:
 		return fmt.Errorf("unknown incident command %q", args[0])
 	}

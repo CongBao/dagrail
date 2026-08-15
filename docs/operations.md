@@ -37,15 +37,19 @@ Neither command establishes actor identity or malicious same-user isolation.
 
 ## Manage incidents
 
-An incident has a stable owner Role, deadline, attempt budget, progress metric, and
-dependency cut. Its owner must hold the current Role lease.
+An incident has a stable owner Role, closed classification, deadline, attempt budget,
+progress metric, recovery disposition, and dependency cut. Its owner must hold the
+current Role lease and declare `incident.manage`.
 
 ```sh
-dagrail incident progress --root . --incident INCIDENT --role ROLE \
+dagrail incident progress --root . --incident INCIDENT --actor-role ROLE \
   --note "candidate narrowed" --made-progress=true --idempotency-key progress-1
-dagrail incident trip --root . --incident INCIDENT --role ROLE \
+dagrail incident disposition --root . --incident INCIDENT --actor-role ROLE \
+  --disposition quarantine --note "isolate failing adapter" \
+  --idempotency-key disposition-1
+dagrail incident trip --root . --incident INCIDENT --actor-role ROLE \
   --reason "attempt budget exhausted" --idempotency-key trip-1
-dagrail incident resolve --root . --incident INCIDENT --role ROLE \
+dagrail incident resolve --root . --incident INCIDENT --actor-role ROLE \
   --resolution "fixed by candidate sha256:..." --idempotency-key resolve-1
 ```
 

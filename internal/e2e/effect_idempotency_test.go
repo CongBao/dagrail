@@ -54,7 +54,7 @@ func TestConcurrentEffectApplyDispatchesOnlyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	graphPath := filepath.Join(root, "graph.json")
-	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"effect race"},"spec":{"roles":[{"id":"operator","capabilities":["node.run"]}],"nodes":[{"id":"merge","kind":"effect","role":"operator","title":"merge","inputs":{"adapter":"test.racing","request":{"target":"main"}},"outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"effect race"},"spec":{"roles":[{"id":"operator","capabilities":["effect.apply","effect.reconcile"]}],"nodes":[{"id":"merge","kind":"effect","role":"operator","title":"merge","inputs":{"adapter":"test.racing","request":{"target":"main"}},"outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
 	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
 		t.Fatal(err)
 	}

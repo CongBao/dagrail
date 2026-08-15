@@ -10,13 +10,15 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Graph Definition**: the human-portable YAML or JSON input accepted for initial import.
 - **Graph Revision**: an immutable, canonicalized graph snapshot in the journal. It is runtime graph authority after import.
 - **Node**: stable work identity. Its `NodeKind` defines inputs and closed outcomes.
-- **Node runtime**: `planned | active | terminal | superseded`. `ready` is derived, never assigned.
+- **Node runtime**: `planned | active | terminal | superseded | skipped`. `ready` is derived, never assigned; `skipped` closes a permanently unreachable positive branch without inventing success.
 - **Edge predicate**: a positive, closed AST over outcome, decision, evidence, policy, `all`, and `any`.
 - **Role**: stable responsibility independent of a process, agent, thread, or session.
 - **Executor binding**: the temporary harness/session audit identity stored in a Role lease.
 - **Attempt**: one execution of a Node: `leased | running | waiting | submitted | terminal`.
 - **Checkpoint**: a bounded recovery summary and digest-only evidence references owned by an Attempt.
 - **Allowed action**: a signed opaque ref binding project, journal head, graph revision, Role lease, Node, Attempt, provider schemas, and expiry.
+- **Decision contract**: the closed key and `human | llm | provider` source declared by a Decision or Gate Node; provider contracts also bind provider and policy IDs.
+- **Decision record**: immutable journal authority binding one closed outcome and its facts/evidence to Project, Graph Revision, Node, Attempt, Role, input digest, and optional exact provider version/schema.
 - **Journal segment**: the atomic command commit containing one or more immutable events.
 - **Stored event**: the exact versioned event bytes committed inside a Journal segment and covered by its hash.
 - **Normalized event**: the current in-memory representation produced from a verified Stored event.
@@ -34,9 +36,10 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Projection**: disposable SQLite or human-facing data rebuilt from journal segments.
 - **Effect**: an external side effect managed as a saga, never represented as an ACID transaction.
 - **Receipt**: typed observation of transport, session creation, visible delivery, acceptance, and completion. These states are not interchangeable.
-- **Incident**: a durable blocker with owner, deadline, attempt budget, progress metric, classification, and dependency cut.
+- **Incident**: a durable blocker with owner, deadline, attempt budget, progress metric, closed classification, recovery disposition, and dependency cut.
+- **Recovery disposition**: a closed operator choice: `retry | rollback | lkg | quarantine | off-critical-path | escalate`.
 - **Circuit breaker**: an Incident state that stops repeated work after its deadline or no-progress budget is exhausted without blocking unrelated lanes.
-- **Resource lease**: ownership of bounded executor, browser, server, port, memory, disk, or another declared capacity.
+- **Resource lease**: ownership of bounded executor, browser, server, port, memory, disk, or another declared capacity. Capacity is released only by a confirmed closure receipt; unknown closure remains active and reconcilable.
 - **Dependency cut**: only the transitive graph region frozen by an unsatisfied failure path.
 - **Harness**: an agent host such as Codex, Claude Code, or GitHub Copilot CLI.
 - **Native harness receipt**: adapter observation binding a DAGrail action to a proved
@@ -60,6 +63,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
   authority set and imported Graph Revision; it contains no absolute source locator.
 - **Shadow project**: isolated DAGrail state used to qualify an existing DAG without
   writing to, controlling, or migrating the source project.
+- **External validation subject**: any repository or workflow observed through public DAGrail contracts. Its local vocabulary never becomes a kernel type merely because it is used for qualification.
+- **Qualification driver**: disposable, repository-external conversion and comparison logic that exercises public CLI, MCP, or SDK surfaces against an External validation subject.
 - **DAG Explorer**: loopback-only, mutation-free browser projection over bounded,
   deterministic v1beta1 query APIs. A selected Node deep link is a view locator, never
   a lifecycle capability.
@@ -144,6 +149,10 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 24. A loopback UI request must also pass Host and exact-Origin checks; localhost ports
     are separate browser origins and receive no implicit capability sharing.
 25. Structural readiness cannot set production validation or close adoption gaps.
+26. A Role can mutate a governed Node only when it declares the capability required by that NodeKind; every mutation rechecks both an unexpired Role lease and that capability.
+27. Human, LLM, and provider judgments become state only as revision-bound Decision records; opaque provider output and chat remain non-authoritative.
+28. Attempt completion and Node supersession cannot release active resources; only a confirmed closure receipt can return declared capacity.
+29. A repository used for qualification may drive conversion fixtures and comparisons, but its domain names, paths, and lifecycle conventions cannot enter the DAGrail kernel or public generic contracts.
 
 ## Bounded contexts
 

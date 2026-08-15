@@ -62,6 +62,26 @@ func (s *Service) ResolveIncident(incidentID, actorRole, resolution, idempotency
 	})
 }
 
+func (s *Service) SetIncidentDisposition(incidentID, actorRole, disposition, note, idempotencyKey string) (domain.Incident, error) {
+	if !domain.ValidIncidentDisposition(disposition) {
+		return domain.Incident{}, fmt.Errorf("invalid incident disposition %s", disposition)
+	}
+	if err := validateIncidentText("disposition note", note, 1024); err != nil {
+		return domain.Incident{}, err
+	}
+	return s.updateIncident(incidentID, actorRole, idempotencyKey, "incident.disposition", func(incident *domain.Incident, now time.Time) error {
+		if incident.Status == "resolved" {
+			return fmt.Errorf("resolved incident cannot receive a disposition")
+		}
+		incident.Disposition = disposition
+		incident.DispositionBy = actorRole
+		incident.DispositionAt = now.Format(time.RFC3339Nano)
+		incident.LastProgress = note
+		incident.LastProgressAt = now.Format(time.RFC3339Nano)
+		return nil
+	})
+}
+
 func validateIncidentText(label, value string, maximum int) error {
 	if strings.TrimSpace(value) == "" || len([]byte(value)) > maximum {
 		return fmt.Errorf("%s must be 1..%d bytes", label, maximum)
@@ -98,7 +118,7 @@ func (s *Service) updateIncident(incidentID, actorRole, idempotencyKey, commandK
 	if incident.OwnerRole != "" && incident.OwnerRole != actorRole {
 		return domain.Incident{}, fmt.Errorf("incident %s belongs to role %s", incidentID, incident.OwnerRole)
 	}
-	if _, err := s.validLease(state, actorRole); err != nil {
+	if _, err := s.requireRoleCapability(state, actorRole, domain.CapabilityIncidentManage); err != nil {
 		return domain.Incident{}, err
 	}
 	now := s.Now().UTC()

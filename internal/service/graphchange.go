@@ -28,8 +28,10 @@ type PatchOperation struct {
 	Op     string                 `json:"op" yaml:"op"`
 	NodeID string                 `json:"nodeId,omitempty" yaml:"nodeId,omitempty"`
 	EdgeID string                 `json:"edgeId,omitempty" yaml:"edgeId,omitempty"`
+	RoleID string                 `json:"roleId,omitempty" yaml:"roleId,omitempty"`
 	Node   *domain.NodeDefinition `json:"node,omitempty" yaml:"node,omitempty"`
 	Edge   *domain.EdgeDefinition `json:"edge,omitempty" yaml:"edge,omitempty"`
+	Role   *domain.RoleDefinition `json:"role,omitempty" yaml:"role,omitempty"`
 }
 
 type GraphImpact struct {
@@ -40,6 +42,9 @@ type GraphImpact struct {
 	RemovedNodes     []string `json:"removedNodes,omitempty"`
 	AddedEdges       []string `json:"addedEdges,omitempty"`
 	RemovedEdges     []string `json:"removedEdges,omitempty"`
+	AddedRoles       []string `json:"addedRoles,omitempty"`
+	UpdatedRoles     []string `json:"updatedRoles,omitempty"`
+	RemovedRoles     []string `json:"removedRoles,omitempty"`
 	DependencyCut    []string `json:"dependencyCut,omitempty"`
 	Token            string   `json:"token,omitempty"`
 	ExpiresAt        string   `json:"expiresAt"`
@@ -109,6 +114,9 @@ func (s *Service) ApplyGraphChange(path, token, idempotencyKey, actorRole string
 	}
 	if command, ok := state.Commands[idempotencyKey]; ok {
 		return graphImpactForSequence(segments, command.Sequence)
+	}
+	if _, err := s.requireRoleCapability(state, actorRole, domain.CapabilityGraphChange); err != nil {
+		return GraphImpact{}, err
 	}
 	if tokenPayload.ProjectID != state.ProjectID || tokenPayload.HeadHash != state.HeadHash || tokenPayload.CurrentRevision != state.GraphRevision || tokenPayload.ProviderSet != providerFingerprint(state.Graph) {
 		return GraphImpact{}, fmt.Errorf("graph change token is stale")
@@ -262,6 +270,40 @@ func applyGraphPatch(state domain.State, patch GraphPatch) (domain.GraphDefiniti
 	changedRoots := map[string]bool{}
 	for _, operation := range patch.Operations {
 		switch operation.Op {
+		case "addRole":
+			if operation.Role == nil || operation.Role.ID == "" {
+				return graph, impact, nil, fmt.Errorf("addRole requires role")
+			}
+			if _, ok := findRole(graph, operation.Role.ID); ok {
+				return graph, impact, nil, fmt.Errorf("role %s already exists", operation.Role.ID)
+			}
+			graph.Spec.Roles = append(graph.Spec.Roles, *operation.Role)
+			impact.AddedRoles = append(impact.AddedRoles, operation.Role.ID)
+		case "updateRole":
+			if operation.Role == nil || operation.Role.ID == "" {
+				return graph, impact, nil, fmt.Errorf("updateRole requires role")
+			}
+			index, ok := findRole(graph, operation.Role.ID)
+			if !ok {
+				return graph, impact, nil, fmt.Errorf("unknown role %s", operation.Role.ID)
+			}
+			graph.Spec.Roles[index] = *operation.Role
+			impact.UpdatedRoles = append(impact.UpdatedRoles, operation.Role.ID)
+		case "removeRole":
+			index, ok := findRole(graph, operation.RoleID)
+			if !ok {
+				return graph, impact, nil, fmt.Errorf("unknown role %s", operation.RoleID)
+			}
+			for _, node := range graph.Spec.Nodes {
+				if node.Role == operation.RoleID {
+					return graph, impact, nil, fmt.Errorf("role %s is still referenced by node %s", operation.RoleID, node.ID)
+				}
+			}
+			if lease, exists := state.Leases[operation.RoleID]; exists && lease.Active {
+				return graph, impact, nil, fmt.Errorf("role %s has an active lease", operation.RoleID)
+			}
+			graph.Spec.Roles = append(graph.Spec.Roles[:index], graph.Spec.Roles[index+1:]...)
+			impact.RemovedRoles = append(impact.RemovedRoles, operation.RoleID)
 		case "addNode":
 			if operation.Node == nil || operation.Node.ID == "" {
 				return graph, impact, nil, fmt.Errorf("addNode requires node")
@@ -340,6 +382,9 @@ func applyGraphPatch(state domain.State, patch GraphPatch) (domain.GraphDefiniti
 			if _, ok := findNode(graph, operation.Node.ID); ok {
 				return graph, impact, nil, fmt.Errorf("replacement node %s already exists", operation.Node.ID)
 			}
+			if attempt, ok := state.LatestAttempt(operation.NodeID); ok && activeResourceIDs(state, attempt.ID) != nil {
+				return graph, impact, nil, fmt.Errorf("node %s has active resources; close or reconcile them before superseding", operation.NodeID)
+			}
 			replacement := *operation.Node
 			replacement.Supersedes = operation.NodeID
 			graph.Spec.Nodes = append(graph.Spec.Nodes, replacement)
@@ -356,7 +401,7 @@ func applyGraphPatch(state domain.State, patch GraphPatch) (domain.GraphDefiniti
 		return graph, impact, nil, err
 	}
 	impact.DependencyCut = dependencyCut(graph, changedRoots)
-	for _, values := range [][]string{impact.AddedNodes, impact.UpdatedNodes, impact.RemovedNodes, impact.AddedEdges, impact.RemovedEdges, impact.DependencyCut} {
+	for _, values := range [][]string{impact.AddedNodes, impact.UpdatedNodes, impact.RemovedNodes, impact.AddedEdges, impact.RemovedEdges, impact.AddedRoles, impact.UpdatedRoles, impact.RemovedRoles, impact.DependencyCut} {
 		sort.Strings(values)
 	}
 	return graph, impact, superseded, nil
@@ -373,6 +418,15 @@ func findNode(graph domain.GraphDefinition, id string) (int, bool) {
 func findEdge(graph domain.GraphDefinition, id string) (int, bool) {
 	for index, edge := range graph.Spec.Edges {
 		if edge.ID == id {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
+func findRole(graph domain.GraphDefinition, id string) (int, bool) {
+	for index, role := range graph.Spec.Roles {
+		if role.ID == id {
 			return index, true
 		}
 	}

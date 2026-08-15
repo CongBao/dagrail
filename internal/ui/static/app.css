@@ -71,7 +71,7 @@ input:focus,select:focus { border-color:var(--blue); box-shadow:0 0 0 3px #61adf
 .graph-node text { pointer-events:none; }
 .graph-title { fill:var(--text); font-size:12px; font-weight:650; }
 .graph-meta { fill:var(--muted); font-size:10px; }
-.graph-state-planned rect { stroke:#8fa2be; }.graph-state-active rect { stroke:var(--blue); }.graph-state-terminal rect { stroke:var(--green); }.graph-state-superseded rect { stroke:var(--violet); }
+.graph-state-planned rect { stroke:#8fa2be; }.graph-state-active rect { stroke:var(--blue); }.graph-state-terminal rect { stroke:var(--green); }.graph-state-superseded rect { stroke:var(--violet); }.graph-state-skipped rect { stroke:#7f8a9a; stroke-dasharray:5 4; }
 .graph-readiness-ready circle { fill:var(--green); }.graph-readiness-blocked circle { fill:var(--amber); }.graph-readiness-resource-blocked circle { fill:var(--red); }
 .table-scroll { overflow:auto; }
 table { width:100%; border-collapse:collapse; }
@@ -85,7 +85,7 @@ tbody tr:hover,tbody tr:focus { outline:0; background:#13263d; }
 .pill.blocked,.pill.waiting,.pill.unknown,.pill.open,.pill.pending,.pill.retryable { background:var(--amber); }
 .pill.failure,.pill.failed,.pill.circuit-open,.pill.resource-blocked { background:var(--red); }
 .pill.active,.pill.running,.pill.leased,.pill.dispatched,.pill.prepared { background:var(--blue); }
-.pill.superseded,.pill.reconciling { background:var(--violet); }
+.pill.superseded,.pill.reconciling { background:var(--violet); }.pill.skipped { background:#394452; color:#c4cedb; }
 .pager { min-height:58px; justify-content:flex-end; gap:10px; padding:10px 16px; }
 .timeline { list-style:none; margin:0; padding:8px 18px 0 40px; }
 .timeline li { position:relative; padding:12px 0 16px 20px; border-left:1px solid #30445f; }

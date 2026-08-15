@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -24,6 +25,7 @@ type AllowedAction struct {
 	ID          string         `json:"id"`
 	Kind        string         `json:"kind"`
 	Ref         string         `json:"ref"`
+	TargetRef   string         `json:"targetRef,omitempty"`
 	InputSchema map[string]any `json:"inputSchema"`
 }
 
@@ -51,6 +53,7 @@ type actionRefPayload struct {
 	SessionID     string `json:"sessionId"`
 	NodeID        string `json:"nodeId"`
 	AttemptID     string `json:"attemptId,omitempty"`
+	ResourceID    string `json:"resourceId,omitempty"`
 	Kind          string `json:"kind"`
 	ExpiresAt     string `json:"expiresAt"`
 }
@@ -166,14 +169,19 @@ func (s *Service) ListActions(roleID, nodeID string) (ActionList, error) {
 	if node.Role != roleID {
 		return ActionList{}, fmt.Errorf("node %s belongs to role %s", nodeID, node.Role)
 	}
+	if _, err := s.requireRoleCapability(state, roleID, domain.RequiredNodeCapability(node.Kind)); err != nil {
+		return ActionList{}, err
+	}
 	runtime := state.Nodes[nodeID]
-	kinds := []string{}
+	type actionCandidate struct{ kind, resourceID string }
+	candidates := []actionCandidate{}
+	add := func(kind string) { candidates = append(candidates, actionCandidate{kind: kind}) }
 	attemptID := ""
 	if runtime.Status == "planned" {
 		frontier := domain.ComputeFrontier(state)
 		for _, ready := range frontier.Ready {
 			if ready == nodeID {
-				kinds = append(kinds, "node.start")
+				add("node.start")
 			}
 		}
 	} else if runtime.Status == "active" {
@@ -186,49 +194,88 @@ func (s *Service) ListActions(roleID, nodeID string) (ActionList, error) {
 		case "running":
 			if node.Kind == "effect" {
 				if effect, exists := state.EffectForAttempt(attempt.ID); !exists {
-					kinds = []string{"attempt.checkpoint", "attempt.wait", "effect.prepare"}
+					for _, kind := range []string{"attempt.checkpoint", "attempt.wait", "effect.prepare"} {
+						add(kind)
+					}
 				} else if effect.Status == "confirmed" {
-					kinds = []string{"attempt.checkpoint", "attempt.finish"}
+					for _, kind := range []string{"attempt.checkpoint", "effect.complete"} {
+						add(kind)
+					}
 				} else if effect.Status == "failed" {
-					kinds = []string{"attempt.checkpoint", "attempt.finish", "attempt.wait"}
+					for _, kind := range []string{"attempt.checkpoint", "effect.complete", "attempt.wait"} {
+						add(kind)
+					}
 				} else {
-					kinds = []string{"attempt.checkpoint", "attempt.wait"}
+					for _, kind := range []string{"attempt.checkpoint", "attempt.wait"} {
+						add(kind)
+					}
 				}
 			} else {
-				kinds = []string{"attempt.checkpoint", "attempt.wait", "attempt.submit", "attempt.finish"}
+				for _, kind := range []string{"attempt.checkpoint", "attempt.wait", completionAction(node)} {
+					add(kind)
+				}
+				if node.Kind == "task" {
+					add("attempt.submit")
+				}
 			}
 		case "waiting":
-			kinds = []string{"attempt.checkpoint", "attempt.resume", "attempt.finish"}
+			for _, kind := range []string{"attempt.checkpoint", "attempt.resume"} {
+				add(kind)
+			}
 		case "submitted":
-			kinds = []string{"attempt.checkpoint", "attempt.finish"}
+			for _, kind := range []string{"attempt.checkpoint", completionAction(node)} {
+				add(kind)
+			}
 		}
 		if attempt.Status == "running" || attempt.Status == "waiting" || attempt.Status == "submitted" {
-			kinds = append(kinds, "evidence.publish")
+			add("evidence.publish")
 			if len(state.EvidencePackages) > 0 {
-				kinds = append(kinds, "evidence.assess-reuse")
+				add("evidence.assess-reuse")
+			}
+		}
+		if domain.RoleHasCapability(state.Graph, roleID, domain.CapabilityResourceClose) {
+			for _, resource := range state.Resources {
+				if resource.AttemptID != attempt.ID || resource.Status != "active" {
+					continue
+				}
+				kind := "resource.close"
+				if resource.ClosureStatus == "unknown" || resource.ClosureStatus == "failed" || resource.ClosureStatus == "reconciling" {
+					kind = "resource.reconcile"
+				}
+				candidates = append(candidates, actionCandidate{kind: kind, resourceID: resource.ID})
 			}
 		}
 	}
-	sort.Strings(kinds)
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].kind == candidates[j].kind {
+			return candidates[i].resourceID < candidates[j].resourceID
+		}
+		return candidates[i].kind < candidates[j].kind
+	})
 	secret, err := s.actionSecret()
 	if err != nil {
 		return ActionList{}, err
 	}
-	result := ActionList{Actions: make([]AllowedAction, 0, len(kinds))}
-	for _, kind := range kinds {
+	result := ActionList{Actions: make([]AllowedAction, 0, len(candidates))}
+	for _, candidate := range candidates {
+		kind := candidate.kind
 		expires := s.Now().UTC().Add(5 * time.Minute)
 		if leaseExpiry, parseErr := time.Parse(time.RFC3339Nano, lease.ExpiresAt); parseErr == nil && leaseExpiry.Before(expires) {
 			expires = leaseExpiry
 		}
 		providerSet := providerFingerprint(state.Graph)
-		identity := strings.Join([]string{state.ProjectID, state.HeadHash, state.GraphRevision, providerSet, roleID, lease.SessionID, nodeID, attemptID, kind}, "\x00")
+		identity := strings.Join([]string{state.ProjectID, state.HeadHash, state.GraphRevision, providerSet, roleID, lease.SessionID, nodeID, attemptID, candidate.resourceID, kind}, "\x00")
 		sum := sha256.Sum256([]byte(identity))
-		payload := actionRefPayload{ActionID: hex.EncodeToString(sum[:]), ProjectID: state.ProjectID, GraphRevision: state.GraphRevision, ProviderSet: providerSet, HeadHash: state.HeadHash, RoleID: roleID, SessionID: lease.SessionID, NodeID: nodeID, AttemptID: attemptID, Kind: kind, ExpiresAt: expires.Format(time.RFC3339Nano)}
+		payload := actionRefPayload{ActionID: hex.EncodeToString(sum[:]), ProjectID: state.ProjectID, GraphRevision: state.GraphRevision, ProviderSet: providerSet, HeadHash: state.HeadHash, RoleID: roleID, SessionID: lease.SessionID, NodeID: nodeID, AttemptID: attemptID, ResourceID: candidate.resourceID, Kind: kind, ExpiresAt: expires.Format(time.RFC3339Nano)}
 		ref, err := signActionRef(payload, secret)
 		if err != nil {
 			return ActionList{}, err
 		}
-		result.Actions = append(result.Actions, AllowedAction{ID: payload.ActionID, Kind: kind, Ref: ref, InputSchema: actionInputSchema(kind, node)})
+		targetRef := ""
+		if candidate.resourceID != "" {
+			targetRef = "resource:" + candidate.resourceID
+		}
+		result.Actions = append(result.Actions, AllowedAction{ID: payload.ActionID, Kind: kind, Ref: ref, TargetRef: targetRef, InputSchema: actionInputSchema(kind, node)})
 	}
 	return result, nil
 }
@@ -279,6 +326,12 @@ func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey 
 	if !ok || node.Role != payload.RoleID {
 		return ActionResult{}, fmt.Errorf("action node or role is invalid")
 	}
+	if _, err := s.requireRoleCapability(state, payload.RoleID, domain.RequiredNodeCapability(node.Kind)); err != nil {
+		return ActionResult{}, err
+	}
+	if payload.Kind == "resource.close" || payload.Kind == "resource.reconcile" {
+		return s.applyResourceAction(state, payload, input, idempotencyKey)
+	}
 	if payload.Kind == "effect.prepare" {
 		return s.applyEffectAction(state, payload, input, idempotencyKey, node)
 	}
@@ -298,7 +351,7 @@ func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey 
 		runningRaw, _ := json.Marshal(map[string]string{"attemptId": attempt.ID, "status": "running", "updatedAt": now})
 		events = append(events, journal.Event{Type: "attempt.status-changed", Payload: runningRaw})
 		for _, request := range node.Resources {
-			lease := domain.ResourceLease{ID: uuid.NewString(), Kind: request.Kind, Quantity: request.Quantity, NodeID: node.ID, AttemptID: attemptID, RoleID: payload.RoleID, Status: "active", LeasedAt: now}
+			lease := domain.ResourceLease{ID: uuid.NewString(), Kind: request.Kind, Quantity: request.Quantity, NodeID: node.ID, AttemptID: attemptID, RoleID: payload.RoleID, Status: "active", ClosureStatus: "pending", LeasedAt: now}
 			leaseRaw, _ := json.Marshal(lease)
 			events = append(events, journal.Event{Type: "resource.leased", Payload: leaseRaw})
 		}
@@ -366,29 +419,61 @@ func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey 
 		}
 		raw, _ := json.Marshal(map[string]string{"attemptId": attempt.ID, "status": target, "updatedAt": now})
 		events = append(events, journal.Event{Type: "attempt.status-changed", Payload: raw})
-	case "attempt.finish":
+	case "task.complete", "review.resolve", "decision.record", "effect.complete", "attempt.finish", "gate.evaluate":
 		attempt, err := activeAttempt(state, payload)
 		if err != nil {
 			return ActionResult{}, err
 		}
-		var value struct {
-			Outcome string                `json:"outcome"`
-			Facts   domain.PredicateFacts `json:"facts"`
+		if payload.Kind != completionAction(node) {
+			return ActionResult{}, fmt.Errorf("action %s cannot complete node kind %s", payload.Kind, node.Kind)
 		}
-		if err := json.Unmarshal(input, &value); err != nil {
-			return ActionResult{}, fmt.Errorf("decode finish input: %w", err)
+		if activeResourceIDs(state, attempt.ID) != nil {
+			return ActionResult{}, fmt.Errorf("attempt %s has active resources; close or reconcile them before completion", attempt.ID)
 		}
-		outcomeClass := ""
-		for _, outcome := range node.Outcomes {
-			if outcome.ID == value.Outcome {
-				outcomeClass = outcome.Class
+		value := completionInput{}
+		var decision *domain.DecisionRecord
+		if payload.Kind == "gate.evaluate" {
+			record, decisionErr := s.buildGateDecision(context.Background(), state, node, attempt, payload.RoleID, input, s.Now())
+			if decisionErr != nil {
+				return ActionResult{}, decisionErr
+			}
+			decision = &record
+			value.Outcome, value.Facts, value.EvidenceRefs = record.Outcome, record.Facts, record.EvidenceRefs
+		} else {
+			value, err = decodeCompletionInput(input)
+			if err != nil {
+				return ActionResult{}, err
+			}
+			if node.Kind == "task" && outcomeClass(node, value.Outcome) == "success" && attempt.Status != "submitted" {
+				return ActionResult{}, fmt.Errorf("successful task completion requires a submitted attempt")
+			}
+			if node.Kind == "effect" {
+				effect, exists := state.EffectForAttempt(attempt.ID)
+				class := outcomeClass(node, value.Outcome)
+				if !exists || (class == "success" && effect.Status != "confirmed") || (class == "failure" && effect.Status != "failed") {
+					return ActionResult{}, fmt.Errorf("effect outcome is inconsistent with its observed receipt state")
+				}
+			}
+			if node.Kind == "review" || node.Kind == "decision" {
+				record, decisionErr := s.buildRoleDecision(state, node, attempt, payload.RoleID, value, input, s.Now())
+				if decisionErr != nil {
+					return ActionResult{}, decisionErr
+				}
+				decision = &record
+				value.Facts = record.Facts
 			}
 		}
+		outcomeClass := outcomeClass(node, value.Outcome)
 		if outcomeClass == "" {
 			return ActionResult{}, fmt.Errorf("outcome %s is not declared by node %s", value.Outcome, node.ID)
 		}
 		if outcomeClass == "retryable" && attempt.Number > node.RetryBudget {
 			return ActionResult{}, fmt.Errorf("node %s retry budget %d is exhausted at attempt %d", node.ID, node.RetryBudget, attempt.Number)
+		}
+		if decision != nil {
+			raw, _ := json.Marshal(decision)
+			events = append(events, journal.Event{Type: "decision.recorded", Payload: raw})
+			actionInput, _ = json.Marshal(map[string]string{"decisionId": decision.ID})
 		}
 		raw, _ := json.Marshal(struct {
 			AttemptID    string                `json:"attemptId"`
@@ -398,21 +483,21 @@ func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey 
 			UpdatedAt    string                `json:"updatedAt"`
 		}{attempt.ID, value.Outcome, outcomeClass, value.Facts, now})
 		events = append(events, journal.Event{Type: "attempt.finished", Payload: raw})
-		for _, lease := range state.Resources {
-			if lease.AttemptID != attempt.ID || lease.Status != "active" {
-				continue
-			}
-			releaseRaw, _ := json.Marshal(map[string]string{"resourceId": lease.ID, "releasedAt": now})
-			events = append(events, journal.Event{Type: "resource.released", Payload: releaseRaw})
-		}
 		if outcomeClass == "failure" || outcomeClass == "cancelled" {
+			classification := value.Classification
+			if classification == "" {
+				classification = "work-product"
+			}
+			if !domain.ValidIncidentClassification(classification) {
+				return ActionResult{}, fmt.Errorf("invalid incident classification %s", classification)
+			}
 			postState := state
 			postState.Nodes = make(map[string]domain.NodeRuntime, len(state.Nodes))
 			for nodeID, runtime := range state.Nodes {
 				postState.Nodes[nodeID] = runtime
 			}
 			postState.Nodes[node.ID] = domain.NodeRuntime{Status: "terminal", Outcome: value.Outcome, OutcomeClass: outcomeClass, Facts: value.Facts}
-			incident := domain.Incident{ID: "attempt:" + attempt.ID, SourceType: "attempt", SourceID: attempt.ID, NodeID: node.ID, OwnerRole: payload.RoleID, Status: "open", Classification: "node-failure", Deadline: s.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano), AttemptBudget: 2, ProgressMetric: "new candidate or changed failure classification", DependencyCut: domain.DependencyCut(postState, node.ID), OpenedAt: now, UpdatedAt: now}
+			incident := domain.Incident{ID: "attempt:" + attempt.ID, SourceType: "attempt", SourceID: attempt.ID, NodeID: node.ID, OwnerRole: payload.RoleID, Status: "open", Classification: classification, Deadline: s.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano), AttemptBudget: 2, ProgressMetric: "new candidate or changed failure classification", DependencyCut: domain.DependencyCut(postState, node.ID), OpenedAt: now, UpdatedAt: now}
 			incidentRaw, _ := json.Marshal(incident)
 			events = append(events, journal.Event{Type: "incident.opened", Payload: incidentRaw})
 		}
@@ -459,6 +544,22 @@ func actionResultForSequence(state domain.State, sequence uint64) (ActionResult,
 }
 
 func objectRefForSequence(state domain.State, sequence uint64) string {
+	for _, action := range state.Actions {
+		if action.Sequence != sequence || (action.Kind != "resource.close" && action.Kind != "resource.reconcile") {
+			continue
+		}
+		var value struct {
+			ResourceID string `json:"resourceId"`
+		}
+		if json.Unmarshal(action.Input, &value) == nil && value.ResourceID != "" {
+			return "resource:" + value.ResourceID
+		}
+	}
+	for _, decision := range state.Decisions {
+		if decision.Sequence == sequence {
+			return "decision:" + decision.ID
+		}
+	}
 	for _, pack := range state.EvidencePackages {
 		if pack.Sequence == sequence {
 			return "evidence-package:" + pack.ID
@@ -470,6 +571,29 @@ func objectRefForSequence(state domain.State, sequence uint64) string {
 		}
 	}
 	return ""
+}
+
+func outcomeClass(node domain.NodeDefinition, outcomeID string) string {
+	for _, outcome := range node.Outcomes {
+		if outcome.ID == outcomeID {
+			return outcome.Class
+		}
+	}
+	return ""
+}
+
+func activeResourceIDs(state domain.State, attemptID string) []string {
+	result := []string{}
+	for _, resource := range state.Resources {
+		if resource.AttemptID == attemptID && resource.Status == "active" {
+			result = append(result, resource.ID)
+		}
+	}
+	sort.Strings(result)
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func (s *Service) validLease(state domain.State, roleID string) (domain.RoleLease, error) {
@@ -608,14 +732,18 @@ func actionInputSchema(kind string, node domain.NodeDefinition) map[string]any {
 	switch kind {
 	case "attempt.checkpoint":
 		return map[string]any{"type": "object", "required": []string{"summary"}, "properties": map[string]any{"summary": map[string]any{"type": "string", "maxLength": 2048}, "evidenceRefs": map[string]any{"type": "array"}}}
-	case "attempt.finish":
+	case "attempt.finish", "task.complete", "review.resolve", "decision.record", "effect.complete":
 		outcomes := make([]string, 0, len(node.Outcomes))
 		for _, outcome := range node.Outcomes {
 			outcomes = append(outcomes, outcome.ID)
 		}
 		factMap := map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}
 		facts := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"decision": factMap, "evidence": factMap, "policy": factMap}}
-		return map[string]any{"type": "object", "required": []string{"outcome"}, "additionalProperties": false, "properties": map[string]any{"outcome": map[string]any{"type": "string", "enum": outcomes}, "facts": facts}}
+		return map[string]any{"type": "object", "required": []string{"outcome"}, "additionalProperties": false, "properties": map[string]any{"outcome": map[string]any{"type": "string", "enum": outcomes}, "facts": facts, "evidenceRefs": map[string]any{"type": "array"}, "classification": map[string]any{"enum": []string{"work-product", "policy", "fixture", "infrastructure", "evidence", "external-effect", "unknown"}}}}
+	case "gate.evaluate":
+		return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"input"}, "properties": map[string]any{"input": map[string]any{}, "evidence": map[string]any{"type": "array", "maxItems": 128}, "evidenceRefs": map[string]any{"type": "array", "maxItems": 128}}}
+	case "resource.close", "resource.reconcile":
+		return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"status", "receipt"}, "properties": map[string]any{"status": map[string]any{"enum": []string{"confirmed", "failed", "unknown"}}, "receipt": map[string]any{"type": "object"}}}
 	case "evidence.publish":
 		observations := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"exact", "clean", "depthComplete", "sourceUnmodified", "resourcesClosed"}, "properties": map[string]any{"exact": map[string]any{"type": "boolean"}, "clean": map[string]any{"type": "boolean"}, "depthComplete": map[string]any{"type": "boolean"}, "sourceUnmodified": map[string]any{"type": "boolean"}, "resourcesClosed": map[string]any{"type": "boolean"}}}
 		return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"candidate", "prospectiveTree", "commandGraphDigest", "protectedInputs", "observations", "artifacts"}, "properties": map[string]any{"candidate": artifact, "prospectiveTree": artifact, "commandGraphDigest": digest, "protectedInputs": map[string]any{"type": "array", "minItems": 1, "maxItems": 128, "items": protectedInput}, "observations": observations, "artifacts": map[string]any{"type": "array", "maxItems": 256, "items": artifact}}}
@@ -624,6 +752,26 @@ func actionInputSchema(kind string, node domain.NodeDefinition) map[string]any {
 		return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"packageId", "policy", "candidateDigest", "prospectiveTreeDigest", "commandGraphDigest", "protectedInputs"}, "properties": map[string]any{"packageId": map[string]any{"type": "string", "pattern": `^epkg_[a-f0-9]{64}$`}, "policy": policy, "candidateDigest": digest, "prospectiveTreeDigest": digest, "commandGraphDigest": digest, "protectedInputs": map[string]any{"type": "array", "minItems": 1, "maxItems": 128, "items": protectedInput}}}
 	default:
 		return map[string]any{"type": "object", "additionalProperties": false}
+	}
+}
+
+func completionAction(node domain.NodeDefinition) string {
+	switch node.Kind {
+	case "task":
+		return "task.complete"
+	case "review":
+		return "review.resolve"
+	case "decision":
+		return "decision.record"
+	case "gate":
+		if node.Decision == nil {
+			return "attempt.finish"
+		}
+		return "gate.evaluate"
+	case "effect":
+		return "effect.complete"
+	default:
+		return "attempt.finish"
 	}
 }
 

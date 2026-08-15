@@ -92,6 +92,22 @@ func (s *Service) ContextSince(view, roleID, nodeID string, budget int, cursor u
 				data["checkpoint"] = checkpoint
 				refs = append(refs, "checkpoint:"+checkpoint.ID)
 			}
+			if decisionIDs := state.AttemptDecisions[attempt.ID]; len(decisionIDs) > 0 {
+				latest := state.Decisions[decisionIDs[len(decisionIDs)-1]]
+				data["decision"] = latest
+				refs = append(refs, "decision:"+latest.ID)
+			}
+			resourceRefs := []string{}
+			for _, resource := range state.Resources {
+				if resource.AttemptID == attempt.ID {
+					resourceRefs = append(resourceRefs, "resource:"+resource.ID)
+				}
+			}
+			sort.Strings(resourceRefs)
+			if len(resourceRefs) > 0 {
+				data["resourceRefs"] = resourceRefs
+				refs = append(refs, resourceRefs...)
+			}
 			if packageIDs := state.AttemptPackages[attempt.ID]; len(packageIDs) > 0 {
 				packageRefs := make([]string, 0, len(packageIDs))
 				for _, packageID := range packageIDs {

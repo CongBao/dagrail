@@ -238,6 +238,12 @@ func (s *Service) Inspect(ref string) (any, error) {
 			return nil, fmt.Errorf("unknown reuse decision %s", id)
 		}
 		return value, nil
+	case "decision":
+		value, found := state.Decisions[id]
+		if !found {
+			return nil, fmt.Errorf("unknown decision %s", id)
+		}
+		return value, nil
 	case "evidence":
 		for _, checkpoint := range state.Checkpoints {
 			for _, evidence := range checkpoint.EvidenceRefs {

@@ -45,6 +45,7 @@ type Report struct {
 	CLI                  VersionedSurface         `json:"cli"`
 	CommandCatalog       DocumentedSurface        `json:"commandCatalog"`
 	CLIError             DocumentedSurface        `json:"cliError"`
+	DecisionRecord       DocumentedSurface        `json:"decisionRecord"`
 	Installation         DocumentedSurface        `json:"installationDiagnostic"`
 	HistoricalMatrix     DocumentedSurface        `json:"historicalBinaryMatrix"`
 	Readiness            DocumentedSurface        `json:"readinessDecision"`
@@ -86,6 +87,12 @@ func Current() Report {
 			SchemaPath:   "schemas/cli-error-v1alpha1.schema.json",
 			SchemaSHA256: "sha256:ce7c541fa46c92182cbeef29a181efec5f6fd70081d9a0048e1839d2eb531ff1",
 		},
+		DecisionRecord: DocumentedSurface{
+			APIVersion:   "dagrail.io/decision-record/v1alpha1",
+			Stability:    "additive-journal-authority",
+			SchemaPath:   "schemas/decision-record-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:976d23474541ed2ad4715bcebd4da7b01d2664d6d10282d1d835ab0c15fb8fb0",
+		},
 		Installation: DocumentedSurface{
 			APIVersion:   install.InstallationDiagnosticAPIVersion,
 			Stability:    "additive-local-diagnostic",
@@ -96,13 +103,13 @@ func Current() Report {
 			APIVersion:   compatibility.APIVersion,
 			Stability:    "closed-beta-window",
 			SchemaPath:   "schemas/historical-binary-matrix-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:843b23c21f592ef9386c57a91b41e9c00bbfca9b2ed63936694993815d5e97cb",
+			SchemaSHA256: "sha256:d8ed021de4b1d4c09bcb72355d9ba2f33659f3ea6f3358a6a758944b4e6f9d59",
 		},
 		Readiness: DocumentedSurface{
 			APIVersion:   "dagrail.io/readiness-decision/v1alpha1",
 			Stability:    "additive-structural-decision",
 			SchemaPath:   "schemas/readiness-decision-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:ce64b76b6d90a465284a005002dae3c9a0dadb28989908c563a92d9fdb36da36",
+			SchemaSHA256: "sha256:b3f537f4885177ee704e43fe4240301df2cec519fb774b7fb8405f0899bcc2b3",
 		},
 		UI: DocumentedSurface{
 			APIVersion:   "dagrail.io/ui/v1beta1",
@@ -187,10 +194,13 @@ func Current() Report {
 			"command discovery and completion are generated from one bounded catalog",
 			"opt-in CLI error envelopes keep stable broad exit classes and preserve interruption",
 			"host plugin commands are output-bounded, time-bounded, and cancellation-aware",
-			"the v0.10 through v0.17 beta binaries are immutable inputs to the v0.18 upgrade and rollback matrix",
+			"the v0.10 through v0.18 beta binaries are immutable inputs to the current upgrade and rollback matrix",
 			"readiness can declare external-validation readiness but cannot infer production validation or 1.0 readiness",
 			"the loopback explorer rejects non-loopback Host values and cross-port Origin values without exposing CORS access",
 			"SQLite remains disposable and rebuildable from the verified journal",
+			"semantic and provider decisions are immutable revision-bound records rather than chat or opaque provider output",
+			"role capabilities are enforced at every lifecycle mutation boundary while older Graph definitions remain importable",
+			"resource capacity is released only after a confirmed closure receipt; ambiguous closure remains reconcilable",
 		},
 	}
 }

@@ -348,7 +348,7 @@ func buildOverview(svc *service.Service) (ExplorerOverview, error) {
 		Project:       map[string]string{"id": svc.Project.Config.ProjectID, "name": svc.Project.Config.Name},
 		GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Counts: counts,
 		Frontier: FrontierSummary{Ready: ready, ReadyCount: len(frontier.Ready), ReadyTruncated: len(ready) < len(frontier.Ready), BlockedCount: len(frontier.Blocked), ResourceBlocked: len(frontier.ResourceBlocked), DependencyCuts: len(frontier.DependencyCuts)},
-		Facets:   map[string][]string{"statuses": {"ready", "blocked", "resource-blocked", "planned", "active", "terminal", "superseded"}, "kinds": kinds, "roles": roles},
+		Facets:   map[string][]string{"statuses": {"ready", "blocked", "resource-blocked", "planned", "active", "terminal", "superseded", "skipped"}, "kinds": kinds, "roles": roles},
 	}, nil
 }
 
@@ -700,7 +700,7 @@ func parseNodeFilter(r *http.Request, allowed map[string]bool) (nodeFilter, erro
 		return nodeFilter{}, err
 	}
 	if status != "" {
-		allowed := map[string]bool{"ready": true, "blocked": true, "resource-blocked": true, "planned": true, "active": true, "terminal": true, "superseded": true}
+		allowed := map[string]bool{"ready": true, "blocked": true, "resource-blocked": true, "planned": true, "active": true, "terminal": true, "superseded": true, "skipped": true}
 		if !allowed[status] {
 			return nodeFilter{}, clientError(http.StatusBadRequest, "invalid node status filter")
 		}

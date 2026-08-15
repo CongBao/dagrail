@@ -54,7 +54,8 @@ func TestBetaProjectSurvivesSessionReplacementEffectRetryAndProjectionLoss(t *te
 	if !strings.Contains(contextText, "codex-successor") || !strings.Contains(contextText, "candidate digest recorded") || strings.Contains(contextText, "codex-old") {
 		t.Fatalf("successor context is not bounded to durable state: %s", contextText)
 	}
-	applyKind(t, svc, "codex-worker", "core", "attempt.finish", `{"outcome":"done"}`, "beta/finish/core")
+	applyKind(t, svc, "codex-worker", "core", "attempt.submit", `{}`, "beta/submit/core")
+	applyKind(t, svc, "codex-worker", "core", "task.complete", `{"outcome":"done"}`, "beta/finish/core")
 
 	svc = reopenAt(t, root, &current)
 	bindStartFinish(t, svc, "claude-worker", "claude-code", "cli", "done", "claude-session")
@@ -71,7 +72,7 @@ func TestBetaProjectSurvivesSessionReplacementEffectRetryAndProjectionLoss(t *te
 	}
 	applyKind(t, svc, "reviewer", "review", "node.start", `{}`, "beta/start/review")
 	assertContextBudget(t, svc, "reviewer", "reviewer", "review", 12*1024)
-	applyKind(t, svc, "reviewer", "review", "attempt.finish", `{"outcome":"approve"}`, "beta/finish/review")
+	applyKind(t, svc, "reviewer", "review", "review.resolve", `{"outcome":"approve"}`, "beta/finish/review")
 
 	svc = reopenAt(t, root, &current)
 	if _, err := svc.BindRole("release", "codex", "release-session", time.Hour, false, "beta/bind/release"); err != nil {
@@ -93,7 +94,7 @@ func TestBetaProjectSurvivesSessionReplacementEffectRetryAndProjectionLoss(t *te
 	if err != nil || effect.Status != "confirmed" {
 		t.Fatalf("effect reconciliation failed: %+v %v", effect, err)
 	}
-	applyKind(t, svc, "release", "publish", "attempt.finish", `{"outcome":"published"}`, "beta/finish/publish")
+	applyKind(t, svc, "release", "publish", "effect.complete", `{"outcome":"published"}`, "beta/finish/publish")
 	state, err = svc.State()
 	if err != nil {
 		t.Fatal(err)
@@ -146,7 +147,12 @@ func bindStartFinish(t *testing.T, svc *service.Service, roleID, harness, nodeID
 		view, budget = "orchestrator", 12*1024
 	}
 	assertContextBudget(t, svc, view, roleID, nodeID, budget)
-	applyKind(t, svc, roleID, nodeID, "attempt.finish", `{"outcome":"`+outcome+`"}`, "beta/finish/"+nodeID)
+	if nodeID == "architecture" {
+		applyKind(t, svc, roleID, nodeID, "decision.record", `{"outcome":"`+outcome+`"}`, "beta/finish/"+nodeID)
+		return
+	}
+	applyKind(t, svc, roleID, nodeID, "attempt.submit", `{}`, "beta/submit/"+nodeID)
+	applyKind(t, svc, roleID, nodeID, "task.complete", `{"outcome":"`+outcome+`"}`, "beta/finish/"+nodeID)
 }
 
 func applyKind(t *testing.T, svc *service.Service, roleID, nodeID, kind, input, key string) service.ActionResult {

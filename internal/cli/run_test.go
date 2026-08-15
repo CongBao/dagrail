@@ -81,7 +81,7 @@ func TestUserCanInitializeImportGraphAndReadFrontier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("journal compatibility: %v", err)
 	}
-	if !strings.Contains(compatibility, `"currentWriteSegmentSchema":2`) || !strings.Contains(compatibility, `"projectionSchemaVersion":3`) {
+	if !strings.Contains(compatibility, `"currentWriteSegmentSchema":2`) || !strings.Contains(compatibility, `"projectionSchemaVersion":4`) {
 		t.Fatalf("compatibility report lacks current schemas: %s", compatibility)
 	}
 	verification, err := run("journal", "verify", "--root", root)
@@ -147,7 +147,11 @@ func TestWorkerCanBindStartCheckpointFinishAndUnlockDependentNode(t *testing.T) 
 	if _, err := run("action", "apply", "--root", root, "--ref", checkpointRef, "--input", `{"summary":"candidate prepared","evidenceRefs":[{"digest":"sha256:abc","type":"test-report","size":12}]}`, "--idempotency-key", "checkpoint-A"); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
-	finishRef := allowedActionRef(t, run, root, "developer", "A", "attempt.finish")
+	submitRef := allowedActionRef(t, run, root, "developer", "A", "attempt.submit")
+	if _, err := run("action", "apply", "--root", root, "--ref", submitRef, "--input", `{}`, "--idempotency-key", "submit-A"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	finishRef := allowedActionRef(t, run, root, "developer", "A", "task.complete")
 	if _, err := run("action", "apply", "--root", root, "--ref", finishRef, "--input", `{"outcome":"success"}`, "--idempotency-key", "finish-A"); err != nil {
 		t.Fatalf("finish: %v", err)
 	}
@@ -187,7 +191,7 @@ func TestExecutionEvidenceCanBePublishedInspectedAndReusedAcrossPolicyChanges(t 
 	if _, err := run("graph", "import", "--root", root, "--file", graphPath, "--idempotency-key", "graph"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := run("role", "bind", "--root", root, "--role", "developer", "--harness", "codex", "--session", "session-A", "--idempotency-key", "bind"); err != nil {
+	if _, err := run("role", "bind", "--root", root, "--role", "developer", "--harness", "codex", "--session", "evidence-session", "--idempotency-key", "bind-evidence"); err != nil {
 		t.Fatal(err)
 	}
 	startRef := allowedActionRef(t, run, root, "developer", "A", "node.start")
@@ -290,12 +294,12 @@ func TestGraphChangeRequiresImpactTokenAndProtectsActiveNodes(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".test-data"))
 	graphPath := filepath.Join(root, "graph.json")
-	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"changes"},"spec":{"roles":[{"id":"developer","capabilities":["node.run"]}],"nodes":[{"id":"A","kind":"task","role":"developer","title":"A","outcomes":[{"id":"success","class":"success"}]},{"id":"B","kind":"task","role":"developer","title":"B","outcomes":[{"id":"success","class":"success"}]}],"edges":[{"id":"A-B","from":"A","to":"B","when":{"outcome":"success"}}]}}`
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"changes"},"spec":{"roles":[{"id":"developer","capabilities":["node.run","graph.change"]}],"nodes":[{"id":"A","kind":"task","role":"developer","title":"A","outcomes":[{"id":"success","class":"success"}]},{"id":"B","kind":"task","role":"developer","title":"B","outcomes":[{"id":"success","class":"success"}]}],"edges":[{"id":"A-B","from":"A","to":"B","when":{"outcome":"success"}}]}}`
 	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	patchPath := filepath.Join(root, "patch.json")
-	patch := `{"apiVersion":"dagrail.io/v1alpha1","kind":"GraphPatch","operations":[{"op":"addNode","node":{"id":"C","kind":"gate","role":"developer","title":"C","outcomes":[{"id":"pass","class":"success"}]}},{"op":"addEdge","edge":{"id":"B-C","from":"B","to":"C","when":{"outcome":"success"}}}]}`
+	patch := `{"apiVersion":"dagrail.io/v1alpha1","kind":"GraphPatch","operations":[{"op":"updateRole","role":{"id":"developer","capabilities":["node.run","graph.change","incident.manage"]}},{"op":"addNode","node":{"id":"C","kind":"task","role":"developer","title":"C","outcomes":[{"id":"pass","class":"success"}]}},{"op":"addEdge","edge":{"id":"B-C","from":"B","to":"C","when":{"outcome":"success"}}}]}`
 	if err := os.WriteFile(patchPath, []byte(patch), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -310,6 +314,9 @@ func TestGraphChangeRequiresImpactTokenAndProtectsActiveNodes(t *testing.T) {
 	if _, err := run("graph", "import", "--root", root, "--file", graphPath, "--idempotency-key", "graph"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := run("role", "bind", "--root", root, "--role", "developer", "--harness", "codex", "--session", "graph-session", "--idempotency-key", "bind-graph"); err != nil {
+		t.Fatal(err)
+	}
 	preview, err := run("graph", "preview-change", "--root", root, "--file", patchPath)
 	if err != nil {
 		t.Fatalf("preview: %v", err)
@@ -321,20 +328,17 @@ func TestGraphChangeRequiresImpactTokenAndProtectsActiveNodes(t *testing.T) {
 	if impact.Token == "" || impact.ProposedRevision == "" {
 		t.Fatalf("preview must return a bound impact token: %s", preview)
 	}
-	if _, err := run("graph", "apply-change", "--root", root, "--file", patchPath, "--token", impact.Token, "--idempotency-key", "patch-1"); err != nil {
+	if _, err := run("graph", "apply-change", "--root", root, "--file", patchPath, "--token", impact.Token, "--actor-role", "developer", "--idempotency-key", "patch-1"); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	exported, err := run("graph", "export", "--root", root, "--format", "json")
-	if err != nil || !strings.Contains(exported, `"id":"C"`) {
+	if err != nil || !strings.Contains(exported, `"id":"C"`) || !strings.Contains(exported, `"incident.manage"`) {
 		t.Fatalf("exported graph lacks C: %v %s", err, exported)
 	}
-	if _, err := run("graph", "apply-change", "--root", root, "--file", patchPath, "--token", impact.Token, "--idempotency-key", "patch-stale"); err == nil {
+	if _, err := run("graph", "apply-change", "--root", root, "--file", patchPath, "--token", impact.Token, "--actor-role", "developer", "--idempotency-key", "patch-stale"); err == nil {
 		t.Fatal("consumed/stale impact token must fail")
 	}
 
-	if _, err := run("role", "bind", "--root", root, "--role", "developer", "--harness", "codex", "--session", "session-A", "--idempotency-key", "bind"); err != nil {
-		t.Fatal(err)
-	}
 	startRef := allowedActionRef(t, run, root, "developer", "A", "node.start")
 	if _, err := run("action", "apply", "--root", root, "--ref", startRef, "--idempotency-key", "start"); err != nil {
 		t.Fatal(err)
@@ -408,7 +412,7 @@ func TestManualEffectRemainsUnknownUntilRecipientVisibleReceiptIsReconciled(t *t
 	root := t.TempDir()
 	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".test-data"))
 	graphPath := filepath.Join(root, "graph.json")
-	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"effect"},"spec":{"roles":[{"id":"orchestrator","capabilities":["effect.dispatch"]}],"nodes":[{"id":"deliver","kind":"effect","role":"orchestrator","title":"deliver handoff","inputs":{"adapter":"manual","request":{"instruction":"Deliver work package to reviewer"}},"outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"effect"},"spec":{"roles":[{"id":"orchestrator","capabilities":["effect.apply","effect.reconcile"]}],"nodes":[{"id":"deliver","kind":"effect","role":"orchestrator","title":"deliver handoff","inputs":{"adapter":"manual","request":{"instruction":"Deliver work package to reviewer"}},"outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
 	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +457,7 @@ func TestManualEffectRemainsUnknownUntilRecipientVisibleReceiptIsReconciled(t *t
 	if err != nil || !strings.Contains(inspected, `"status":"confirmed"`) {
 		t.Fatalf("effect should be confirmed from visible receipt: %v %s", err, inspected)
 	}
-	if ref := allowedActionRef(t, run, root, "orchestrator", "deliver", "attempt.finish"); ref == "" {
+	if ref := allowedActionRef(t, run, root, "orchestrator", "deliver", "effect.complete"); ref == "" {
 		t.Fatal("confirmed effect should allow explicit terminal outcome")
 	}
 }

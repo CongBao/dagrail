@@ -18,6 +18,12 @@ should select API versions and schema digests, never human wording or JSON key o
 CLI mutation commands require a stable idempotency key and, where applicable, an
 expected revision or controller-issued action ref. JSON output is intended for scripts;
 human frontier output is the exception and can be replaced with `--format json`.
+Role capabilities are authorization inputs, not labels: graph import validates their
+closed declaration shape, and every action apply rechecks the current lease and the
+NodeKind-specific capability. Older Graph definitions remain importable but cannot
+apply newly protected mutations until a revision grants the corresponding capability.
+Terminal actions are `task.complete`, `review.resolve`, `decision.record`,
+`gate.evaluate`, and `effect.complete`; custom NodeKinds retain `attempt.finish`.
 
 `dagrail commands` returns the detailed CommandCatalog v1alpha1 used by dispatcher
 validation and shell completion. `dagrail completion bash|zsh|fish|powershell` emits a
@@ -65,6 +71,11 @@ Tool input-schema digests are part of `dagrail contract`. Callers cannot constru
 lifecycle transitions; allowed-action refs bind project, head, Graph Revision, Role
 lease, Node/Attempt, provider set, and expiry.
 
+Decision and Gate Nodes produce DecisionRecord v1alpha1 authority. A record binds the
+closed outcome and digest-only evidence to one Graph Revision and Attempt. Provider
+decisions additionally bind the exact provider ID, version, and input-schema hash;
+generic provider invocation output alone never advances a Node.
+
 ## JSON schemas
 
 Published schemas live in `schemas/`. Current governed reports include the Explorer UI
@@ -93,3 +104,6 @@ cannot prove success or failure and must reconcile by stable action ID before re
 Transport response, session creation, recipient-visible delivery, acceptance, and
 completion are distinct receipts. A failed Node freezes only its transitive dependency
 cut; unrelated ready work remains available.
+Resource closure follows the same proof rule: completion cannot release active capacity.
+The Role applies a controller-issued `resource.close` action and, when the receipt is
+unknown or failed, a later `resource.reconcile`. Only `confirmed` releases capacity.

@@ -70,6 +70,18 @@ type RoleDefinition struct {
 	Capabilities []string `json:"capabilities" yaml:"capabilities"`
 }
 
+const (
+	CapabilityNodeRun         = "node.run"
+	CapabilityNodeReview      = "node.review"
+	CapabilityNodeDecide      = "node.decide"
+	CapabilityNodeGate        = "node.gate"
+	CapabilityEffectApply     = "effect.apply"
+	CapabilityEffectReconcile = "effect.reconcile"
+	CapabilityGraphChange     = "graph.change"
+	CapabilityIncidentManage  = "incident.manage"
+	CapabilityResourceClose   = "resource.close"
+)
+
 type NodeDefinition struct {
 	ID           string            `json:"id" yaml:"id"`
 	Kind         string            `json:"kind" yaml:"kind"`
@@ -82,8 +94,19 @@ type NodeDefinition struct {
 	Outcomes     []Outcome         `json:"outcomes" yaml:"outcomes"`
 	RetryBudget  int               `json:"retryBudget,omitempty" yaml:"retryBudget,omitempty"`
 	Resources    []ResourceRequest `json:"resources,omitempty" yaml:"resources,omitempty"`
+	Decision     *DecisionContract `json:"decision,omitempty" yaml:"decision,omitempty"`
 	ExternalRefs []ExternalRef     `json:"externalRefs,omitempty" yaml:"externalRefs,omitempty"`
 	Metadata     map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty"`
+}
+
+// DecisionContract binds a semantic choice to a closed key and source. Provider
+// decisions name the compiled policy provider and policy entry point whose output
+// becomes journal authority.
+type DecisionContract struct {
+	Key        string `json:"key" yaml:"key"`
+	Source     string `json:"source" yaml:"source"`
+	ProviderID string `json:"providerId,omitempty" yaml:"providerId,omitempty"`
+	PolicyID   string `json:"policyId,omitempty" yaml:"policyId,omitempty"`
 }
 
 type Outcome struct {
@@ -139,11 +162,19 @@ func ValidateGraph(g GraphDefinition) error {
 		return fmt.Errorf("graph metadata.name is required")
 	}
 	roles := map[string]bool{}
+	roleCapabilities := map[string]map[string]bool{}
 	for _, role := range g.Spec.Roles {
 		if role.ID == "" || roles[role.ID] {
 			return fmt.Errorf("role IDs must be non-empty and unique: %q", role.ID)
 		}
 		roles[role.ID] = true
+		roleCapabilities[role.ID] = map[string]bool{}
+		for _, capability := range role.Capabilities {
+			if strings.TrimSpace(capability) == "" || roleCapabilities[role.ID][capability] {
+				return fmt.Errorf("role %s capabilities must be non-empty and unique", role.ID)
+			}
+			roleCapabilities[role.ID][capability] = true
+		}
 	}
 	capacities := map[string]int{}
 	for _, resource := range g.Spec.ResourceCapacities {
@@ -172,6 +203,29 @@ func ValidateGraph(g GraphDefinition) error {
 		}
 		if (node.Kind == "task" || node.Kind == "review" || node.Kind == "decision" || node.Kind == "gate" || node.Kind == "effect") && node.Role == "" {
 			return fmt.Errorf("node %s kind %s requires a role", node.ID, node.Kind)
+		}
+		if node.Decision != nil {
+			if node.Decision.Key == "" {
+				return fmt.Errorf("node %s decision key is required", node.ID)
+			}
+			switch node.Decision.Source {
+			case "human", "llm":
+				if node.Decision.ProviderID != "" || node.Decision.PolicyID != "" {
+					return fmt.Errorf("node %s non-provider decision cannot declare provider fields", node.ID)
+				}
+			case "provider":
+				if node.Decision.ProviderID == "" || node.Decision.PolicyID == "" {
+					return fmt.Errorf("node %s provider decision requires providerId and policyId", node.ID)
+				}
+			default:
+				return fmt.Errorf("node %s decision source must be human, llm or provider", node.ID)
+			}
+		}
+		if node.Kind == "decision" && node.Decision != nil && node.Decision.Source == "provider" {
+			return fmt.Errorf("decision node %s cannot use a provider decision contract", node.ID)
+		}
+		if node.Kind == "gate" && node.Decision != nil && node.Decision.Source != "provider" {
+			return fmt.Errorf("gate node %s decision contract must use a provider", node.ID)
 		}
 		if len(node.Outcomes) == 0 {
 			return fmt.Errorf("node %s must declare outcomes", node.ID)
@@ -471,6 +525,43 @@ func validatePredicate(p Predicate, source NodeDefinition) error {
 	return validatePredicateAtDepth(p, source, 0)
 }
 
+func RequiredNodeCapability(kind string) string {
+	switch kind {
+	case "task":
+		return CapabilityNodeRun
+	case "review":
+		return CapabilityNodeReview
+	case "decision":
+		return CapabilityNodeDecide
+	case "gate":
+		return CapabilityNodeGate
+	case "effect":
+		return CapabilityEffectApply
+	default:
+		if strings.Contains(kind, ".") {
+			return CapabilityNodeRun
+		}
+		return ""
+	}
+}
+
+func RoleHasCapability(graph *GraphDefinition, roleID, capability string) bool {
+	if graph == nil || roleID == "" || capability == "" {
+		return false
+	}
+	for _, role := range graph.Spec.Roles {
+		if role.ID != roleID {
+			continue
+		}
+		for _, candidate := range role.Capabilities {
+			if candidate == capability {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func validatePredicateAtDepth(p Predicate, source NodeDefinition, depth int) error {
 	if depth > 64 {
 		return fmt.Errorf("predicate nesting exceeds 64 levels")
@@ -570,6 +661,30 @@ type Checkpoint struct {
 	CreatedAt    string        `json:"createdAt"`
 }
 
+type DecisionProviderBinding struct {
+	ID         string `json:"id"`
+	Version    string `json:"version"`
+	SchemaHash string `json:"schemaHash"`
+}
+
+type DecisionRecord struct {
+	ID            string                   `json:"id"`
+	ProjectID     string                   `json:"projectId"`
+	GraphRevision string                   `json:"graphRevision"`
+	NodeID        string                   `json:"nodeId"`
+	AttemptID     string                   `json:"attemptId"`
+	RoleID        string                   `json:"roleId"`
+	Key           string                   `json:"key"`
+	Source        string                   `json:"source"`
+	Outcome       string                   `json:"outcome"`
+	Facts         PredicateFacts           `json:"facts,omitempty"`
+	EvidenceRefs  []EvidenceRef            `json:"evidenceRefs,omitempty"`
+	InputDigest   string                   `json:"inputDigest"`
+	Provider      *DecisionProviderBinding `json:"provider,omitempty"`
+	CreatedAt     string                   `json:"createdAt"`
+	Sequence      uint64                   `json:"sequence,omitempty"`
+}
+
 type ActionRecord struct {
 	ID        string          `json:"id"`
 	Kind      string          `json:"kind"`
@@ -597,15 +712,18 @@ type EffectAction struct {
 }
 
 type ResourceLease struct {
-	ID         string `json:"id"`
-	Kind       string `json:"kind"`
-	Quantity   int    `json:"quantity"`
-	NodeID     string `json:"nodeId"`
-	AttemptID  string `json:"attemptId"`
-	RoleID     string `json:"roleId,omitempty"`
-	Status     string `json:"status"`
-	LeasedAt   string `json:"leasedAt"`
-	ReleasedAt string `json:"releasedAt,omitempty"`
+	ID               string          `json:"id"`
+	Kind             string          `json:"kind"`
+	Quantity         int             `json:"quantity"`
+	NodeID           string          `json:"nodeId"`
+	AttemptID        string          `json:"attemptId"`
+	RoleID           string          `json:"roleId,omitempty"`
+	Status           string          `json:"status"`
+	ClosureStatus    string          `json:"closureStatus,omitempty"`
+	ClosureReceipt   json.RawMessage `json:"closureReceipt,omitempty"`
+	ClosureUpdatedAt string          `json:"closureUpdatedAt,omitempty"`
+	LeasedAt         string          `json:"leasedAt"`
+	ReleasedAt       string          `json:"releasedAt,omitempty"`
 }
 
 type Incident struct {
@@ -625,10 +743,28 @@ type Incident struct {
 	LastProgressAt     string   `json:"lastProgressAt,omitempty"`
 	CircuitReason      string   `json:"circuitReason,omitempty"`
 	Resolution         string   `json:"resolution,omitempty"`
+	Disposition        string   `json:"disposition,omitempty"`
+	DispositionBy      string   `json:"dispositionBy,omitempty"`
+	DispositionAt      string   `json:"dispositionAt,omitempty"`
 	DependencyCut      []string `json:"dependencyCut,omitempty"`
 	OpenedAt           string   `json:"openedAt"`
 	UpdatedAt          string   `json:"updatedAt"`
 }
+
+var incidentClassifications = map[string]bool{
+	"work-product": true, "policy": true, "fixture": true,
+	"infrastructure": true, "evidence": true, "external-effect": true,
+	"unknown": true,
+}
+
+var incidentDispositions = map[string]bool{
+	"retry": true, "rollback": true, "lkg": true, "quarantine": true,
+	"off-critical-path": true, "escalate": true,
+}
+
+func ValidIncidentClassification(value string) bool { return incidentClassifications[value] }
+
+func ValidIncidentDisposition(value string) bool { return incidentDispositions[value] }
 
 type State struct {
 	ProjectID        string                      `json:"projectId"`
@@ -641,6 +777,8 @@ type State struct {
 	NodeAttempts     map[string][]string         `json:"nodeAttempts"`
 	Leases           map[string]RoleLease        `json:"leases"`
 	Checkpoints      map[string]Checkpoint       `json:"checkpoints"`
+	Decisions        map[string]DecisionRecord   `json:"decisions"`
+	AttemptDecisions map[string][]string         `json:"attemptDecisions"`
 	EvidencePackages map[string]ExecutionPackage `json:"evidencePackages"`
 	AttemptPackages  map[string][]string         `json:"attemptPackages"`
 	ReuseDecisions   map[string]ReuseDecision    `json:"reuseDecisions"`
@@ -661,7 +799,7 @@ type CommandResult struct {
 func NewState(projectID string) State {
 	return State{
 		ProjectID: projectID, Nodes: map[string]NodeRuntime{}, Attempts: map[string]Attempt{},
-		NodeAttempts: map[string][]string{}, Leases: map[string]RoleLease{}, Checkpoints: map[string]Checkpoint{},
+		NodeAttempts: map[string][]string{}, Leases: map[string]RoleLease{}, Checkpoints: map[string]Checkpoint{}, Decisions: map[string]DecisionRecord{}, AttemptDecisions: map[string][]string{},
 		EvidencePackages: map[string]ExecutionPackage{}, AttemptPackages: map[string][]string{}, ReuseDecisions: map[string]ReuseDecision{}, PackageDecisions: map[string][]string{},
 		Actions: map[string]ActionRecord{}, Effects: map[string]EffectAction{}, Resources: map[string]ResourceLease{}, Incidents: map[string]Incident{}, Commands: map[string]CommandResult{},
 	}
@@ -710,6 +848,7 @@ type Frontier struct {
 	GraphRevision   string                 `json:"graphRevision"`
 	Ready           []string               `json:"ready"`
 	Blocked         []string               `json:"blocked,omitempty"`
+	Unreachable     []string               `json:"unreachable,omitempty"`
 	ResourceBlocked []string               `json:"resourceBlocked,omitempty"`
 	DependencyCuts  map[string][]string    `json:"dependencyCuts,omitempty"`
 	Explanations    []ReadinessExplanation `json:"explanations,omitempty"`
@@ -748,18 +887,23 @@ func ComputeFrontier(state State) Frontier {
 			continue
 		}
 		reasons := []ReadinessReason{}
+		unreachable := false
 		for _, edge := range incoming[node.ID] {
 			source := state.Nodes[edge.From]
-			if source.Status != "terminal" {
+			if source.Status != "terminal" && source.Status != "skipped" {
 				reasons = append(reasons, ReadinessReason{Code: "source_not_terminal", EdgeID: edge.ID, SourceNodeID: edge.From, Expected: "terminal", Actual: source.Status})
 				continue
 			}
 			if ok, detail := explainPredicate(edge.When, source, "$"); !ok {
 				detail.EdgeID, detail.SourceNodeID = edge.ID, edge.From
 				reasons = append(reasons, detail)
+				unreachable = true
 			}
 		}
-		if len(reasons) == 0 {
+		if unreachable {
+			result.Unreachable = append(result.Unreachable, node.ID)
+			result.Explanations = append(result.Explanations, ReadinessExplanation{NodeID: node.ID, State: "unreachable", Reasons: reasons})
+		} else if len(reasons) == 0 {
 			resourceReasons := resourceReadinessReasons(state, node)
 			if len(resourceReasons) == 0 {
 				result.Ready = append(result.Ready, node.ID)
@@ -776,6 +920,7 @@ func ComputeFrontier(state State) Frontier {
 	}
 	sort.Strings(result.Ready)
 	sort.Strings(result.Blocked)
+	sort.Strings(result.Unreachable)
 	sort.Strings(result.ResourceBlocked)
 	sort.Slice(result.Explanations, func(i, j int) bool { return result.Explanations[i].NodeID < result.Explanations[j].NodeID })
 	for nodeID, runtime := range state.Nodes {
@@ -811,7 +956,7 @@ func DependencyCut(state State, rootNodeID string) []string {
 				continue
 			}
 			runtime := state.Nodes[edge.To]
-			if runtime.Status == "terminal" || runtime.Status == "superseded" || seen[edge.To] {
+			if runtime.Status == "terminal" || runtime.Status == "superseded" || runtime.Status == "skipped" || seen[edge.To] {
 				continue
 			}
 			seen[edge.To] = true

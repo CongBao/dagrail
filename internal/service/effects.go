@@ -128,6 +128,9 @@ func (s *Service) ReconcileEffect(actionID string, evidence json.RawMessage, ide
 	if !ok {
 		return domain.EffectAction{}, fmt.Errorf("unknown effect action %s", actionID)
 	}
+	if _, err := s.requireRoleCapability(state, effect.OwnerRole, domain.CapabilityEffectReconcile, domain.CapabilityEffectApply); err != nil {
+		return domain.EffectAction{}, err
+	}
 	if effect.Status == "confirmed" {
 		return effect, nil
 	}
@@ -207,7 +210,7 @@ func (s *Service) observeEffect(actionID string, receipt sdk.EffectReceipt, idem
 	}
 	incidentID := "effect:" + actionID
 	if receipt.Status == "unknown" || receipt.Status == "failed" {
-		incident := domain.Incident{ID: incidentID, SourceType: "effect", SourceID: actionID, NodeID: effectBefore.NodeID, OwnerRole: effectBefore.OwnerRole, Status: "open", Classification: "effect-" + receipt.Status, Deadline: now.Add(time.Hour).Format(time.RFC3339Nano), AttemptBudget: 2, ProgressMetric: "new external receipt or deterministic reconcile result", DependencyCut: domain.DependencyCut(stateBefore, effectBefore.NodeID), OpenedAt: now.Format(time.RFC3339Nano), UpdatedAt: now.Format(time.RFC3339Nano)}
+		incident := domain.Incident{ID: incidentID, SourceType: "effect", SourceID: actionID, NodeID: effectBefore.NodeID, OwnerRole: effectBefore.OwnerRole, Status: "open", Classification: "external-effect", Deadline: now.Add(time.Hour).Format(time.RFC3339Nano), AttemptBudget: 2, ProgressMetric: "new external receipt or deterministic reconcile result", DependencyCut: domain.DependencyCut(stateBefore, effectBefore.NodeID), OpenedAt: now.Format(time.RFC3339Nano), UpdatedAt: now.Format(time.RFC3339Nano)}
 		if existing, ok := stateBefore.Incidents[incidentID]; ok {
 			incident.OpenedAt, incident.Attempts = existing.OpenedAt, existing.Attempts+1
 			incident.NoProgressAttempts = existing.NoProgressAttempts

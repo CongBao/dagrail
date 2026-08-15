@@ -8,7 +8,7 @@ spec:
       capacity: 2
   roles:
     - id: developer
-      capabilities: [node.run]
+      capabilities: [node.run, resource.close]
     - id: reviewer
       capabilities: [node.review]
     - id: integrator
@@ -75,7 +75,7 @@ spec:
           - outcome: approved
           - decision:
               key: verdict
-              value: approve
+              value: approved
           - evidence:
               key: artifact
               value: inspected

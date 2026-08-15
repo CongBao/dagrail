@@ -7,7 +7,7 @@ metadata:
 spec:
   roles:
     - id: architect
-      capabilities: [node.run]
+      capabilities: [node.decide]
     - id: codex-worker
       capabilities: [node.run]
     - id: claude-worker
@@ -23,6 +23,9 @@ spec:
       kind: decision
       role: architect
       title: Freeze the implementation boundary
+      decision:
+        key: architecture
+        source: llm
       retryBudget: 2
       outcomes:
         - {id: approved, class: success}

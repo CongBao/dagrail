@@ -4,7 +4,7 @@
   "title": "DAGrail Compatibility Contract v1beta1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiVersion", "kind", "version", "stability", "graph", "cli", "commandCatalog", "cliError", "installationDiagnostic", "historicalBinaryMatrix", "readinessDecision", "ui", "security", "journalVerification", "pluginConformance", "support", "recovery", "releaseQualification", "releaseManifest", "releaseVerification", "providerSdk", "journal", "projectionSchema", "mcpTools", "contextBudgets", "topLevelCommands", "compatibilityPromises"],
+  "required": ["apiVersion", "kind", "version", "stability", "graph", "cli", "commandCatalog", "cliError", "decisionRecord", "installationDiagnostic", "historicalBinaryMatrix", "readinessDecision", "ui", "security", "journalVerification", "pluginConformance", "support", "recovery", "releaseQualification", "releaseManifest", "releaseVerification", "providerSdk", "journal", "projectionSchema", "mcpTools", "contextBudgets", "topLevelCommands", "compatibilityPromises"],
   "properties": {
     "apiVersion": {"const": "dagrail.io/v1beta1"},
     "kind": {"const": "CompatibilityContract"},
@@ -14,6 +14,7 @@
     "cli": {"$ref": "#/$defs/surface"},
     "commandCatalog": {"$ref": "#/$defs/documentedSurface"},
     "cliError": {"$ref": "#/$defs/documentedSurface"},
+    "decisionRecord": {"$ref": "#/$defs/documentedSurface"},
     "installationDiagnostic": {"$ref": "#/$defs/documentedSurface"},
     "historicalBinaryMatrix": {"$ref": "#/$defs/documentedSurface"},
     "readinessDecision": {"$ref": "#/$defs/documentedSurface"},

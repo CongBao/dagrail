@@ -326,6 +326,20 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 					return domain.State{}, nil, fmt.Errorf("automatic completion references non-planned node %s", payload.NodeID)
 				}
 				state.Nodes[payload.NodeID] = domain.NodeRuntime{Status: "terminal", Outcome: payload.Outcome, OutcomeClass: "success"}
+			case "node.auto-skipped":
+				var payload struct {
+					NodeID    string `json:"nodeId"`
+					Reason    string `json:"reason"`
+					SkippedAt string `json:"skippedAt"`
+				}
+				if err := json.Unmarshal(event.Payload, &payload); err != nil {
+					return domain.State{}, nil, err
+				}
+				runtime, ok := state.Nodes[payload.NodeID]
+				if !ok || runtime.Status != "planned" {
+					return domain.State{}, nil, fmt.Errorf("automatic skip references non-planned node %s", payload.NodeID)
+				}
+				state.Nodes[payload.NodeID] = domain.NodeRuntime{Status: "skipped", Outcome: payload.Reason, OutcomeClass: "cancelled"}
 			case "attempt.checkpointed":
 				var checkpoint domain.Checkpoint
 				if err := json.Unmarshal(event.Payload, &checkpoint); err != nil {
@@ -380,6 +394,20 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 				decision.Sequence = segment.Sequence
 				state.ReuseDecisions[decision.ID] = decision
 				state.PackageDecisions[decision.PackageID] = append(state.PackageDecisions[decision.PackageID], decision.ID)
+			case "decision.recorded":
+				var decision domain.DecisionRecord
+				if err := json.Unmarshal(event.Payload, &decision); err != nil {
+					return domain.State{}, nil, err
+				}
+				if err := validateDecisionRecord(decision, state); err != nil {
+					return domain.State{}, nil, fmt.Errorf("decision record %s: %w", decision.ID, err)
+				}
+				if _, exists := state.Decisions[decision.ID]; exists {
+					return domain.State{}, nil, fmt.Errorf("decision record %s is duplicated", decision.ID)
+				}
+				decision.Sequence = segment.Sequence
+				state.Decisions[decision.ID] = decision
+				state.AttemptDecisions[decision.AttemptID] = append(state.AttemptDecisions[decision.AttemptID], decision.ID)
 			case "attempt.status-changed":
 				var payload struct {
 					AttemptID string `json:"attemptId"`
@@ -420,6 +448,22 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 					return domain.State{}, nil, err
 				}
 				state.Resources[lease.ID] = lease
+			case "resource.closure-observed":
+				var payload struct {
+					ResourceID string          `json:"resourceId"`
+					Status     string          `json:"status"`
+					Receipt    json.RawMessage `json:"receipt"`
+					UpdatedAt  string          `json:"updatedAt"`
+				}
+				if err := json.Unmarshal(event.Payload, &payload); err != nil {
+					return domain.State{}, nil, err
+				}
+				lease, ok := state.Resources[payload.ResourceID]
+				if !ok || lease.Status != "active" || (payload.Status != "confirmed" && payload.Status != "failed" && payload.Status != "unknown") {
+					return domain.State{}, nil, fmt.Errorf("closure observation references invalid resource lease %s", payload.ResourceID)
+				}
+				lease.ClosureStatus, lease.ClosureReceipt, lease.ClosureUpdatedAt = payload.Status, payload.Receipt, payload.UpdatedAt
+				state.Resources[lease.ID] = lease
 			case "resource.released":
 				var payload struct {
 					ResourceID string `json:"resourceId"`
@@ -431,6 +475,9 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 				lease, ok := state.Resources[payload.ResourceID]
 				if !ok {
 					return domain.State{}, nil, fmt.Errorf("release references unknown resource lease %s", payload.ResourceID)
+				}
+				if lease.ClosureStatus != "" && lease.ClosureStatus != "confirmed" {
+					return domain.State{}, nil, fmt.Errorf("resource lease %s cannot release without a confirmed closure", payload.ResourceID)
 				}
 				lease.Status, lease.ReleasedAt = "released", payload.ReleasedAt
 				state.Resources[lease.ID] = lease
@@ -610,6 +657,17 @@ func (s *Service) validateGraphProviders(graph domain.GraphDefinition) error {
 		}
 	}
 	for _, node := range graph.Spec.Nodes {
+		if node.Decision != nil && node.Decision.Source == "provider" {
+			provider, ok := s.Providers.Policy(node.Decision.ProviderID)
+			if !ok {
+				return fmt.Errorf("policy provider %s is not compiled into this DAGrail distribution", node.Decision.ProviderID)
+			}
+			metadata := provider.Metadata()
+			ref, declaredOK := declared[node.Decision.ProviderID]
+			if !declaredOK || ref.Version != metadata.Version || ref.SchemaHash != metadata.SchemaHash {
+				return fmt.Errorf("gate %s must bind policy provider %s version and schema hash", node.ID, node.Decision.ProviderID)
+			}
+		}
 		if domain.IsBuiltinNodeKind(node.Kind) {
 			continue
 		}

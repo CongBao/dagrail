@@ -9,17 +9,17 @@
     "apiVersion": {"const": "dagrail.io/historical-binary-matrix/v1alpha1"},
     "kind": {"const": "HistoricalBinaryMatrix"},
     "fromVersion": {"const": "0.10.0"},
-    "currentVersion": {"const": "0.18.0"},
+    "currentVersion": {"const": "0.19.0"},
     "entries": {
       "type": "array",
-      "minItems": 8,
-      "maxItems": 8,
+      "minItems": 9,
+      "maxItems": 9,
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": ["version", "commit"],
         "properties": {
-          "version": {"type": "string", "pattern": "^0\\.(1[0-7])\\.0$"},
+          "version": {"type": "string", "pattern": "^0\\.(1[0-8])\\.0$"},
           "commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"}
         }
       }

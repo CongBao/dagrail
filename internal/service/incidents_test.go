@@ -17,7 +17,7 @@ func TestIncidentProgressTripsCircuitAndCanResolve(t *testing.T) {
 		t.Fatal(err)
 	}
 	graphPath := filepath.Join(root, "graph.json")
-	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"incidents"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"A","kind":"task","role":"worker","title":"A","outcomes":[{"id":"ok","class":"success"},{"id":"broken","class":"failure"}]}],"edges":[]}}`
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"incidents"},"spec":{"roles":[{"id":"worker","capabilities":["node.run","incident.manage"]}],"nodes":[{"id":"A","kind":"task","role":"worker","title":"A","outcomes":[{"id":"ok","class":"success"},{"id":"broken","class":"failure"}]}],"edges":[]}}`
 	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestIncidentProgressTripsCircuitAndCanResolve(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	finish := findActionRef(t, svc, "worker", "A", "attempt.finish")
+	finish := findActionRef(t, svc, "worker", "A", "task.complete")
 	if _, err := svc.ApplyAction(finish, json.RawMessage(`{"outcome":"broken"}`), "finish"); err != nil {
 		t.Fatal(err)
 	}
@@ -44,6 +44,10 @@ func TestIncidentProgressTripsCircuitAndCanResolve(t *testing.T) {
 	second, err := svc.ProgressIncident(incidentID, "worker", "still same failure", false, "progress-2")
 	if err != nil || second.Status != "circuit-open" || second.CircuitReason != "no_progress_attempt_budget_exhausted" {
 		t.Fatalf("circuit did not trip: %+v %v", second, err)
+	}
+	dispositioned, err := svc.SetIncidentDisposition(incidentID, "worker", "quarantine", "move the failed path off the critical lane", "disposition")
+	if err != nil || dispositioned.Disposition != "quarantine" || dispositioned.DispositionBy != "worker" {
+		t.Fatalf("disposition: %+v %v", dispositioned, err)
 	}
 	audit, err := svc.PreWait()
 	if err != nil || len(audit.CircuitIncidents) != 1 || audit.CircuitIncidents[0] != incidentID || audit.SafeToWait {

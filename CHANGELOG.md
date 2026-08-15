@@ -2,6 +2,36 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.19.0 — 2026-08-15
+
+### Added
+
+- enforced Role capabilities at task, review, decision, gate, effect, graph-change,
+  incident, reconcile, and resource-closure mutation boundaries while retaining
+  import compatibility for older Graph definitions;
+- NodeKind-specific terminal actions and immutable Decision records binding human,
+  LLM, or provider judgments to Project, Graph Revision, Attempt, evidence, and exact
+  provider identity;
+- explicit resource close/reconcile receipts that retain capacity and open a scoped
+  incident while closure is failed or unknown;
+- closed incident classifications and recovery dispositions, plus deterministic
+  automatic skipping for branches made unreachable by positive predicates;
+- a published DecisionRecord v1alpha1 schema and projection schema v4.
+
+### Changed
+
+- successful tasks must be submitted before completion, while review, decision, gate,
+  and effect Nodes expose their own closed lifecycle verbs;
+- graph apply, effect reconcile, and incident mutations now require an unexpired Role
+  lease and the matching declared capability;
+- the compatibility window now includes the exact v0.18 source commit.
+
+### Architecture
+
+- external repositories are formal validation subjects only: their conversion and
+  comparison drivers stay outside DAGrail and cannot define kernel vocabulary or
+  product contracts.
+
 ## 0.18.0 — 2026-08-14
 
 ### Added

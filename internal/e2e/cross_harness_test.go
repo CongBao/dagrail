@@ -41,7 +41,11 @@ func TestThreeHarnessBindingsCompleteIndependentAttempts(t *testing.T) {
 		if _, err := svc.ApplyAction(start, json.RawMessage(`{}`), "start/"+item.harness); err != nil {
 			t.Fatal(err)
 		}
-		finish := actionRef(t, svc, item.role, item.node, "attempt.finish")
+		submit := actionRef(t, svc, item.role, item.node, "attempt.submit")
+		if _, err := svc.ApplyAction(submit, json.RawMessage(`{}`), "submit/"+item.harness); err != nil {
+			t.Fatal(err)
+		}
+		finish := actionRef(t, svc, item.role, item.node, "task.complete")
 		if _, err := svc.ApplyAction(finish, json.RawMessage(`{"outcome":"done"}`), "finish/"+item.harness); err != nil {
 			t.Fatal(err)
 		}

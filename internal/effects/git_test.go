@@ -45,7 +45,7 @@ func TestGitMergeEffectCreatesOneAuditableMergeAndReconcilesWithoutRepeating(t *
 	graphPath := filepath.Join(root, "graph.json")
 	graph := map[string]any{
 		"apiVersion": "dagrail.io/v1alpha1", "kind": "Graph", "metadata": map[string]any{"name": "git-effect"},
-		"spec": map[string]any{"roles": []any{map[string]any{"id": "integrator", "capabilities": []string{"effect.dispatch"}}}, "edges": []any{}, "nodes": []any{map[string]any{
+		"spec": map[string]any{"roles": []any{map[string]any{"id": "integrator", "capabilities": []string{"effect.apply", "effect.reconcile"}}}, "edges": []any{}, "nodes": []any{map[string]any{
 			"id": "merge", "kind": "effect", "role": "integrator", "title": "merge candidate", "outcomes": []any{map[string]any{"id": "merged", "class": "success"}},
 			"inputs": map[string]any{"adapter": "git.merge", "request": map[string]any{"repository": root, "targetBranch": "main", "candidate": candidate, "strategy": "merge-commit"}},
 		}},

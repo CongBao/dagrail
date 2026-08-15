@@ -176,7 +176,7 @@ func observationFixture(t *testing.T) (root, source, graphPath, shadow string) {
 		t.Fatal(err)
 	}
 	graphPath = filepath.Join(root, "converted-graph.json")
-	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"observed"},"spec":{"roles":[{"id":"dev","capabilities":["node.run"]}],"nodes":[{"id":"A","kind":"task","role":"dev","title":"A","outcomes":[{"id":"ok","class":"success"}]},{"id":"B","kind":"review","role":"dev","title":"B","outcomes":[{"id":"approve","class":"success"}]}],"edges":[{"id":"A-B","from":"A","to":"B","when":{"outcome":"ok"}}]}}`
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"observed"},"spec":{"roles":[{"id":"dev","capabilities":["node.run","node.review"]}],"nodes":[{"id":"A","kind":"task","role":"dev","title":"A","outcomes":[{"id":"ok","class":"success"}]},{"id":"B","kind":"review","role":"dev","title":"B","outcomes":[{"id":"approve","class":"success"}]}],"edges":[{"id":"A-B","from":"A","to":"B","when":{"outcome":"ok"}}]}}`
 	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
 		t.Fatal(err)
 	}

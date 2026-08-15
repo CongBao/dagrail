@@ -64,9 +64,9 @@ DAGrail advances through evidence-backed milestones. A version is complete only 
   search and filters, node/blocker inspection, event timeline, and operational views
   for leases, resources, incidents, attempts, and effects;
 - stable URL deep links, deterministic bounded APIs, and large-graph performance gates;
-- a second isolated tropical-cyclone-lab shadow qualification after the UI lands,
-  reading source governance artifacts into temporary DAGrail state without modifying
-  the project, its registry, or its live DAG;
+- a second isolated large-project shadow qualification after the UI lands, reading
+  caller-selected governance artifacts into temporary DAGrail state without modifying
+  the validation subject or its live workflow;
 - an independent cold review of v0.11 implementation and qualification evidence before
   the milestone is declared complete.
 
@@ -131,3 +131,15 @@ an unstable taxonomy of process exit codes.
 
 Delivered in v0.18.0 as an engineering-complete external-validation candidate. A 1.0
 tag remains blocked on the four real-world evidence items in `docs/readiness.md`.
+
+## v0.19.0 — Governance closure
+
+- enforced Role capabilities at every public mutation boundary with an import-compatible
+  migration path for older Graph definitions;
+- typed task, review, decision, gate, and effect completion contracts;
+- immutable provider-bound Decision records and unreachable-branch settlement;
+- receipt-driven resource closure and closed incident recovery dispositions;
+- repository-neutral qualification boundaries for real-project shadow validation.
+
+Delivered in v0.19.0. External projects remain read-only validation subjects and do
+not add project-specific types or adapters to the DAGrail kernel.

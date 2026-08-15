@@ -1,6 +1,6 @@
 'use strict';
 
-const palette={planned:'#8fa2be',active:'#61adff',terminal:'#4cdaa0',superseded:'#b28cff'};
+const palette={planned:'#8fa2be',active:'#61adff',terminal:'#4cdaa0',superseded:'#b28cff',skipped:'#7f8a9a'};
 const views=new Set(['topology','nodes','timeline','operations']);
 const el=id=>document.getElementById(id);
 const make=(tag,text,className)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(className)node.className=className;return node};

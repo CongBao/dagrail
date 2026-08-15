@@ -41,7 +41,7 @@ const MaxProjectionBytes int64 = 16 << 30
 
 var ErrFutureSchema = errors.New("projection schema was created by a newer DAGrail version")
 
-const CurrentSchemaVersion = 3
+const CurrentSchemaVersion = 4
 
 var projectionOpenLocks sync.Map
 
@@ -183,6 +183,12 @@ func (s *Store) initialize() error {
 		if _, err := connection.ExecContext(context.Background(), migrateV2ToV3); err != nil {
 			return fmt.Errorf("migrate projection schema v2 to v3: %w", err)
 		}
+		schemaVersion = 3
+	}
+	if schemaVersion == 3 {
+		if _, err := connection.ExecContext(context.Background(), migrateV3ToV4); err != nil {
+			return fmt.Errorf("migrate projection schema v3 to v4: %w", err)
+		}
 	}
 	if _, err := connection.ExecContext(context.Background(), "COMMIT"); err != nil {
 		return fmt.Errorf("commit projection schema migration: %w", err)
@@ -218,6 +224,11 @@ const migrateV2ToV3 = `
 CREATE TABLE IF NOT EXISTS evidence_packages (package_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, node_id TEXT NOT NULL, core_digest TEXT NOT NULL, package_json BLOB NOT NULL, sequence INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS reuse_decisions (decision_id TEXT PRIMARY KEY, package_id TEXT NOT NULL, result TEXT NOT NULL, decision_json BLOB NOT NULL, sequence INTEGER NOT NULL);
 PRAGMA user_version=3;
+`
+
+const migrateV3ToV4 = `
+CREATE TABLE IF NOT EXISTS decisions (decision_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, node_id TEXT NOT NULL, outcome TEXT NOT NULL, decision_json BLOB NOT NULL, sequence INTEGER NOT NULL);
+PRAGMA user_version=4;
 `
 
 func (s *Store) SchemaVersion() (int, error) {
@@ -258,7 +269,7 @@ func (s *Store) Sync(state domain.State, segments []journal.Segment) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, table := range []string{"metadata", "applied_segments", "graph_revisions", "nodes", "edges", "roles", "attempts", "role_leases", "checkpoints", "evidence_packages", "reuse_decisions", "actions", "outbox", "incidents", "resources", "evidence_index"} {
+	for _, table := range []string{"metadata", "applied_segments", "graph_revisions", "nodes", "edges", "roles", "attempts", "role_leases", "checkpoints", "decisions", "evidence_packages", "reuse_decisions", "actions", "outbox", "incidents", "resources", "evidence_index"} {
 		if _, err := tx.Exec("DELETE FROM " + table); err != nil {
 			return err
 		}
@@ -308,6 +319,18 @@ func (s *Store) Sync(state domain.State, segments []journal.Segment) error {
 			return err
 		}
 		for _, evidence := range checkpoint.EvidenceRefs {
+			value, _ := json.Marshal(evidence)
+			if _, err := tx.Exec("INSERT OR REPLACE INTO evidence_index(digest,metadata_json) VALUES(?,?)", evidence.Digest, value); err != nil {
+				return err
+			}
+		}
+	}
+	for _, decision := range state.Decisions {
+		value, _ := json.Marshal(decision)
+		if _, err := tx.Exec("INSERT INTO decisions(decision_id,attempt_id,node_id,outcome,decision_json,sequence) VALUES(?,?,?,?,?,?)", decision.ID, decision.AttemptID, decision.NodeID, decision.Outcome, value, decision.Sequence); err != nil {
+			return err
+		}
+		for _, evidence := range decision.EvidenceRefs {
 			value, _ := json.Marshal(evidence)
 			if _, err := tx.Exec("INSERT OR REPLACE INTO evidence_index(digest,metadata_json) VALUES(?,?)", evidence.Digest, value); err != nil {
 				return err
@@ -438,6 +461,7 @@ func (s *Store) Fingerprint() (LogicalFingerprint, error) {
 		{"attempts", "SELECT attempt_id,node_id,status,outcome,checkpoint_id FROM attempts ORDER BY attempt_id"},
 		{"role_leases", "SELECT role_id,binding_json,expires_at FROM role_leases ORDER BY role_id"},
 		{"checkpoints", "SELECT checkpoint_id,attempt_id,payload_json FROM checkpoints ORDER BY checkpoint_id"},
+		{"decisions", "SELECT decision_id,attempt_id,node_id,outcome,decision_json,sequence FROM decisions ORDER BY decision_id"},
 		{"evidence_packages", "SELECT package_id,attempt_id,node_id,core_digest,package_json,sequence FROM evidence_packages ORDER BY package_id"},
 		{"reuse_decisions", "SELECT decision_id,package_id,result,decision_json,sequence FROM reuse_decisions ORDER BY decision_id"},
 		{"actions", "SELECT action_id,payload_json,status FROM actions ORDER BY action_id"},

@@ -12,7 +12,7 @@ func TestFrontierEvaluatesClosedTypedFacts(t *testing.T) {
 		Kind:       GraphKind,
 		Metadata:   GraphMetadata{Name: "facts"},
 		Spec: GraphSpec{
-			Roles: []RoleDefinition{{ID: "reviewer"}},
+			Roles: []RoleDefinition{{ID: "reviewer", Capabilities: []string{CapabilityNodeReview}}},
 			Nodes: []NodeDefinition{
 				{ID: "review", Kind: "review", Role: "reviewer", Title: "review", Outcomes: []Outcome{{ID: "approved", Class: "success"}}},
 				{ID: "merge", Kind: "join", Title: "merge", Outcomes: []Outcome{{ID: "done", Class: "success"}}},
@@ -67,7 +67,7 @@ func TestFrontierHonorsResourceCapacity(t *testing.T) {
 		Kind:       GraphKind,
 		Metadata:   GraphMetadata{Name: "resources"},
 		Spec: GraphSpec{
-			Roles:              []RoleDefinition{{ID: "worker"}},
+			Roles:              []RoleDefinition{{ID: "worker", Capabilities: []string{CapabilityNodeRun, CapabilityResourceClose}}},
 			ResourceCapacities: []ResourceCapacity{{Kind: "browser", Capacity: 1}},
 			Nodes: []NodeDefinition{
 				{ID: "A", Kind: "task", Role: "worker", Title: "A", Resources: []ResourceRequest{{Kind: "browser", Quantity: 1}}, Outcomes: []Outcome{{ID: "done", Class: "success"}}},
