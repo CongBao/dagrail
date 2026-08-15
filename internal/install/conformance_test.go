@@ -185,16 +185,19 @@ func TestConformanceRejectsRuntimeOutsideVerifiedReceipt(t *testing.T) {
 
 func TestMCPConfigurationMustBindOneExactRuntimeObject(t *testing.T) {
 	runtimePath := filepath.Join(t.TempDir(), "dagrail")
-	valid := `{"servers":[{"name":"dagrail","command":"` + runtimePath + `","args":["mcp","--stdio"]}]}`
-	if !mcpConfigurationMatches(valid, runtimePath) {
+	valid, _ := json.Marshal(map[string]any{"servers": []any{map[string]any{"name": "dagrail", "command": runtimePath, "args": []any{"mcp", "--stdio"}}}})
+	if !mcpConfigurationMatches(string(valid), runtimePath) {
 		t.Fatal("exact MCP runtime configuration was rejected")
 	}
-	if !mcpConfigurationMatches(`{"dagrail":{"command":"`+runtimePath+`","args":["mcp","--stdio"]}}`, runtimePath) {
+	keyed, _ := json.Marshal(map[string]any{"dagrail": map[string]any{"command": runtimePath, "args": []any{"mcp", "--stdio"}}})
+	if !mcpConfigurationMatches(string(keyed), runtimePath) {
 		t.Fatal("name-keyed exact MCP runtime configuration was rejected")
 	}
+	crossObject, _ := json.Marshal(map[string]any{"servers": []any{map[string]any{"name": "dagrail"}, map[string]any{"command": runtimePath, "args": []any{"mcp", "--stdio"}}}})
 	for _, invalid := range []string{
-		`{"servers":[{"name":"dagrail"},{"command":"` + runtimePath + `","args":["mcp","--stdio"]}]}`,
+		string(crossObject),
 		`{"servers":[{"name":"dagrail","command":"/wrong/dagrail","args":["mcp","--stdio"]}]}`,
+		`{"servers":[{"name":"dagrail"}`,
 		`dagrail installed`,
 	} {
 		if mcpConfigurationMatches(invalid, runtimePath) {

@@ -274,6 +274,10 @@ func mcpConfigurationMatches(output, runtimePath string) bool {
 	if json.Unmarshal([]byte(output), &value) == nil {
 		return mcpJSONContains(value, runtimePath)
 	}
+	trimmed := strings.TrimSpace(output)
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		return false
+	}
 	for _, line := range strings.Split(output, "\n") {
 		lower := strings.ToLower(line)
 		if strings.Contains(lower, "dagrail") && strings.Contains(line, runtimePath) && strings.Contains(lower, "mcp") && strings.Contains(lower, "--stdio") {
