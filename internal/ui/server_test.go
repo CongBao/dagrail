@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/CongBao/dagrail/internal/domain"
+	"github.com/CongBao/dagrail/internal/journal"
 	"github.com/CongBao/dagrail/internal/service"
 	"github.com/CongBao/dagrail/internal/ui"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
@@ -442,11 +443,22 @@ func TestExplorerResponsesMatchPublishedSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	graphPath := filepath.Join(root, "graph.json")
-	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"schema"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"A","kind":"task","role":"worker","title":"A","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"schema"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]},{"id":"governor","capabilities":["incident.manage"]}],"nodes":[{"id":"A","kind":"task","role":"worker","title":"A","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
 	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.ImportGraph(graphPath, "graph", "governor"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.BindRole("governor", "codex", "schema-governor", time.Hour, false, "bind-schema-governor"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	incidentRaw, _ := json.Marshal(domain.Incident{ID: "schema-incident", SourceType: "node", SourceID: "A", NodeID: "A", OwnerRole: "governor", Status: "open", Classification: "product", AttemptBudget: 2, DependencyCut: []string{"A"}, OpenedAt: now, UpdatedAt: now})
+	if _, err := svc.Journal.Append(journal.Command{ID: "schema-incident-open", Kind: "incident.open", ActorRole: "governor", IdempotencyKey: "schema-incident-open", ObjectRef: "incident:schema-incident"}, []journal.Event{{Type: "incident.opened", Payload: incidentRaw}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SetIncidentDisposition("schema-incident", "governor", "quarantine", "bounded isolation", "schema-incident-disposition"); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(ui.Handler(svc))

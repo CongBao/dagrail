@@ -234,7 +234,9 @@ func runUI(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	s, err := service.Open(*root)
+	// Explorer is a read-only observer; merely starting it cannot advance the
+	// journal or repair derived state.
+	s, err := service.OpenForRecovery(*root)
 	if err != nil {
 		return err
 	}

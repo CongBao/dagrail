@@ -16,6 +16,12 @@ protocol stability, execution mode, proof classes, and fallback. Do not infer su
 from a version string. A capability is true only after its required command surface is
 detected.
 
+`dagrail plugin conformance` is stricter than name discovery: the verified runtime
+receipt, the textual hook launcher resolved through `PATH`, and the parsed MCP command
+plus `mcp --stdio` arguments must all identify the same real executable and SHA-256.
+Ambiguous host output or a same-version executable at another path fails closed and
+leaves the manual fallback available.
+
 Native support is intentionally asymmetric:
 
 | Harness | Native mode | Lifecycle boundary |

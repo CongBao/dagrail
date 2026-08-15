@@ -21,6 +21,25 @@ type racingEffect struct {
 	once     sync.Once
 }
 
+type reconcileRacingEffect struct {
+	reconciles atomic.Int32
+}
+
+func (r *reconcileRacingEffect) Metadata() sdk.Metadata {
+	return sdk.Metadata{ID: "test.reconcile-racing", Version: "1.0.0", SchemaHash: "test-v1"}
+}
+func (r *reconcileRacingEffect) Prepare(context.Context, sdk.EffectRequest) (sdk.PreparedEffect, error) {
+	return sdk.PreparedEffect{AdapterID: "test.reconcile-racing", Binding: json.RawMessage(`{}`)}, nil
+}
+func (r *reconcileRacingEffect) Dispatch(context.Context, sdk.EffectRequest, sdk.PreparedEffect) (sdk.EffectReceipt, error) {
+	return sdk.EffectReceipt{Status: "unknown", ExternalID: "pending"}, nil
+}
+func (r *reconcileRacingEffect) Reconcile(context.Context, sdk.EffectRequest, sdk.PreparedEffect, json.RawMessage) (sdk.EffectReceipt, error) {
+	r.reconciles.Add(1)
+	time.Sleep(100 * time.Millisecond)
+	return sdk.EffectReceipt{Status: "confirmed", ExternalID: "confirmed-once"}, nil
+}
+
 func (r *racingEffect) Metadata() sdk.Metadata {
 	return sdk.Metadata{ID: "test.racing", Version: "1.0.0", SchemaHash: "test-v1"}
 }
@@ -89,6 +108,52 @@ func TestConcurrentEffectApplyDispatchesOnlyOnce(t *testing.T) {
 	}
 	if got := provider.dispatch.Load(); got != 1 {
 		t.Fatalf("effect dispatched %d times, want 1", got)
+	}
+}
+
+func TestConcurrentEffectReconcileCallsAdapterOnlyOnce(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := service.Init(root, "effect reconcile race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &reconcileRacingEffect{}
+	if err := svc.Providers.RegisterEffect(provider); err != nil {
+		t.Fatal(err)
+	}
+	graphPath := filepath.Join(root, "graph-reconcile.json")
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"effect reconcile race"},"spec":{"roles":[{"id":"operator","capabilities":["effect.apply","effect.reconcile"]}],"nodes":[{"id":"effect","kind":"effect","role":"operator","title":"effect","inputs":{"adapter":"test.reconcile-racing","request":{"target":"main"}},"outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
+	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "import-reconcile", "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.BindRole("operator", "codex", "session-reconcile", time.Hour, false, "bind-reconcile"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ApplyAction(actionRef(t, svc, "operator", "effect", "node.start"), json.RawMessage(`{}`), "start-reconcile"); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := svc.ApplyAction(actionRef(t, svc, "operator", "effect", "effect.prepare"), json.RawMessage(`{}`), "prepare-reconcile")
+	if err != nil || prepared.Status != "unknown" {
+		t.Fatalf("effect did not enter unknown state: %+v %v", prepared, err)
+	}
+	errors := make(chan error, 2)
+	for range 2 {
+		go func() {
+			_, reconcileErr := svc.ReconcileEffectContext(context.Background(), prepared.ActionID, json.RawMessage(`{"observed":true}`), "same-reconcile")
+			errors <- reconcileErr
+		}()
+	}
+	for range 2 {
+		if err := <-errors; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := provider.reconciles.Load(); got != 1 {
+		t.Fatalf("concurrent reconcile called adapter %d times, want 1", got)
 	}
 }
 

@@ -208,6 +208,8 @@
         "classification": {"type": "string"}, "deadline": {"type": "string"}, "attemptBudget": {"type": "integer"},
         "attempts": {"type": "integer"}, "noProgressAttempts": {"type": "integer"}, "progressMetric": {"type": "string"},
         "lastProgress": {"type": "string"}, "lastProgressAt": {"type": "string"}, "circuitReason": {"type": "string"},
+        "disposition": {"enum": ["retry", "rollback", "lkg", "quarantine", "off-critical-path", "escalate"]},
+        "dispositionBy": {"type": "string"}, "dispositionAt": {"type": "string"},
         "resolution": {"type": "string"}, "dependencyCut": {"type": "array", "items": {"type": "string"}},
         "openedAt": {"type": "string"}, "updatedAt": {"type": "string"}
       }

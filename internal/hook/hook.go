@@ -42,7 +42,10 @@ func Run(harness, event, root string, reader io.Reader) (Output, bool, error) {
 	if root == "" {
 		root = "."
 	}
-	svc, err := service.Open(root)
+	// Hooks are observational. In particular, opening a project here must not
+	// settle automatic Nodes or repair/synchronize a projection as a hidden
+	// lifecycle side effect.
+	svc, err := service.OpenForRecovery(root)
 	if err != nil {
 		return Output{}, false, nil
 	}

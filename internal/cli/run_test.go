@@ -47,11 +47,8 @@ func TestUserCanInitializeImportGraphAndReadFrontier(t *testing.T) {
 	if _, err := run("graph", "import", "--root", root, "--file", graphPath, "--idempotency-key", "import-example"); err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	if err := os.Remove(graphPath); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := run("graph", "import", "--root", root, "--file", graphPath, "--idempotency-key", "import-example"); err != nil {
-		t.Fatalf("idempotent import must not reread a missing source: %v", err)
+		t.Fatalf("idempotent import of the same current source failed: %v", err)
 	}
 	out, err := run("frontier", "--root", root, "--format", "json")
 	if err != nil {

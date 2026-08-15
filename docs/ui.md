@@ -3,6 +3,8 @@
 `dagrail ui --root .` opens a foreground, loopback-only view of verified DAGrail state.
 The Explorer never owns scheduling and exposes no transition, action, reconcile, graph
 change, or effect-dispatch route.
+Starting the Explorer uses a journal-derived read-only open: it does not settle pending
+automatic Nodes, migrate/repair SQLite, or synchronize a projection.
 
 Loopback binding is not treated as browser authentication. The server accepts only
 `localhost` or loopback-IP Host values, rejects DNS-rebinding hostnames, and rejects an

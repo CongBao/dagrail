@@ -46,11 +46,13 @@ proved by the portable binary.
   and trailing documents.
 - Journal readers reject symlinks, oversized segments, excessive segments/events,
   non-canonical bytes, unsupported schemas, unknown envelope fields, filename/hash
-  drift, and chain drift before reduction.
+  drift, chain drift, and v1/v2 segments carrying v3 command fields before reduction.
 - MCP stdio rejects a message over 1 MiB before the SDK decodes another frame. Each
-  high-level tool also rejects more than 64 KiB of typed input.
+  high-level tool also rejects more than 64 KiB of typed input. Context accepts only
+  orchestrator, worker, or reviewer views and cannot exceed that view's fixed maximum.
 - Hooks treat malformed, trailing, or oversized host payloads as inactive and never
-  echo a prompt.
+  echo a prompt. Hook and Explorer startup use read-only authority access and cannot
+  settle a pending automatic lifecycle event.
 - Effect bindings, reconciliation evidence, and receipts are authority-validated,
   size-bounded, and screened for credential-like fields before journaling.
 - The journal writer independently screens every new command and event payload, so an
@@ -58,9 +60,15 @@ proved by the portable binary.
 - Dynamic-graph impact tokens authorize one apply attempt and are removed before the
   resulting Graph Revision event is committed.
 - New mutation commands bind idempotency keys to actor, target, kind, and canonical
-  request digest, preventing a changed retry from inheriting an earlier result.
+  request digest, preventing a changed retry from inheriting an earlier result. Graph
+  and provider imports plus GraphPatch apply validate the current request before replay.
 - Plugin materialization uses a closed embedded file set, host-specific relative local
   marketplace sources, a digest-addressed destination, and exact mutation detection.
+  Conformance binds the receipt artifact, hook PATH resolution, and structurally parsed
+  MCP command/arguments to one real path and SHA-256.
+- Reconciliation uses a per-action OS/process lock around adapter observation, not the
+  journal lock; concurrent retries share the first committed result and a crash releases
+  the observation lock for recovery.
 - Support output pseudonymizes project identity and excludes absolute paths, Graph and
   event payloads, Node/Role IDs, prompts, artifacts, and raw harness output before an
   owner-only exclusive export is allowed.

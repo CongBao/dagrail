@@ -176,8 +176,12 @@ func graphChangeSchema() *jsonschema.Schema {
 func contextSchema() *jsonschema.Schema {
 	schema := schemaFor[ContextInput]()
 	setMaxLength(schema, "view", 32)
+	schema.Properties["view"].Enum = []any{"orchestrator", "worker", "reviewer"}
 	setMaxLength(schema, "role_id", 256)
 	setMaxLength(schema, "node_id", 256)
+	minimum, maximum := float64(512), float64(12288)
+	schema.Properties["budget_bytes"].Minimum = &minimum
+	schema.Properties["budget_bytes"].Maximum = &maximum
 	return schema
 }
 

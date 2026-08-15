@@ -95,6 +95,49 @@ func TestDefinitionInputsHaveAnExplicitSizeLimit(t *testing.T) {
 	}
 }
 
+func TestGraphImportReplayBindsCurrentDefinitionIntent(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := Init(root, "import-intent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "graph.json")
+	graph := func(name string) []byte {
+		return []byte(fmt.Sprintf(`{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":%q},"spec":{"roles":[],"nodes":[],"edges":[]}}`, name))
+	}
+	if err := os.WriteFile(path, graph("first"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(path, "same-key", "governor"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, graph("second"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(path, "same-key", "governor"); err == nil || !strings.Contains(err.Error(), "another command") {
+		t.Fatalf("changed graph intent replay was accepted: %v", err)
+	}
+}
+
+func TestContextViewsAndBudgetsAreClosed(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := Init(root, "context-boundary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Context("admin", "", "", 512); err == nil {
+		t.Fatal("unknown context view was accepted")
+	}
+	if _, err := svc.Context("worker", "", "", 8193); err == nil {
+		t.Fatal("worker context exceeded its fixed budget")
+	}
+	if raw, err := svc.Context("worker", "", "", 0); err != nil || len(raw) > 8192 {
+		t.Fatalf("default worker context violated budget: bytes=%d err=%v", len(raw), err)
+	}
+}
+
 func TestDefinitionInputsRejectUnknownAndDuplicateFields(t *testing.T) {
 	unknownGraph := []byte(`{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"strict"},"spec":{"roles":[],"nodes":[]},"unexpected":true}`)
 	if _, err := decodeGraphBytes(unknownGraph); err == nil || !strings.Contains(err.Error(), "unknown field") {

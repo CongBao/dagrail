@@ -461,6 +461,9 @@ func (s *Store) readAllUnlocked() ([]Segment, error) {
 		if err := decoder.Decode(&trailing); err != io.EOF {
 			return nil, fmt.Errorf("decode journal segment %s: trailing content", name)
 		}
+		if err := validateStoredCommand(segment.SchemaVersion, segment.Command); err != nil {
+			return nil, fmt.Errorf("journal compatibility error at %s: %w", name, err)
+		}
 		canonical, err := jcs.Transform(data)
 		if err != nil || !bytes.Equal(data, canonical) {
 			return nil, fmt.Errorf("journal segment %s is not canonical RFC 8785 JSON", name)
@@ -535,6 +538,24 @@ func validateStoredEvents(segmentSchema int, events []Event) error {
 		}
 		if err := validateEvent(event); err != nil {
 			return fmt.Errorf("event %d: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func validateStoredCommand(segmentSchema int, command Command) error {
+	if segmentSchema < LegacySegmentSchemaVersion || segmentSchema > CurrentSegmentSchemaVersion {
+		return fmt.Errorf("unsupported segment schema version %d", segmentSchema)
+	}
+	if segmentSchema < CurrentSegmentSchemaVersion && (command.ObjectRef != "" || command.RequestDigest != "") {
+		return fmt.Errorf("segment schema version %d cannot contain v3 command intent fields", segmentSchema)
+	}
+	if command.RequestDigest != "" {
+		if len(command.RequestDigest) != len("sha256:")+64 || !strings.HasPrefix(command.RequestDigest, "sha256:") {
+			return fmt.Errorf("journal command request digest is invalid")
+		}
+		if _, err := hex.DecodeString(strings.TrimPrefix(command.RequestDigest, "sha256:")); err != nil {
+			return fmt.Errorf("journal command request digest is invalid")
 		}
 	}
 	return nil

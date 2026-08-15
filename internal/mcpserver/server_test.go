@@ -55,6 +55,16 @@ func TestServerExposesOnlySixHighLevelTypedTools(t *testing.T) {
 	if err == nil && (invalid == nil || !invalid.IsError) {
 		t.Fatalf("unknown graph change mode was accepted: result=%+v err=%v", invalid, err)
 	}
+	for _, arguments := range []map[string]any{
+		{"view": "admin", "budget_bytes": 512},
+		{"view": "worker", "budget_bytes": 8193},
+		{"view": "orchestrator", "budget_bytes": 12289},
+	} {
+		invalid, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "dag_context", Arguments: arguments})
+		if err == nil && (invalid == nil || !invalid.IsError) {
+			t.Fatalf("unclosed context input was accepted: arguments=%v result=%+v err=%v", arguments, invalid, err)
+		}
+	}
 	if err := session.Close(); err != nil {
 		t.Fatal(err)
 	}

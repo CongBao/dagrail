@@ -115,7 +115,7 @@ func Current() Report {
 			APIVersion:   "dagrail.io/ui/v1beta1",
 			Stability:    "additive-read-only",
 			SchemaPath:   "schemas/ui-api-v1beta1.schema.json",
-			SchemaSHA256: "sha256:9db480b5f6c07d831529611809b2e4d7f8eef79e9bc442a16780758b35ed622d",
+			SchemaSHA256: "sha256:4c2723b7600dcf95a05ce501ba110109df3aedfabe8c3d541d346d9e0a04dac0",
 		},
 		Security: DocumentedSurface{
 			APIVersion:   "dagrail.io/security/v1alpha1",

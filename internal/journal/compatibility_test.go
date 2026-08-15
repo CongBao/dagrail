@@ -136,6 +136,32 @@ func TestPreviousV2SegmentWithoutCommandIntentFieldsRemainsReadable(t *testing.T
 	}
 }
 
+func TestPreviousSegmentsRejectV3CommandIntentFields(t *testing.T) {
+	for _, version := range []int{LegacySegmentSchemaVersion, PreviousSegmentSchemaVersion} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			store, err := Open(t.TempDir(), "project-hybrid")
+			if err != nil {
+				t.Fatal(err)
+			}
+			eventVersion := 0
+			if version == PreviousSegmentSchemaVersion {
+				eventVersion = CurrentEventSchemaVersion
+			}
+			writeSegment(t, store, unsignedSegment{
+				SchemaVersion: version,
+				Sequence:      1,
+				ProjectID:     "project-hybrid",
+				Command:       Command{ID: "command-hybrid", Kind: "hybrid", IdempotencyKey: "hybrid", ObjectRef: "node:A", RequestDigest: "sha256:" + strings.Repeat("a", 64)},
+				Events:        []Event{{Type: "hybrid.recorded", SchemaVersion: eventVersion, Payload: json.RawMessage(`{"ok":true}`)}},
+				CommittedAt:   "2026-01-01T00:00:00Z",
+			})
+			if _, err := store.ReadAll(); err == nil || !strings.Contains(err.Error(), "cannot contain v3") {
+				t.Fatalf("hybrid v%d segment was accepted: %v", version, err)
+			}
+		})
+	}
+}
+
 func TestJournalRejectsFutureSegmentAndEventSchemas(t *testing.T) {
 	tests := []struct {
 		name          string

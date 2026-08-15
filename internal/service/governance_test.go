@@ -232,6 +232,12 @@ func TestGraphChangeRequiresCapabilityAndActiveLease(t *testing.T) {
 	if _, err := svc.ApplyGraphChange(patchPath, impact.Token, "apply-governor", "governor"); err != nil {
 		t.Fatalf("leased graph governor could not apply preview: %v", err)
 	}
+	if err := os.WriteFile(patchPath, []byte(`{"apiVersion":"dagrail.io/v1alpha1","kind":"GraphPatch","operations":[{"op":"removeNode","nodeId":"work"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ApplyGraphChange(patchPath, impact.Token, "apply-governor", "governor"); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("changed patch replay was silently folded into the old result: %v", err)
+	}
 }
 
 type cancellingGatePolicy struct {

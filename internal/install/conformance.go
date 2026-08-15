@@ -3,6 +3,7 @@ package install
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -63,8 +64,11 @@ func ConformanceContext(ctx context.Context, options Options) (ConformanceReport
 		return ConformanceReport{}, err
 	}
 	report := ConformanceReport{APIVersion: PluginConformanceAPIVersion, Kind: "PluginConformance", Ready: true}
-	if runtimeStatus, err := RuntimeStatus(); err == nil {
+	runtimeStatus, runtimeErr := RuntimeStatus()
+	runtimeSelectionVerified := false
+	if runtimeErr == nil {
 		report.Runtime = ConformanceRuntime{Verified: true, Version: runtimeStatus.Version, SHA256: runtimeStatus.SHA256}
+		runtimeSelectionVerified = sameRuntimeArtifact(options.RuntimePath, runtimeStatus)
 	} else {
 		report.Ready = false
 	}
@@ -76,7 +80,11 @@ func ConformanceContext(ctx context.Context, options Options) (ConformanceReport
 	if !report.Bundle.Verified {
 		report.Ready = false
 	}
-	states, err := StatusContext(ctx, Options{Harnesses: harnessIDs, RuntimePath: options.RuntimePath, MarketplaceSource: options.MarketplaceSource})
+	statusRuntimePath := ""
+	if report.Runtime.Verified && runtimeSelectionVerified {
+		statusRuntimePath = runtimeStatus.RuntimePath
+	}
+	states, err := StatusContext(ctx, Options{Harnesses: harnessIDs, RuntimePath: statusRuntimePath, MarketplaceSource: options.MarketplaceSource})
 	if err != nil {
 		return ConformanceReport{}, err
 	}
@@ -84,7 +92,7 @@ func ConformanceContext(ctx context.Context, options Options) (ConformanceReport
 	for _, state := range states {
 		stateByHarness[state.Harness] = state
 	}
-	hookLauncherVerified := validateHookLauncher(ctx, options.RuntimePath) == nil
+	hookLauncherVerified := statusRuntimePath != "" && validateHookLauncher(ctx, statusRuntimePath) == nil
 	for _, harnessID := range harnessIDs {
 		adapter, err := harness.New(harnessID)
 		if err != nil {
@@ -110,6 +118,9 @@ func ConformanceContext(ctx context.Context, options Options) (ConformanceReport
 		if !report.Runtime.Verified {
 			item.UnavailableCodes = append(item.UnavailableCodes, "runtime_unverified")
 		}
+		if report.Runtime.Verified && !runtimeSelectionVerified {
+			item.UnavailableCodes = append(item.UnavailableCodes, "runtime_argument_mismatch")
+		}
 		if !report.Bundle.Verified {
 			item.UnavailableCodes = append(item.UnavailableCodes, "bundle_unverified")
 		}
@@ -133,6 +144,22 @@ func ConformanceContext(ctx context.Context, options Options) (ConformanceReport
 		report.Harnesses = append(report.Harnesses, item)
 	}
 	return report, nil
+}
+
+func sameRuntimeArtifact(path string, status RuntimeResult) bool {
+	if path == "" || status.RuntimePath == "" || status.SHA256 == "" {
+		return false
+	}
+	selected, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	current, err := filepath.EvalSymlinks(status.RuntimePath)
+	if err != nil || filepath.Clean(selected) != filepath.Clean(current) {
+		return false
+	}
+	digest, err := fileSHA256(selected)
+	return err == nil && digest == status.SHA256
 }
 
 func safeProbeVersion(value string) string {

@@ -8,8 +8,43 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CongBao/dagrail/internal/domain"
+	"github.com/CongBao/dagrail/internal/journal"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
+
+func TestReadOnlyOpenDoesNotSettlePendingAutomaticNode(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, "runtime"))
+	svc, err := Init(root, "read-only-open")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := domain.GraphDefinition{APIVersion: "dagrail.io/v1alpha1", Kind: "Graph", Metadata: domain.GraphMetadata{Name: "pending automatic"}, Spec: domain.GraphSpec{Roles: []domain.RoleDefinition{}, Nodes: []domain.NodeDefinition{{ID: "done", Kind: "milestone", Title: "done", Outcomes: []domain.Outcome{{ID: "reached", Class: "success"}}}}, Edges: []domain.EdgeDefinition{}}}
+	revision, err := graphRevision(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]any{"graph": graph, "revision": revision})
+	if _, err := svc.Journal.Append(journal.Command{ID: "read-only-gap", Kind: "graph.import", ActorRole: "bootstrap", IdempotencyKey: "read-only-gap", ObjectRef: "graph:" + revision}, []journal.Event{{Type: "graph.imported", Payload: payload}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	inspected, err := OpenForRecovery(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := inspected.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.HeadSequence != 1 || state.Nodes["done"].Status != "planned" {
+		t.Fatalf("read-only open settled authority: head=%d node=%+v", state.HeadSequence, state.Nodes["done"])
+	}
+	segments, err := inspected.VerifyJournal()
+	if err != nil || len(segments) != 1 {
+		t.Fatalf("read-only open changed journal: segments=%d err=%v", len(segments), err)
+	}
+}
 
 func TestRecoveryRehearsalRestoresReplaysAndRebuildsWithoutLiveMutation(t *testing.T) {
 	root := t.TempDir()

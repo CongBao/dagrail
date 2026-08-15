@@ -2,15 +2,23 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/CongBao/dagrail/internal/domain"
 	"github.com/CongBao/dagrail/internal/journal"
 	"github.com/CongBao/dagrail/sdk"
+	"github.com/gofrs/flock"
 	"github.com/google/uuid"
 )
+
+var effectReconcileProcessLocks sync.Map
 
 type effectNodeInput struct {
 	Adapter string          `json:"adapter"`
@@ -125,6 +133,11 @@ func (s *Service) ReconcileEffectContext(ctx context.Context, actionID string, e
 	if err != nil {
 		return domain.EffectAction{}, fmt.Errorf("reconciliation evidence digest: %w", err)
 	}
+	release, err := s.acquireEffectReconcileLock(ctx, actionID)
+	if err != nil {
+		return domain.EffectAction{}, err
+	}
+	defer release()
 	state, _, err := s.load()
 	if err != nil {
 		return domain.EffectAction{}, err
@@ -179,6 +192,39 @@ func (s *Service) ReconcileEffectContext(ctx context.Context, actionID string, e
 		return domain.EffectAction{}, err
 	}
 	return s.observeEffect(actionID, effect.OwnerRole, receipt, idempotencyKey, requestDigest)
+}
+
+// acquireEffectReconcileLock serializes one external observation per Effect
+// across goroutines and OS processes without holding the journal writer lock
+// during adapter I/O. The OS releases the lock after a crash, so a durable
+// reconciling event never becomes a permanent retry barrier.
+func (s *Service) acquireEffectReconcileLock(ctx context.Context, actionID string) (func(), error) {
+	sum := sha256.Sum256([]byte(actionID))
+	root := filepath.Join(s.Project.DataDir, "effect-locks")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return nil, fmt.Errorf("create effect lock directory: %w", err)
+	}
+	path := filepath.Join(root, hex.EncodeToString(sum[:])+".lock")
+	value, _ := effectReconcileProcessLocks.LoadOrStore(path, make(chan struct{}, 1))
+	processLock := value.(chan struct{})
+	select {
+	case processLock <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	fileLock := flock.New(path)
+	locked, err := fileLock.TryLockContext(ctx, 25*time.Millisecond)
+	if err != nil || !locked {
+		<-processLock
+		if err != nil {
+			return nil, fmt.Errorf("acquire effect reconciliation lock: %w", err)
+		}
+		return nil, fmt.Errorf("effect reconciliation lock was not acquired")
+	}
+	return func() {
+		_ = fileLock.Unlock()
+		<-processLock
+	}, nil
 }
 
 func (s *Service) observeEffect(actionID, actorRole string, receipt sdk.EffectReceipt, idempotencyKey, requestDigest string) (domain.EffectAction, error) {

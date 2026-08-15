@@ -74,6 +74,8 @@ The stdio server exposes only these high-level tools:
 Tool input-schema digests are part of `dagrail contract`. Callers cannot construct raw
 lifecycle transitions; allowed-action refs bind project, head, Graph Revision, Role
 lease, Node/Attempt, provider set, and expiry.
+`dag_context` accepts only `orchestrator`, `worker`, or `reviewer`; a caller may lower
+the byte budget to at least 512 bytes but cannot raise the fixed 12/8/12-KiB maximum.
 Graph apply and effect reconciliation recheck the active owner lease. Tool cancellation
 is propagated into policy providers and effect adapters; cancellation never commits a
 semantic Decision that was not returned.

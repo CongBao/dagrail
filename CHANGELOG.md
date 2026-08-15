@@ -19,11 +19,18 @@ All notable changes to DAGrail are documented here. The project follows Semantic
   than stopping only at the outer command boundary;
 - graph changes, incident updates, and effect reconciliation require an active owner
   Role lease in addition to their declared capability;
+- graph import, provider import, and graph-change replay now parse and bind the current
+  Graph, provider ID, provenance, and patch before returning an idempotent result;
+- hook and Explorer startup use a journal-derived read-only open and cannot settle
+  automatic Nodes or repair projections as a hidden lifecycle action;
+- effect reconciliation is serialized per stable action across goroutines and local
+  processes without holding the journal writer lock during adapter I/O;
 - context construction reuses one loaded state, hooks emit a bounded eight-Node ready
   summary, and every hook instruction names the exact governing, execution, or review
   skill without guessing Role identity;
 - plugin installation and conformance require the textual `dagrail` hook launcher to
-  resolve in a fresh process to the same verified runtime used by absolute MCP launchers;
+  resolve in a fresh process to the same receipt- and digest-verified runtime used by
+  a structurally inspected absolute MCP launcher;
 - all three bundled skills were rewritten around current allowed-action refs, closed
   NodeKind outcomes, resource/effect reconciliation, evidence boundaries, and mandatory
   pre-wait liveness checks.
@@ -31,7 +38,8 @@ All notable changes to DAGrail are documented here. The project follows Semantic
 ### Compatibility
 
 - the closed historical-binary window now covers v0.10–v0.19; journal segment schema
-  v3 adds command intent bindings while schemas v1 and v2 remain readable.
+  v3 adds command intent bindings while schemas v1 and v2 remain readable and reject
+  hybrid v3 command fields.
 
 ## 0.19.0 — 2026-08-15
 

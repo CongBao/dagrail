@@ -14,6 +14,12 @@ type fixtureImporter struct{}
 func (fixtureImporter) Metadata() sdk.Metadata {
 	return sdk.Metadata{ID: "fixture.importer", Version: "1.0.0", SchemaHash: "fixture-v1", Stability: sdk.StabilityExperimental}
 }
+
+type alternateFixtureImporter struct{ fixtureImporter }
+
+func (alternateFixtureImporter) Metadata() sdk.Metadata {
+	return sdk.Metadata{ID: "fixture.importer.alternate", Version: "1.0.0", SchemaHash: "fixture-v1", Stability: sdk.StabilityExperimental}
+}
 func (fixtureImporter) InputSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string","minLength":1}}}`)
 }
@@ -47,6 +53,9 @@ func TestImporterAndProjectionProvidersUseBoundedRuntime(t *testing.T) {
 	if err := svc.Providers.RegisterImporter(fixtureImporter{}); err != nil {
 		t.Fatal(err)
 	}
+	if err := svc.Providers.RegisterImporter(alternateFixtureImporter{}); err != nil {
+		t.Fatal(err)
+	}
 	if err := svc.Providers.RegisterProjection(countProjection{}); err != nil {
 		t.Fatal(err)
 	}
@@ -57,6 +66,9 @@ func TestImporterAndProjectionProvidersUseBoundedRuntime(t *testing.T) {
 	}
 	if result.GraphRevision == "" {
 		t.Fatalf("missing graph revision: %+v", result)
+	}
+	if _, err := svc.ImportGraphFromProvider(context.Background(), "fixture.importer.alternate", json.RawMessage(`{"name":"from-provider"}`), "provider-import", "governor"); err == nil || !strings.Contains(err.Error(), "another command") {
+		t.Fatalf("provider ID was not bound into import intent: %v", err)
 	}
 	segments, err := svc.VerifyJournal()
 	if err != nil {

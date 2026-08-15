@@ -19,6 +19,11 @@ Retries return the original result only when every available binding agrees. Cha
 intent fails closed. Historical commands without the additive digest remain readable;
 their older, narrower idempotency contract is not retroactively rewritten.
 
+The current request is decoded and validated before the replay decision. Graph import
+binds the canonical Graph Revision and provenance; provider import additionally binds
+the provider ID and canonical input; GraphPatch apply binds the exact preview digest.
+Schema v1/v2 segments remain byte-compatible but may not carry the v3 command fields.
+
 Long provider, harness, and external-effect work remains outside the journal lock. The
 digest proves local command intent, not remote exactly-once execution; ambiguous effects
 still require receipt-based reconciliation.

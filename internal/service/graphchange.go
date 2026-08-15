@@ -108,6 +108,13 @@ func (s *Service) ApplyGraphChange(path, token, idempotencyKey, actorRole string
 	if err != nil {
 		return GraphImpact{}, err
 	}
+	patch, digest, err := decodeGraphPatch(path)
+	if err != nil {
+		return GraphImpact{}, err
+	}
+	if digest != tokenPayload.PatchDigest {
+		return GraphImpact{}, fmt.Errorf("graph patch does not match impact token")
+	}
 	state, segments, err := s.load()
 	if err != nil {
 		return GraphImpact{}, err
@@ -131,13 +138,6 @@ func (s *Service) ApplyGraphChange(path, token, idempotencyKey, actorRole string
 	expires, err := time.Parse(time.RFC3339Nano, tokenPayload.ExpiresAt)
 	if err != nil || !s.Now().UTC().Before(expires) {
 		return GraphImpact{}, fmt.Errorf("graph change token is expired")
-	}
-	patch, digest, err := decodeGraphPatch(path)
-	if err != nil {
-		return GraphImpact{}, err
-	}
-	if digest != tokenPayload.PatchDigest {
-		return GraphImpact{}, fmt.Errorf("graph patch does not match impact token")
 	}
 	graph, impact, superseded, err := applyGraphPatch(state, patch)
 	if err != nil {

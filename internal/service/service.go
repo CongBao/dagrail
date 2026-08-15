@@ -132,52 +132,33 @@ func (s *Service) ImportGraphWithProvenance(path, idempotencyKey, actorRole stri
 	if idempotencyKey == "" {
 		return domain.CommandResult{}, fmt.Errorf("idempotency key is required")
 	}
-	state, _, err := s.load()
-	if err != nil {
-		return domain.CommandResult{}, err
-	}
-	if existing, ok := state.Commands[idempotencyKey]; ok {
-		if existing.Kind != "graph.import" || existing.ActorRole != actorRole {
-			return domain.CommandResult{}, fmt.Errorf("idempotency key is already bound to another command")
-		}
-		return existing, nil
-	}
 	graph, err := decodeGraph(path)
 	if err != nil {
 		return domain.CommandResult{}, err
 	}
+	sourceRaw := []byte("null")
 	if source != nil {
-		raw, err := json.Marshal(source)
+		sourceRaw, err = json.Marshal(source)
 		if err != nil {
 			return domain.CommandResult{}, err
 		}
-		if err := domain.ValidateAuthorityJSON(raw); err != nil {
+		if err := domain.ValidateAuthorityJSON(sourceRaw); err != nil {
 			return domain.CommandResult{}, fmt.Errorf("graph provenance: %w", err)
 		}
-		if err := domain.RejectSensitiveFields(raw); err != nil {
+		if err := domain.RejectSensitiveFields(sourceRaw); err != nil {
 			return domain.CommandResult{}, fmt.Errorf("graph provenance: %w", err)
 		}
 	}
-	return s.importGraphDefinition(graph, idempotencyKey, actorRole, source)
-}
-
-func (s *Service) importGraphDefinition(graph domain.GraphDefinition, idempotencyKey, actorRole string, source any) (domain.CommandResult, error) {
-	if idempotencyKey == "" {
-		return domain.CommandResult{}, fmt.Errorf("idempotency key is required")
-	}
-	state, _, err := s.load()
+	requestDigest, err := authorityRequestDigest("graph.import", sourceRaw)
 	if err != nil {
 		return domain.CommandResult{}, err
 	}
-	if existing, ok := state.Commands[idempotencyKey]; ok {
-		revision, revisionErr := graphRevision(graph)
-		if revisionErr != nil || existing.Kind != "graph.import" || existing.ActorRole != actorRole || existing.ObjectRef != "graph:"+revision {
-			return domain.CommandResult{}, fmt.Errorf("idempotency key is already bound to another command")
-		}
-		return existing, nil
-	}
-	if state.Graph != nil {
-		return domain.CommandResult{}, fmt.Errorf("graph is already imported; use a graph change")
+	return s.importGraphDefinition(graph, idempotencyKey, actorRole, source, requestDigest)
+}
+
+func (s *Service) importGraphDefinition(graph domain.GraphDefinition, idempotencyKey, actorRole string, source any, requestDigest string) (domain.CommandResult, error) {
+	if idempotencyKey == "" {
+		return domain.CommandResult{}, fmt.Errorf("idempotency key is required")
 	}
 	if err := domain.ValidateGraph(graph); err != nil {
 		return domain.CommandResult{}, err
@@ -189,21 +170,25 @@ func (s *Service) importGraphDefinition(graph domain.GraphDefinition, idempotenc
 	if err != nil {
 		return domain.CommandResult{}, err
 	}
+	state, _, err := s.load()
+	if err != nil {
+		return domain.CommandResult{}, err
+	}
+	if existing, ok := state.Commands[idempotencyKey]; ok {
+		if existing.Kind != "graph.import" || existing.ActorRole != actorRole || existing.ObjectRef != "graph:"+revision || (existing.RequestDigest != "" && existing.RequestDigest != requestDigest) {
+			return domain.CommandResult{}, fmt.Errorf("idempotency key is already bound to another command")
+		}
+		return existing, nil
+	}
+	if state.Graph != nil {
+		return domain.CommandResult{}, fmt.Errorf("graph is already imported; use a graph change")
+	}
 	payload, _ := json.Marshal(struct {
 		Graph    domain.GraphDefinition `json:"graph"`
 		Revision string                 `json:"revision"`
 		Source   any                    `json:"source,omitempty"`
 	}{graph, revision, source})
 	expectedHead := state.HeadHash
-	requestDigest := ""
-	if sourceRaw, marshalErr := json.Marshal(source); marshalErr == nil {
-		var providerSource struct {
-			InputDigest string `json:"inputDigest"`
-		}
-		if json.Unmarshal(sourceRaw, &providerSource) == nil {
-			requestDigest = providerSource.InputDigest
-		}
-	}
 	segment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "graph.import", ActorRole: actorRole, IdempotencyKey: idempotencyKey, ObjectRef: "graph:" + revision, RequestDigest: requestDigest}, []journal.Event{{Type: "graph.imported", Payload: payload}}, s.Now(), &expectedHead)
 	if err != nil {
 		return domain.CommandResult{}, err

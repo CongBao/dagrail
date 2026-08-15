@@ -113,6 +113,7 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 4. Every external effect has a stable action ID; ambiguity requires reconcile, never blind retry.
 5. Active Node identity, kind, objective, and input contract are frozen. Terminal history is append-only.
 6. Hooks may discover, inject bounded context, and observe sessions; they cannot transition lifecycle state.
+   Explorer and hook startup use a read-only open and cannot settle automatic Nodes.
 7. Unknown event types and future unsupported journal schemas fail closed.
 8. Secrets, PII, full prompts, transcripts, and large artifact bodies do not enter authority.
 9. A harness protocol capability is not a durable lifecycle capability until it is
@@ -120,7 +121,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 10. Runtime publication is accepted only after exact digest and fresh-process version
     verification; rollback never trusts a mutable path without its receipt digest.
 11. Context truncation always returns an inspectable bounded summary; a large ready
-    frontier cannot force a caller to exceed its declared byte budget.
+    frontier cannot force a caller to exceed its declared byte budget. Only the three
+    declared views exist, and callers cannot raise their fixed maximum.
 12. Observe-only work writes only to a separately resolved shadow root; portable
     provenance contains relative paths and digests, while private local locators remain
     outside the journal.

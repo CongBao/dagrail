@@ -201,17 +201,143 @@ func StatusContext(ctx context.Context, options Options) ([]Result, error) {
 				pluginArgs = append(pluginArgs, "--json")
 			}
 			pluginOutput, pluginErr := run(ctx, path, pluginArgs...)
-			if pluginErr == nil && strings.Contains(strings.ToLower(pluginOutput), "dagrail") {
+			if pluginErr == nil && pluginListingContains(pluginOutput) {
 				status = "installed"
 			} else if pluginErr != nil {
 				message = "plugin status probe unavailable: " + pluginErr.Error()
 			}
 			mcpOutput, mcpErr := run(ctx, path, "mcp", "list")
-			mcpConfigured = mcpErr == nil && strings.Contains(strings.ToLower(mcpOutput), "dagrail")
+			mcpConfigured = mcpErr == nil && mcpConfigurationMatches(mcpOutput, options.RuntimePath)
 		}
 		results = append(results, Result{Harness: harness, Status: status, Executable: path, MCPConfigured: mcpConfigured, Message: message})
 	}
 	return results, nil
+}
+
+func pluginListingContains(output string) bool {
+	var value any
+	if json.Unmarshal([]byte(output), &value) == nil {
+		return pluginJSONContains(value)
+	}
+	for _, field := range strings.Fields(strings.ToLower(output)) {
+		candidate := strings.Trim(field, "\"'`,:;[]{}()")
+		if candidate == "dagrail" || strings.HasPrefix(candidate, "dagrail@") {
+			return true
+		}
+	}
+	return false
+}
+
+func pluginJSONContains(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, field := range []string{"name", "id", "plugin", "pluginId"} {
+			if candidate, ok := typed[field].(string); ok && pluginIdentifier(candidate) {
+				return true
+			}
+		}
+		for key, child := range typed {
+			if pluginIdentifier(key) {
+				switch value := child.(type) {
+				case map[string]any, []any:
+					return true
+				case bool:
+					if value {
+						return true
+					}
+				}
+			}
+			if pluginJSONContains(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if pluginJSONContains(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func pluginIdentifier(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return value == "dagrail" || strings.HasPrefix(value, "dagrail@")
+}
+
+func mcpConfigurationMatches(output, runtimePath string) bool {
+	if !filepath.IsAbs(runtimePath) {
+		return false
+	}
+	var value any
+	if json.Unmarshal([]byte(output), &value) == nil {
+		return mcpJSONContains(value, runtimePath)
+	}
+	for _, line := range strings.Split(output, "\n") {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "dagrail") && strings.Contains(line, runtimePath) && strings.Contains(lower, "mcp") && strings.Contains(lower, "--stdio") {
+			return true
+		}
+	}
+	return false
+}
+
+func mcpJSONContains(value any, runtimePath string) bool {
+	return mcpJSONContainsNamed(value, runtimePath, false)
+}
+
+func mcpJSONContainsNamed(value any, runtimePath string, inheritedName bool) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		stringsInObject := collectDirectStrings(typed)
+		hasName, hasRuntime, hasMCP, hasStdio := inheritedName, false, false, false
+		for _, field := range []string{"name", "id", "server", "serverName"} {
+			if candidate, ok := typed[field].(string); ok && strings.EqualFold(strings.TrimSpace(candidate), MCPServerName) {
+				hasName = true
+			}
+		}
+		for _, candidate := range stringsInObject {
+			trimmed := strings.TrimSpace(candidate)
+			lower := strings.ToLower(trimmed)
+			hasRuntime = hasRuntime || trimmed == runtimePath
+			hasMCP = hasMCP || lower == "mcp"
+			hasStdio = hasStdio || lower == "--stdio"
+		}
+		if hasName && hasRuntime && hasMCP && hasStdio {
+			return true
+		}
+		for key, child := range typed {
+			childName := hasName || strings.EqualFold(strings.TrimSpace(key), MCPServerName)
+			if mcpJSONContainsNamed(child, runtimePath, childName) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if mcpJSONContainsNamed(child, runtimePath, inheritedName) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func collectDirectStrings(value map[string]any) []string {
+	result := make([]string, 0, len(value))
+	for _, child := range value {
+		switch typed := child.(type) {
+		case string:
+			result = append(result, typed)
+		case []any:
+			for _, item := range typed {
+				if text, ok := item.(string); ok {
+					result = append(result, text)
+				}
+			}
+		}
+	}
+	return result
 }
 
 func Uninstall(ctx context.Context, options Options) ([]Result, error) {
