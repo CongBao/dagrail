@@ -198,6 +198,17 @@ func InitWithInitializer(root, name string, initialize func(Project, bool) error
 }
 
 func Open(root string) (Project, error) {
+	return open(root, true)
+}
+
+// OpenInspection resolves an existing project without creating its runtime
+// data directory. Read-only callers must fail rather than materialize missing
+// authority state as an open-time side effect.
+func OpenInspection(root string) (Project, error) {
+	return open(root, false)
+}
+
+func open(root string, createDataDir bool) (Project, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return Project{}, err
@@ -239,8 +250,10 @@ func Open(root string) (Project, error) {
 	if err != nil {
 		return Project{}, err
 	}
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return Project{}, err
+	if createDataDir {
+		if err := os.MkdirAll(dataDir, 0o700); err != nil {
+			return Project{}, err
+		}
 	}
 	if info, err := os.Lstat(dataDir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return Project{}, fmt.Errorf("project data directory must be a non-symlink directory")

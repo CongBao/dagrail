@@ -125,13 +125,13 @@ func Current() Report {
 			APIVersion:   compatibility.APIVersion,
 			Stability:    "closed-beta-window",
 			SchemaPath:   "schemas/historical-binary-matrix-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:c82047b787262c82170a3e3578228b0fd81ca45a04a3b456a608ae3a2f7dfccd",
+			SchemaSHA256: "sha256:13eae8210721967589c493933317c19b48cd943dc6ae93dff1b05cd9d18b6d8b",
 		},
 		Readiness: DocumentedSurface{
 			APIVersion:   "dagrail.io/readiness-decision/v1alpha1",
 			Stability:    "additive-structural-decision",
 			SchemaPath:   "schemas/readiness-decision-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:4a6eb6f3a07f3db7e0b52325c40a6dc44ae1971d59dffb6aa6390acf1e6c9be4",
+			SchemaSHA256: "sha256:5216088afed0f980b5d09e036c3a61473ee956d95f84e8b242ef90bc424b1fe3",
 		},
 		UI: DocumentedSurface{
 			APIVersion:   "dagrail.io/ui/v1beta1",

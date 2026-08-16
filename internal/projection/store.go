@@ -41,6 +41,8 @@ const MaxProjectionBytes int64 = 16 << 30
 
 var ErrFutureSchema = errors.New("projection schema was created by a newer DAGrail version")
 
+var ErrUncheckpointed = errors.New("projection has active WAL/SHM state and cannot be inspected byte-read-only")
+
 const CurrentSchemaVersion = 4
 
 var projectionOpenLocks sync.Map
@@ -49,17 +51,12 @@ func Open(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, err
 	}
-	lockPath := filepath.Join(dataDir, "projection.lock")
-	processLock, _ := projectionOpenLocks.LoadOrStore(lockPath, &sync.Mutex{})
-	processLock.(*sync.Mutex).Lock()
-	defer processLock.(*sync.Mutex).Unlock()
-	fileLock := flock.New(lockPath)
-	if err := fileLock.Lock(); err != nil {
+	store := &Store{path: filepath.Join(dataDir, "projection.sqlite")}
+	unlock, err := store.acquireLock(true)
+	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = fileLock.Unlock() }()
-
-	store := &Store{path: filepath.Join(dataDir, "projection.sqlite")}
+	defer unlock()
 	if info, err := os.Lstat(store.path); err == nil {
 		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > MaxProjectionBytes {
 			return nil, fmt.Errorf("projection must be a regular non-symlink file no larger than %d bytes", MaxProjectionBytes)
@@ -110,8 +107,93 @@ func (s *Store) database() (*sql.DB, error) {
 	if !s.readOnly {
 		return sql.Open("sqlite", s.path)
 	}
+	// Inspection handles must not create WAL/SHM files in the protected runtime.
+	// Operational query state comes from the journal; this connection is used only
+	// for checkpointed projection integrity and logical-fingerprint diagnostics.
 	dsn := readOnlyDSN(s.path, runtime.GOOS)
 	return sql.Open("sqlite", dsn)
+}
+
+func (s *Store) acquireLock(create bool) (func(), error) {
+	lockPath := filepath.Join(filepath.Dir(s.path), "projection.lock")
+	if !create {
+		info, err := os.Lstat(lockPath)
+		if err != nil {
+			return nil, fmt.Errorf("open projection lock for inspection: %w", err)
+		}
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("projection lock must be a regular non-symlink file")
+		}
+	}
+	processLock, _ := projectionOpenLocks.LoadOrStore(lockPath, &sync.Mutex{})
+	mutex := processLock.(*sync.Mutex)
+	mutex.Lock()
+	fileLock := flock.New(lockPath)
+	if err := fileLock.Lock(); err != nil {
+		mutex.Unlock()
+		return nil, err
+	}
+	return func() {
+		_ = fileLock.Unlock()
+		mutex.Unlock()
+	}, nil
+}
+
+type inspectionSnapshot struct {
+	info os.FileInfo
+}
+
+func (s *Store) beginInspection() (*inspectionSnapshot, error) {
+	if !s.readOnly {
+		return nil, nil
+	}
+	info, err := os.Lstat(s.path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > MaxProjectionBytes {
+		return nil, fmt.Errorf("projection must be a regular non-symlink file no larger than %d bytes", MaxProjectionBytes)
+	}
+	if err := rejectProjectionSidecars(s.path); err != nil {
+		return nil, err
+	}
+	return &inspectionSnapshot{info: info}, nil
+}
+
+func (s *Store) finishInspection(snapshot *inspectionSnapshot) error {
+	if snapshot == nil {
+		return nil
+	}
+	if err := rejectProjectionSidecars(s.path); err != nil {
+		return err
+	}
+	info, err := os.Lstat(s.path)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(snapshot.info, info) || snapshot.info.Size() != info.Size() || !snapshot.info.ModTime().Equal(info.ModTime()) {
+		return fmt.Errorf("projection changed during byte-read-only inspection")
+	}
+	return nil
+}
+
+func rejectProjectionSidecars(path string) error {
+	for _, suffix := range []string{"-wal", "-shm"} {
+		sidecar := path + suffix
+		info, err := os.Lstat(sidecar)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		kind := "WAL"
+		if suffix == "-shm" {
+			kind = "SHM"
+		}
+		return fmt.Errorf("%w: %s sidecar is present (%d bytes)", ErrUncheckpointed, kind, info.Size())
+	}
+	return nil
 }
 
 func readOnlyDSN(path, goos string) string {
@@ -122,7 +204,7 @@ func readOnlyDSN(path, goos string) string {
 			uriPath = "/" + uriPath
 		}
 	}
-	return (&url.URL{Scheme: "file", Path: uriPath, RawQuery: "mode=ro"}).String()
+	return (&url.URL{Scheme: "file", Path: uriPath, RawQuery: "immutable=1&mode=ro"}).String()
 }
 
 func isTransientSQLiteError(err error) bool {
@@ -232,6 +314,26 @@ PRAGMA user_version=4;
 `
 
 func (s *Store) SchemaVersion() (int, error) {
+	unlock, err := s.acquireLock(!s.readOnly)
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+	snapshot, err := s.beginInspection()
+	if err != nil {
+		return 0, err
+	}
+	version, err := s.schemaVersionUnlocked()
+	if err != nil {
+		return 0, err
+	}
+	if err := s.finishInspection(snapshot); err != nil {
+		return 0, err
+	}
+	return version, nil
+}
+
+func (s *Store) schemaVersionUnlocked() (int, error) {
 	db, err := s.database()
 	if err != nil {
 		return 0, err
@@ -256,6 +358,15 @@ func (s *Store) Sync(state domain.State, segments []journal.Segment) error {
 	if s.readOnly {
 		return fmt.Errorf("read-only projection cannot be synchronized")
 	}
+	unlock, err := s.acquireLock(true)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return s.syncUnlocked(state, segments)
+}
+
+func (s *Store) syncUnlocked(state domain.State, segments []journal.Segment) error {
 	db, err := s.database()
 	if err != nil {
 		return err
@@ -269,6 +380,29 @@ func (s *Store) Sync(state domain.State, segments []journal.Segment) error {
 		return err
 	}
 	defer tx.Rollback()
+	var incomingSequence uint64
+	var incomingHash string
+	if len(segments) > 0 {
+		incomingSequence = segments[len(segments)-1].Sequence
+		incomingHash = segments[len(segments)-1].SegmentHash
+	}
+	var currentSequence int64
+	var currentHash string
+	err = tx.QueryRow("SELECT sequence,hash FROM applied_segments ORDER BY sequence DESC LIMIT 1").Scan(&currentSequence, &currentHash)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err == nil {
+		if currentSequence < 0 {
+			return fmt.Errorf("projection cursor sequence is invalid")
+		}
+		if uint64(currentSequence) > incomingSequence {
+			return nil
+		}
+		if uint64(currentSequence) == incomingSequence && currentHash != incomingHash {
+			return fmt.Errorf("projection cursor conflicts with journal prefix at sequence %d", incomingSequence)
+		}
+	}
 	for _, table := range []string{"metadata", "applied_segments", "graph_revisions", "nodes", "edges", "roles", "attempts", "role_leases", "checkpoints", "decisions", "evidence_packages", "reuse_decisions", "actions", "outbox", "incidents", "resources", "evidence_index"} {
 		if _, err := tx.Exec("DELETE FROM " + table); err != nil {
 			return err
@@ -396,19 +530,42 @@ func (s *Store) Rebuild(state domain.State, segments []journal.Segment) error {
 	if s.readOnly {
 		return fmt.Errorf("read-only projection cannot be rebuilt")
 	}
+	unlock, err := s.acquireLock(true)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	_ = os.Remove(s.path + "-wal")
 	_ = os.Remove(s.path + "-shm")
-	created, err := Open(filepath.Dir(s.path))
-	if err != nil {
+	if err := s.initialize(); err != nil {
 		return err
 	}
-	return created.Sync(state, segments)
+	if err := os.Chmod(s.path, 0o600); err != nil {
+		return fmt.Errorf("harden rebuilt projection permissions: %w", err)
+	}
+	return s.syncUnlocked(state, segments)
 }
 
 func (s *Store) Integrity() error {
+	unlock, err := s.acquireLock(!s.readOnly)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	snapshot, err := s.beginInspection()
+	if err != nil {
+		return err
+	}
+	if err := s.integrityUnlocked(); err != nil {
+		return err
+	}
+	return s.finishInspection(snapshot)
+}
+
+func (s *Store) integrityUnlocked() error {
 	db, err := s.database()
 	if err != nil {
 		return err
@@ -431,6 +588,26 @@ func (s *Store) Integrity() error {
 // order. It deliberately ignores SQLite pages, WAL layout, and filesystem paths,
 // so an independently rebuilt database can be compared with the live projection.
 func (s *Store) Fingerprint() (LogicalFingerprint, error) {
+	unlock, err := s.acquireLock(!s.readOnly)
+	if err != nil {
+		return LogicalFingerprint{}, err
+	}
+	defer unlock()
+	snapshot, err := s.beginInspection()
+	if err != nil {
+		return LogicalFingerprint{}, err
+	}
+	result, err := s.fingerprintUnlocked()
+	if err != nil {
+		return LogicalFingerprint{}, err
+	}
+	if err := s.finishInspection(snapshot); err != nil {
+		return LogicalFingerprint{}, err
+	}
+	return result, nil
+}
+
+func (s *Store) fingerprintUnlocked() (LogicalFingerprint, error) {
 	db, err := s.database()
 	if err != nil {
 		return LogicalFingerprint{}, err

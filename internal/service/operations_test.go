@@ -14,6 +14,7 @@ import (
 
 	"github.com/CongBao/dagrail/internal/journal"
 	"github.com/CongBao/dagrail/internal/project"
+	"github.com/CongBao/dagrail/internal/projection"
 	"github.com/google/uuid"
 	"github.com/gowebpki/jcs"
 )
@@ -442,6 +443,45 @@ func TestAuthorityRelocationResumesAfterLocatorConfirmationFailure(t *testing.T)
 	if err != nil || visible.Config.ProjectID == legacyProjectID {
 		t.Fatalf("relocation did not reach the durable visible-locator prefix: %+v %v", visible, err)
 	}
+	replacementDataDir, err := project.DataDirForProjectID(visible.Config.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(replacementDataDir, "projection.sqlite")); err != nil {
+		t.Fatalf("relocation published the locator before its projection: %v", err)
+	}
+	inspection, err := projection.Inspect(replacementDataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inspection.Integrity(); err != nil {
+		t.Fatalf("relocation projection is not immediately inspectable: %v", err)
+	}
+	firstReceipt, err := RelocateAuthority(targetRoot, backup, legacyProjectID, report.HeadHash, reason, key)
+	if err != nil {
+		t.Fatalf("exact relocation retry did not return the committed receipt: %v", err)
+	}
+	if err := os.Remove(filepath.Join(replacementDataDir, "projection.sqlite")); err != nil {
+		t.Fatal(err)
+	}
+	missingReceipt, err := RelocateAuthority(targetRoot, backup, legacyProjectID, report.HeadHash, reason, key)
+	if err != nil || missingReceipt != firstReceipt {
+		t.Fatalf("exact retry did not rebuild a missing projection with the same receipt: %+v %v", missingReceipt, err)
+	}
+	if err := os.WriteFile(filepath.Join(replacementDataDir, "projection.sqlite"), []byte("corrupt projection"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repairedReceipt, err := RelocateAuthority(targetRoot, backup, legacyProjectID, report.HeadHash, reason, key)
+	if err != nil || repairedReceipt != firstReceipt {
+		t.Fatalf("exact retry did not repair a corrupt projection with the same receipt: %+v %v", repairedReceipt, err)
+	}
+	repaired, err := projection.Inspect(replacementDataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repaired.Integrity(); err != nil {
+		t.Fatalf("repaired relocation projection is not inspectable: %v", err)
+	}
 	advanced, err := Open(targetRoot)
 	if err != nil {
 		t.Fatal(err)
@@ -452,6 +492,9 @@ func TestAuthorityRelocationResumesAfterLocatorConfirmationFailure(t *testing.T)
 	receipt, err := RelocateAuthority(targetRoot, backup, legacyProjectID, report.HeadHash, reason, key)
 	if err != nil || receipt.ReplacementProjectID != visible.Config.ProjectID || VerifyAuthorityRelocationReceipt(receipt) != nil {
 		t.Fatalf("exact retry did not finish relocation: %+v %v", receipt, err)
+	}
+	if receipt != firstReceipt {
+		t.Fatalf("advanced relocation retry changed the committed receipt: first=%+v retry=%+v", firstReceipt, receipt)
 	}
 	validateLifecycleSchema(t, filepath.Join("..", "..", "schemas", "authority-relocation-v1alpha1.schema.json"), "urn:dagrail:authority-relocation", receipt)
 	otherTarget := t.TempDir()

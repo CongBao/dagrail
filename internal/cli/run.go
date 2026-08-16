@@ -165,7 +165,7 @@ func runLifecycle(args []string, stdout, stderr io.Writer) error {
 	}
 	switch args[0] {
 	case "projection":
-		s, err := service.OpenForRecovery(*root)
+		s, err := service.OpenForInspection(*root)
 		if err != nil {
 			return err
 		}
@@ -183,7 +183,7 @@ func runLifecycle(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		if args[0] == "validate-history" {
-			s, err := service.OpenForRecovery(*root)
+			s, err := service.OpenForInspection(*root)
 			if err != nil {
 				return err
 			}
@@ -299,7 +299,7 @@ func runUI(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 	// Explorer is a read-only observer; merely starting it cannot advance the
 	// journal or repair derived state.
-	s, err := service.OpenForRecovery(*root)
+	s, err := service.OpenForInspection(*root)
 	if err != nil {
 		return err
 	}
@@ -314,7 +314,7 @@ func runStatus(args []string, stdout, stderr io.Writer) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	s, err := service.Open(*root)
+	s, err := service.OpenForInspection(*root)
 	if err != nil {
 		return err
 	}
@@ -334,7 +334,7 @@ func runHistory(args []string, stdout, stderr io.Writer) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	s, err := service.Open(*root)
+	s, err := service.OpenForInspection(*root)
 	if err != nil {
 		return err
 	}
@@ -357,7 +357,11 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	s, err := service.Open(*root)
+	open := service.OpenForInspection
+	if args[0] == "restore" {
+		open = service.Open
+	}
+	s, err := open(*root)
 	if err != nil {
 		return err
 	}
@@ -472,7 +476,11 @@ func runProvider(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	s, err := service.Open(*root)
+	open := service.OpenForInspection
+	if args[0] == "invoke" {
+		open = service.Open
+	}
+	s, err := open(*root)
 	if err != nil {
 		return err
 	}
@@ -517,7 +525,7 @@ func runEvidence(args []string, stdout, stderr io.Writer) error {
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	s, err := service.Open(*root)
+	s, err := service.OpenForInspection(*root)
 	if err != nil {
 		return err
 	}
@@ -729,7 +737,7 @@ func runInspect(args []string, stdout, stderr io.Writer) error {
 	if flags.NArg() != 1 {
 		return fmt.Errorf("usage: dagrail inspect [--root path] kind:id")
 	}
-	s, err := service.Open(*root)
+	s, err := service.OpenForInspection(*root)
 	if err != nil {
 		return err
 	}
@@ -747,7 +755,7 @@ func runPreWait(args []string, stdout, stderr io.Writer) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	s, err := service.Open(*root)
+	s, err := service.OpenForInspection(*root)
 	if err != nil {
 		return err
 	}
@@ -809,7 +817,11 @@ func runAction(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	s, err := service.Open(*root)
+	open := service.OpenForInspection
+	if args[0] == "apply" {
+		open = service.Open
+	}
+	s, err := open(*root)
 	if err != nil {
 		return err
 	}
@@ -846,7 +858,7 @@ func runContext(args []string, stdout, stderr io.Writer) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	s, err := service.Open(*root)
+	s, err := service.OpenForInspection(*root)
 	if err != nil {
 		return err
 	}
@@ -918,7 +930,7 @@ func runGraph(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		s, err := service.Open(*root)
+		s, err := service.OpenForInspection(*root)
 		if err != nil {
 			return err
 		}
@@ -954,7 +966,7 @@ func runGraph(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		if *file == "" {
 			return fmt.Errorf("--file is required")
 		}
-		s, err := service.Open(*root)
+		s, err := service.OpenForInspection(*root)
 		if err != nil {
 			return err
 		}
@@ -999,7 +1011,7 @@ func runFrontier(args []string, stdout, stderr io.Writer) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	s, err := service.Open(*root)
+	s, err := service.OpenForInspection(*root)
 	if err != nil {
 		return err
 	}
@@ -1025,7 +1037,11 @@ func runJournal(args []string, stdout, stderr io.Writer) error {
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	s, err := service.Open(*root)
+	open := service.OpenForInspection
+	if args[0] == "replay" {
+		open = service.Open
+	}
+	s, err := open(*root)
 	if err != nil {
 		return err
 	}
@@ -1079,7 +1095,7 @@ func runSecurity(args []string, stdout, stderr io.Writer) error {
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	s, err := service.Open(*root)
+	s, err := service.OpenForInspection(*root)
 	if err != nil {
 		return err
 	}
@@ -1104,7 +1120,7 @@ func runSupport(args []string, stdout, stderr io.Writer) error {
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	s, err := service.Open(*root)
+	s, err := service.OpenForInspection(*root)
 	if err != nil {
 		return err
 	}
@@ -1362,7 +1378,7 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if flags.NArg() != 0 {
 		return usagef("usage: dagrail doctor [--root path]")
 	}
-	s, err := service.Open(*root)
+	s, err := service.OpenForInspection(*root)
 	if err != nil {
 		return err
 	}

@@ -91,6 +91,7 @@ type storeCapability uint8
 const (
 	storeCapabilityOrdinary storeCapability = iota
 	storeCapabilityEstablishment
+	storeCapabilityInspection
 	storeCapabilityRecovery
 	storeCapabilityRehearsal
 )
@@ -134,6 +135,39 @@ func Open(dataDir, projectID string) (*Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+// OpenInspection applies the same claim and establishment validation as Open,
+// but the returned handle cannot append or restore journal content.
+func OpenInspection(dataDir, projectID string) (*Store, error) {
+	store, err := openExisting(dataDir, projectID, storeCapabilityInspection)
+	if err != nil {
+		return nil, err
+	}
+	if err := project.ValidateAuthorityClaim(dataDir, projectID); err != nil {
+		return nil, err
+	}
+	segments, err := store.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	if err := validateEstablishedAuthorityPrefix(projectID, segments); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+func openExisting(dataDir, projectID string, capability storeCapability) (*Store, error) {
+	dir := filepath.Join(dataDir, "journal")
+	if info, err := os.Lstat(dir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("journal path must be an existing non-symlink directory")
+	}
+	lockPath := filepath.Join(dataDir, "writer.lock")
+	if info, err := os.Lstat(lockPath); err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("writer lock must be an existing regular non-symlink file")
+	}
+	mutex, _ := processLocks.LoadOrStore(lockPath, &sync.Mutex{})
+	return &Store{dir: dir, projectID: projectID, capability: capability, lock: flock.New(lockPath), mu: mutex.(*sync.Mutex)}, nil
 }
 
 // OpenForAuthorityEstablishment opens a claimed, empty authority only for its
@@ -638,6 +672,23 @@ func (s *Store) ReadAll() ([]Segment, error) {
 	var result []Segment
 	err := s.WithLock(func() error { var err error; result, err = s.readAllUnlocked(); return err })
 	return result, err
+}
+
+// WithSnapshot verifies the current journal and keeps the writer lock held while
+// the caller consumes that exact prefix. It is used when a derived projection must
+// be published without allowing a newer journal prefix to be overwritten by the
+// older snapshot.
+func (s *Store) WithSnapshot(consume func([]Segment) error) error {
+	if consume == nil {
+		return fmt.Errorf("journal snapshot consumer is required")
+	}
+	return s.WithLock(func() error {
+		segments, err := s.readAllUnlocked()
+		if err != nil {
+			return err
+		}
+		return consume(segments)
+	})
 }
 
 // ValidateSegments verifies an in-memory portable journal without writing it.

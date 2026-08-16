@@ -134,7 +134,10 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 4. Every external effect has a stable action ID; ambiguity requires reconcile, never blind retry.
 5. Active Node identity, kind, objective, and input contract are frozen. Terminal history is append-only.
 6. Hooks may discover, inject bounded context, and observe sessions; they cannot transition lifecycle state.
-   Explorer and hook startup use a read-only open and cannot settle automatic Nodes.
+   Explorer, hooks, and public project queries use a read-only open and cannot settle
+   automatic Nodes, synchronize the projection, or create SQLite sidecars. Explicit
+   output artifacts are outside this protected-project boundary. Diagnostics fail
+   closed rather than ignore or checkpoint an existing WAL/SHM state.
 7. Unknown event types and future unsupported journal schemas fail closed.
 8. Secrets, PII, full prompts, transcripts, and large artifact bodies do not enter authority.
 9. A harness protocol capability is not a durable lifecycle capability until it is

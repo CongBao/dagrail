@@ -188,3 +188,15 @@ vocabulary, repository paths, and cutover policy are not shipped as DAGrail cont
   deterministic fresh UUID without reviving or copying an existing authority;
 - keep relocation fence-only so Graph/history bootstrap and cutover parity remain
   explicit later steps.
+
+## v0.22.2 — Byte-read-only operational inspection
+
+- make public project queries derive operational state from the immutable journal
+  without open-time automatic settlement or projection synchronization;
+- make SQLite schema, integrity, and logical-fingerprint inspection avoid WAL/SHM
+  creation on the protected runtime and fail closed on uncheckpointed sidecars;
+- establish the replacement projection before relocation publishes its locator, with
+  idempotent recovery from missing or corrupt derived cache state and no concurrent
+  cursor regression;
+- add a real subprocess preflight matrix that hashes the complete project locator and
+  runtime before and after every supported read surface, including a stale cache.

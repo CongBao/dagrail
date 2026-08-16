@@ -466,6 +466,54 @@ func TestJournalProcessHelper(t *testing.T) {
 	}
 }
 
+func TestWithSnapshotHoldsWriterLockThroughConsumer(t *testing.T) {
+	store, err := openClaimed(t, t.TempDir(), reliabilityProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := appendReliabilityEvent(store, "snapshot-base"); err != nil {
+		t.Fatal(err)
+	}
+	consumerStarted := make(chan struct{})
+	releaseConsumer := make(chan struct{})
+	snapshotDone := make(chan error, 1)
+	go func() {
+		snapshotDone <- store.WithSnapshot(func(segments []Segment) error {
+			if len(segments) != 1 {
+				return fmt.Errorf("snapshot contains %d segments", len(segments))
+			}
+			close(consumerStarted)
+			<-releaseConsumer
+			return nil
+		})
+	}()
+	<-consumerStarted
+	appendStarted := make(chan struct{})
+	appendDone := make(chan error, 1)
+	go func() {
+		close(appendStarted)
+		_, _, appendErr := appendReliabilityEvent(store, "snapshot-concurrent")
+		appendDone <- appendErr
+	}()
+	<-appendStarted
+	select {
+	case err := <-appendDone:
+		t.Fatalf("journal append crossed an active snapshot consumer: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseConsumer)
+	if err := <-snapshotDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-appendDone; err != nil {
+		t.Fatal(err)
+	}
+	segments, err := store.ReadAll()
+	if err != nil || len(segments) != 2 {
+		t.Fatalf("append did not resume after snapshot consumer: segments=%d err=%v", len(segments), err)
+	}
+}
+
 func FuzzValidateSegments(f *testing.F) {
 	validPayload, _ := json.Marshal([]Segment{})
 	f.Add(validPayload)

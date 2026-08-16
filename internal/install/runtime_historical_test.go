@@ -90,10 +90,15 @@ func TestHistoricalBinaryCompatibilityWindow(t *testing.T) {
 	runHistorical(t, binaries[0].path, dataRoot, "init", "--root", projectRoot, "--name", "beta-window")
 	runHistorical(t, binaries[0].path, dataRoot, "graph", "import", "--root", projectRoot, "--file", graphPath, "--idempotency-key", "beta-window-import")
 	var legacyVerifyOutput string
-	for _, binary := range binaries[:len(binaries)-2] {
+	for _, binary := range binaries {
+		if binary.version == "0.22.0" {
+			break
+		}
 		legacyVerifyOutput = runHistorical(t, binary.path, dataRoot, "journal", "verify", "--root", projectRoot)
 	}
-	runHistoricalFailure(t, binaryByVersion["0.22.0"].path, dataRoot, "journal", "verify", "--root", projectRoot)
+	for _, releaseVersion := range []string{"0.22.0", "0.22.1"} {
+		runHistoricalFailure(t, binaryByVersion[releaseVersion].path, dataRoot, "journal", "verify", "--root", projectRoot)
+	}
 	runHistoricalFailure(t, currentBinary, dataRoot, "journal", "verify", "--root", projectRoot)
 	legacyLocator, err := os.ReadFile(filepath.Join(projectRoot, ".dagrail", "project.yaml"))
 	if err != nil {

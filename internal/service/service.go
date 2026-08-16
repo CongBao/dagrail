@@ -32,40 +32,62 @@ type Service struct {
 	ConfirmLocator                func(string) error
 	beforeLegacyAuthoritySnapshot func()
 	recoveryInspection            bool
+	readOnlyInspection            bool
 }
 
+type openMode uint8
+
+const (
+	openOrdinary openMode = iota
+	openInspection
+	openRecovery
+)
+
 func Open(root string) (*Service, error) {
-	return open(root, false, true)
+	return open(root, openOrdinary, true)
+}
+
+// OpenForInspection preserves ordinary authority validation while preventing
+// lifecycle settlement, journal mutation, and projection synchronization.
+func OpenForInspection(root string) (*Service, error) {
+	return open(root, openInspection, false)
 }
 
 // OpenForRecovery opens existing authority and projection state without automatic
 // node settlement, projection migration, repair, or synchronization.
 func OpenForRecovery(root string) (*Service, error) {
-	return open(root, true, false)
+	return open(root, openRecovery, false)
 }
 
 // OpenForMigration opens writable local projections without running derived
 // automatic Node settlement before a migration's expected-head validation.
 func OpenForMigration(root string) (*Service, error) {
-	return open(root, false, false)
+	return open(root, openOrdinary, false)
 }
 
-func open(root string, recoveryInspection, settle bool) (*Service, error) {
-	p, err := project.Open(root)
+func open(root string, mode openMode, settle bool) (*Service, error) {
+	openProject := project.Open
+	if mode == openInspection {
+		openProject = project.OpenInspection
+	}
+	p, err := openProject(root)
 	if err != nil {
 		return nil, err
 	}
 	var j *journal.Store
-	if recoveryInspection {
+	switch mode {
+	case openRecovery:
 		j, err = journal.OpenRecovery(p.DataDir, p.Config.ProjectID)
-	} else {
+	case openInspection:
+		j, err = journal.OpenInspection(p.DataDir, p.Config.ProjectID)
+	default:
 		j, err = journal.Open(p.DataDir, p.Config.ProjectID)
 	}
 	if err != nil {
 		return nil, err
 	}
 	var projectionStore *projection.Store
-	if recoveryInspection {
+	if mode != openOrdinary {
 		projectionStore, err = projection.Inspect(p.DataDir)
 	} else {
 		projectionStore, err = projection.Open(p.DataDir)
@@ -114,8 +136,18 @@ func open(root string, recoveryInspection, settle bool) (*Service, error) {
 			return nil, registerErr
 		}
 	}
-	service := &Service{Project: p, Journal: j, Projection: projectionStore, Providers: registry, ProviderRuntime: internalproviders.NewRuntime(registry), Now: time.Now, ConfirmLocator: project.SyncProjectLocator, recoveryInspection: recoveryInspection}
-	if recoveryInspection {
+	service := &Service{Project: p, Journal: j, Projection: projectionStore, Providers: registry, ProviderRuntime: internalproviders.NewRuntime(registry), Now: time.Now, ConfirmLocator: project.SyncProjectLocator, recoveryInspection: mode == openRecovery, readOnlyInspection: mode == openInspection}
+	if mode == openInspection {
+		segments, err := j.ReadAll()
+		if err != nil {
+			return nil, err
+		}
+		if err := validateCurrentAuthority(p, segments); err != nil {
+			return nil, err
+		}
+		return service, nil
+	}
+	if mode == openRecovery {
 		return service, nil
 	}
 	if settle {
@@ -329,11 +361,16 @@ func (s *Service) State() (domain.State, error) { state, _, err := s.load(); ret
 func (s *Service) VerifyJournal() ([]journal.Segment, error) { return s.Journal.ReadAll() }
 
 func (s *Service) RebuildProjection() error {
-	state, segments, err := s.load()
-	if err != nil {
-		return err
-	}
-	return s.Projection.Rebuild(state, segments)
+	return s.Journal.WithSnapshot(func(segments []journal.Segment) error {
+		if err := validateCurrentAuthority(s.Project, segments); err != nil {
+			return err
+		}
+		state, err := reduceSegments(s.Project.Config.ProjectID, segments)
+		if err != nil {
+			return err
+		}
+		return s.Projection.Rebuild(state, segments)
+	})
 }
 
 func (s *Service) load() (domain.State, []journal.Segment, error) {

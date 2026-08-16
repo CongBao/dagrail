@@ -29,7 +29,7 @@ func TestReadOnlyOpenDoesNotSettlePendingAutomaticNode(t *testing.T) {
 	if _, err := svc.Journal.Append(journal.Command{ID: "read-only-gap", Kind: "graph.import", ActorRole: "bootstrap", IdempotencyKey: "read-only-gap", ObjectRef: "graph:" + revision}, []journal.Event{{Type: "graph.imported", Payload: payload}}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	inspected, err := OpenForRecovery(root)
+	inspected, err := OpenForInspection(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +43,66 @@ func TestReadOnlyOpenDoesNotSettlePendingAutomaticNode(t *testing.T) {
 	segments, err := inspected.VerifyJournal()
 	if err != nil || len(segments) != 2 {
 		t.Fatalf("read-only open changed journal: segments=%d err=%v", len(segments), err)
+	}
+}
+
+func TestInspectionOpenPreservesAuthorityValidation(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, "runtime"))
+	svc, err := Init(root, "strict-inspection")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(svc.Project.DataDir, "authority-claim.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenForInspection(root); err == nil {
+		t.Fatal("inspection open accepted an authority with no valid local claim")
+	}
+	if _, err := OpenForRecovery(root); err != nil {
+		t.Fatalf("explicit recovery open could not inspect the invalid authority: %v", err)
+	}
+}
+
+func TestInspectionOpenDoesNotMaterializeMissingRuntime(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(t.TempDir(), "source-runtime"))
+	if _, err := Init(root, "missing-inspection-runtime"); err != nil {
+		t.Fatal(err)
+	}
+	missingHome := filepath.Join(t.TempDir(), "missing-runtime")
+	t.Setenv("DAGRAIL_HOME", missingHome)
+	if _, err := OpenForInspection(root); err == nil {
+		t.Fatal("inspection open accepted a locator whose runtime does not exist")
+	}
+	if _, err := os.Lstat(missingHome); !os.IsNotExist(err) {
+		t.Fatalf("inspection open materialized a missing runtime: %v", err)
+	}
+}
+
+func TestInspectionOpenCannotMutateAuthority(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, "runtime"))
+	if _, err := Init(root, "immutable-inspection"); err != nil {
+		t.Fatal(err)
+	}
+	inspected, err := OpenForInspection(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := inspected.VerifyJournal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inspected.Journal.Append(journal.Command{ID: "forbidden", Kind: "test", IdempotencyKey: "forbidden"}, []journal.Event{{Type: "test", Payload: json.RawMessage(`{}`)}}, time.Now()); err == nil {
+		t.Fatal("inspection journal accepted an ordinary append")
+	}
+	if _, err := inspected.AdoptLegacyAuthority(inspected.Project.Config.ProjectID, before[len(before)-1].SegmentHash, "forbidden", "forbidden/adoption"); err == nil {
+		t.Fatal("inspection service accepted authority adoption")
+	}
+	after, err := inspected.VerifyJournal()
+	if err != nil || len(after) != len(before) || after[len(after)-1].SegmentHash != before[len(before)-1].SegmentHash {
+		t.Fatalf("inspection mutation attempt changed authority: before=%d after=%d err=%v", len(before), len(after), err)
 	}
 }
 

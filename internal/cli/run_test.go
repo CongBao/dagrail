@@ -2,9 +2,13 @@ package cli_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +16,171 @@ import (
 	"github.com/CongBao/dagrail/internal/cli"
 	"github.com/CongBao/dagrail/internal/service"
 )
+
+func TestRelocationPreflightReadSurfacesDoNotMutateProtectedProjectBytes(t *testing.T) {
+	root := t.TempDir()
+	artifactRoot := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(t.TempDir(), "runtime"))
+	graphPath := filepath.Join(root, "graph.json")
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"read-surface"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"task","kind":"task","role":"worker","title":"task","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
+	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) (string, error) {
+		var stdout, stderr bytes.Buffer
+		err := cli.Run(args, strings.NewReader(""), &stdout, &stderr)
+		return stdout.String(), err
+	}
+	if _, err := run("init", "--root", root, "--name", "read-surface"); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := service.OpenForRecovery(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectionPath := filepath.Join(svc.Project.DataDir, "projection.sqlite")
+	staleProjection, err := os.ReadFile(projectionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("graph", "import", "--root", root, "--file", graphPath, "--idempotency-key", "graph/import"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("role", "bind", "--root", root, "--role", "worker", "--harness", "codex", "--session", "read-surface", "--ttl", "1h", "--idempotency-key", "role/bind"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("action", "list", "--root", root, "--role", "worker", "--node", "task"); err != nil {
+		t.Fatal(err)
+	}
+	seedBackup := filepath.Join(artifactRoot, "seed-backup.json")
+	if _, err := run("backup", "create", "--root", root, "--output", seedBackup); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "status", args: []string{"status", "--root", root}},
+		{name: "history", args: []string{"history", "--root", root}},
+		{name: "provider-list", args: []string{"provider", "list", "--root", root}},
+		{name: "provider-check", args: []string{"provider", "check", "--root", root}},
+		{name: "evidence-list", args: []string{"evidence", "list", "--root", root}},
+		{name: "inspect-node", args: []string{"inspect", "--root", root, "node:task"}},
+		{name: "action-list", args: []string{"action", "list", "--root", root, "--role", "worker", "--node", "task"}},
+		{name: "context", args: []string{"context", "--root", root, "--view", "orchestrator"}},
+		{name: "graph-export", args: []string{"graph", "export", "--root", root, "--format", "json"}},
+		{name: "frontier", args: []string{"frontier", "--root", root, "--format", "json"}},
+		{name: "journal-verify", args: []string{"journal", "verify", "--root", root}},
+		{name: "journal-compatibility", args: []string{"journal", "compatibility", "--root", root}},
+		{name: "journal-export", args: []string{"journal", "export", "--root", root}},
+		{name: "lifecycle-projection", args: []string{"lifecycle", "projection", "--root", root}},
+		{name: "pre-wait", args: []string{"pre-wait", "--root", root}},
+		{name: "backup-create", args: []string{"backup", "create", "--root", root, "--output", filepath.Join(artifactRoot, "created-backup.json")}},
+		{name: "backup-verify", args: []string{"backup", "verify", "--root", root, "--file", seedBackup}},
+		{name: "doctor", args: []string{"doctor", "--root", root}},
+		{name: "security-audit", args: []string{"security", "audit", "--root", root}},
+		{name: "support-preview", args: []string{"support", "preview", "--root", root}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := os.WriteFile(projectionPath, staleProjection, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			before := protectedProjectSnapshot(t, root, svc.Project.DataDir)
+			runReadSurfaceCLI(t, test.args...)
+			after := protectedProjectSnapshot(t, root, svc.Project.DataDir)
+			if !reflect.DeepEqual(before, after) {
+				t.Fatalf("read surface mutated protected bytes: %v", changedSnapshotPaths(before, after))
+			}
+		})
+	}
+	if _, err := run("projection", "rebuild", "--root", root); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("recovery-rehearse", func(t *testing.T) {
+		before := protectedProjectSnapshot(t, root, svc.Project.DataDir)
+		runReadSurfaceCLI(t, "recovery", "rehearse", "--root", root)
+		after := protectedProjectSnapshot(t, root, svc.Project.DataDir)
+		if !reflect.DeepEqual(before, after) {
+			t.Fatalf("read surface mutated protected bytes: %v", changedSnapshotPaths(before, after))
+		}
+	})
+}
+
+func TestReadSurfaceCLIHelper(t *testing.T) {
+	if os.Getenv("DAGRAIL_READ_SURFACE_HELPER") != "1" {
+		return
+	}
+	separator := -1
+	for index, arg := range os.Args {
+		if arg == "--" {
+			separator = index
+			break
+		}
+	}
+	if separator < 0 || separator+1 >= len(os.Args) {
+		t.Fatal("missing helper command")
+	}
+	if err := cli.Run(os.Args[separator+1:], strings.NewReader(""), os.Stdout, os.Stderr); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runReadSurfaceCLI(t *testing.T, args ...string) {
+	t.Helper()
+	commandArgs := append([]string{"-test.run=^TestReadSurfaceCLIHelper$", "--"}, args...)
+	command := exec.Command(os.Args[0], commandArgs...)
+	command.Env = append(os.Environ(), "DAGRAIL_READ_SURFACE_HELPER=1")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("read surface subprocess failed: %v: %s", err, output)
+	}
+}
+
+func protectedProjectSnapshot(t *testing.T, root, dataDir string) map[string][sha256.Size]byte {
+	t.Helper()
+	result := map[string][sha256.Size]byte{}
+	for label, base := range map[string]string{"project": filepath.Join(root, ".dagrail"), "runtime": dataDir} {
+		err := filepath.WalkDir(base, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			relative, err := filepath.Rel(base, path)
+			if err != nil {
+				return err
+			}
+			result[label+"/"+filepath.ToSlash(relative)] = sha256.Sum256(raw)
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return result
+}
+
+func changedSnapshotPaths(before, after map[string][sha256.Size]byte) []string {
+	changed := []string{}
+	for path, digest := range before {
+		if after[path] != digest {
+			changed = append(changed, path)
+		}
+	}
+	for path := range after {
+		if _, ok := before[path]; !ok {
+			changed = append(changed, path)
+		}
+	}
+	sort.Strings(changed)
+	return changed
+}
 
 func TestLifecycleCLIRequiresIndependentTrustAnchorAndImportsAtomically(t *testing.T) {
 	root := t.TempDir()

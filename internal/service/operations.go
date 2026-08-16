@@ -15,6 +15,7 @@ import (
 	"github.com/CongBao/dagrail/internal/domain"
 	"github.com/CongBao/dagrail/internal/journal"
 	"github.com/CongBao/dagrail/internal/project"
+	"github.com/CongBao/dagrail/internal/projection"
 	"github.com/google/uuid"
 	"github.com/gowebpki/jcs"
 )
@@ -213,6 +214,9 @@ func (s *Service) RestoreBackup(data []byte) (BackupReport, error) {
 // Its verified journal remains immutable source evidence for graph/lifecycle
 // import into the fence-only replacement authority.
 func (s *Service) AdoptLegacyAuthority(expectedProjectID, expectedHead, reason, idempotencyKey string) (AuthorityAdoptionReceipt, error) {
+	if s.readOnlyInspection {
+		return AuthorityAdoptionReceipt{}, fmt.Errorf("read-only inspection cannot adopt legacy authority")
+	}
 	if strings.TrimSpace(expectedProjectID) == "" || strings.TrimSpace(reason) == "" || len([]byte(reason)) > 1024 || strings.TrimSpace(idempotencyKey) == "" || len([]byte(idempotencyKey)) > 256 {
 		return AuthorityAdoptionReceipt{}, fmt.Errorf("expected project ID, reason, and idempotency key are required")
 	}
@@ -344,6 +348,9 @@ func (s *Service) AdoptLegacyAuthority(expectedProjectID, expectedHead, reason, 
 // RotateAuthority creates a replacement Project identity from an authenticated
 // backup prefix without truncating or rewriting the previous journal.
 func (s *Service) RotateAuthority(data []byte, expectedCurrentHead, reason, idempotencyKey string) (AuthorityRotationReceipt, error) {
+	if s.readOnlyInspection {
+		return AuthorityRotationReceipt{}, fmt.Errorf("read-only inspection cannot rotate authority")
+	}
 	if expectedCurrentHead == "" || strings.TrimSpace(reason) == "" || len([]byte(reason)) > 1024 || strings.TrimSpace(idempotencyKey) == "" || len([]byte(idempotencyKey)) > 256 {
 		return AuthorityRotationReceipt{}, fmt.Errorf("expected current head, reason, and idempotency key are required")
 	}
@@ -641,6 +648,9 @@ func prepareAndPublishRelocation(targetRoot string, retirement authorityRetireme
 	if _, err := replacementJournal.EstablishAuthority(raw, establishedAt); err != nil {
 		return err
 	}
+	if err := prepareReplacementProjection(dataDir, retirement.ReplacementProjectID, replacementJournal); err != nil {
+		return err
+	}
 	if _, err := project.RotateAuthority(targetRoot, retirement.PreviousLocatorID, retirement.ReplacementProjectID, lineage); err != nil {
 		return err
 	}
@@ -772,10 +782,27 @@ func (s *Service) prepareAndPublishReplacement(retirement authorityRetirement, r
 	if _, err := replacementJournal.EstablishAuthority(raw, establishedAt); err != nil {
 		return err
 	}
+	if err := prepareReplacementProjection(dataDir, retirement.ReplacementProjectID, replacementJournal); err != nil {
+		return err
+	}
 	if _, err := project.RotateAuthority(s.Project.Root, retirement.PreviousProjectID, retirement.ReplacementProjectID, lineage); err != nil {
 		return err
 	}
 	return s.confirmProjectLocator()
+}
+
+func prepareReplacementProjection(dataDir, projectID string, replacementJournal *journal.Store) error {
+	return replacementJournal.WithSnapshot(func(segments []journal.Segment) error {
+		state, err := reduceSegments(projectID, segments)
+		if err != nil {
+			return err
+		}
+		replacementProjection, err := projection.Open(dataDir)
+		if err != nil {
+			return err
+		}
+		return replacementProjection.Rebuild(state, segments)
+	})
 }
 
 func (s *Service) retryLegacyAuthorityAdoption(previousProjectID, previousHead, reason, idempotencyKey string) (AuthorityAdoptionReceipt, error) {

@@ -2,6 +2,31 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.22.2 — 2026-08-17
+
+### Fixed
+
+- project query commands no longer run automatic lifecycle settlement or synchronize
+  `projection.sqlite` as a hidden open-time side effect;
+- read-only projection diagnostics inspect only a stable checkpointed SQLite image and
+  fail closed when WAL/SHM state is present, without creating or checkpointing sidecars;
+- authority relocation now creates and verifies the fence-only projection before the
+  replacement locator becomes visible, matching adoption and rotation ordering;
+- replacement projection rebuilds consume a writer-locked journal snapshot, and normal
+  projection synchronization never lets an older cursor overwrite a newer one;
+- inspection keeps ordinary claim, establishment-fence, and lineage validation and
+  fails on a missing runtime without materializing directories; only explicit recovery
+  operations retain the relaxed evidence-open capability;
+- `status`, `journal verify`, `lifecycle projection`, `pre-wait`, and portable backup
+  create/verify now have an executable byte-nonmutation contract, including when the
+  disposable projection cache is stale.
+
+### Boundaries
+
+- backup/support/journal exports may create only their explicitly requested output
+  artifact outside the protected project; a red `pre-wait` report remains a semantic
+  liveness result and does not itself repair imported attempts, leases, or resources.
+
 ## 0.22.1 — 2026-08-16
 
 ### Added

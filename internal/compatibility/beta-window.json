@@ -2,7 +2,7 @@
   "apiVersion": "dagrail.io/historical-binary-matrix/v1alpha1",
   "kind": "HistoricalBinaryMatrix",
   "fromVersion": "0.10.0",
-  "currentVersion": "0.22.1",
+  "currentVersion": "0.22.2",
   "entries": [
     {"version": "0.10.0", "commit": "0babcaf61253bdbd63cb6fd7634f06471932f4ff"},
     {"version": "0.11.0", "commit": "25da75b8e6d26ded6e0202871116b5465f5793cc"},
@@ -16,6 +16,7 @@
     {"version": "0.19.0", "commit": "aad38b069814c02bdbc9955574f25dfa4ebb3c11"},
     {"version": "0.20.0", "commit": "e25e3bad0bb03428471d03981d3ffd4711db9384"},
     {"version": "0.21.0", "commit": "b6d5a19dcf8f33d0d453d2f5e66976c873f63e6d"},
-    {"version": "0.22.0", "commit": "11ffca31dc577632431c04aa4cfa66a6f2bc5e7f"}
+    {"version": "0.22.0", "commit": "11ffca31dc577632431c04aa4cfa66a6f2bc5e7f"},
+    {"version": "0.22.1", "commit": "41b994a18bd33235befd18d6995590995308aae0"}
   ]
 }

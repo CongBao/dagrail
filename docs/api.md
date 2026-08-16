@@ -75,6 +75,26 @@ requires an actor Role label and stable idempotency key. It is deliberately abse
 MCP so an agent cannot turn source-specific conversion or cutover into an ordinary
 allowed action. `lifecycle projection` is read-only and deterministic.
 
+Project query opens are byte-nonmutating. In particular, `status`, `history`,
+`context`, `frontier`, `inspect`, `evidence list`, `pre-wait`, `doctor`, `security
+audit`, `journal verify|compatibility|export`, `backup create|verify`, `graph export`,
+`provider list|check`, `support preview|export`, `recovery rehearse`, and lifecycle
+validation/projection do not settle automatic Nodes, synchronize the disposable
+projection, or create SQLite WAL/SHM files. Commands that name an output path may write
+only that separate artifact. Projection diagnostics inspect a stable checkpointed
+SQLite image; any existing WAL/SHM state fails closed instead of being ignored or
+checkpointed. Journal-derived query state remains authoritative. Inspection still
+requires the ordinary local authority claim, establishment fence, and lineage and does
+not create a missing runtime. A failing query report does not authorize or perform
+repair; relaxed authority access exists only behind explicit recovery commands.
+
+Authority adoption, rotation, and relocation publish a replacement locator only after
+the schema-4 establishment fence and its rebuildable projection are both durable. An
+exact retry may recreate a missing or corrupt projection from the replacement journal
+without changing the committed recovery receipt. The journal snapshot remains writer
+locked through that rebuild, and projection synchronization never moves its journal
+cursor backward.
+
 `dagrail readiness` returns ReadinessDecision v1alpha1. It combines source
 qualification with the closed beta compatibility window and optional project or local
 installation checks. A successful process exit means `externalValidationReady`, not

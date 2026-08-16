@@ -149,7 +149,7 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 		addOptional("project-recovery", "optional_project_not_supplied")
 	} else {
 		report.ProjectEvidence = true
-		projectService, openErr := service.OpenForRecovery(projectRoot)
+		projectService, openErr := service.OpenForInspection(projectRoot)
 		if openErr != nil {
 			add("project-security", false, "project_open_failed")
 			add("project-recovery", false, "project_open_failed")

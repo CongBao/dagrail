@@ -45,7 +45,7 @@ func Run(harness, event, root string, reader io.Reader) (Output, bool, error) {
 	// Hooks are observational. In particular, opening a project here must not
 	// settle automatic Nodes or repair/synchronize a projection as a hidden
 	// lifecycle side effect.
-	svc, err := service.OpenForRecovery(root)
+	svc, err := service.OpenForInspection(root)
 	if err != nil {
 		return Output{}, false, nil
 	}
