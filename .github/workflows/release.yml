@@ -30,6 +30,7 @@ jobs:
           go test ./internal/journal -run '^$' -fuzz '^FuzzValidateSegments$' -fuzztime=5s
           go test ./internal/service -run '^$' -fuzz '^FuzzDecodeGraphDefinition$' -fuzztime=5s
           go test ./internal/service -run '^$' -fuzz '^FuzzDecodeGraphPatch$' -fuzztime=5s
+          go test ./internal/service -run '^$' -fuzz '^FuzzDecodeLifecycleMigrationAuthority$' -fuzztime=5s
           go test ./internal/harness -run '^$' -fuzz '^FuzzNativeReceiptConformance$' -fuzztime=5s
           go test ./internal/release -run '^$' -fuzz '^FuzzReleaseMetadataInputs$' -fuzztime=5s
       - name: Verify structural release qualification

@@ -74,7 +74,7 @@ func TestImporterAndProjectionProvidersUseBoundedRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(segments) != 1 || !strings.Contains(string(segments[0].Events[0].Payload), `"kind":"provider"`) || !strings.Contains(string(segments[0].Events[0].Payload), `"inputDigest":"sha256:`) {
+	if len(segments) != 2 || !strings.Contains(string(segments[1].Events[0].Payload), `"kind":"provider"`) || !strings.Contains(string(segments[1].Events[0].Payload), `"inputDigest":"sha256:`) {
 		t.Fatalf("import provenance was not journaled: %+v", segments)
 	}
 
@@ -82,7 +82,7 @@ func TestImporterAndProjectionProvidersUseBoundedRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(projection.Output), `"events":1`) {
+	if !strings.Contains(string(projection.Output), `"events":2`) {
 		t.Fatalf("unexpected projection: %s", projection.Output)
 	}
 }

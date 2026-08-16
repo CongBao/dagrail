@@ -24,11 +24,14 @@ type DiagnosticBundle struct {
 }
 
 type DiagnosticHarness struct {
-	ID            string `json:"id"`
-	Detected      bool   `json:"detected"`
-	PluginStatus  string `json:"pluginStatus"`
-	MCPConfigured bool   `json:"mcpConfigured"`
-	Ready         bool   `json:"ready"`
+	ID                     string `json:"id"`
+	Detected               bool   `json:"detected"`
+	PluginStatus           string `json:"pluginStatus"`
+	MCPConfigured          bool   `json:"mcpConfigured"`
+	ConfigurationReady     bool   `json:"configurationReady"`
+	Ready                  bool   `json:"ready"`
+	CurrentProcessVerified bool   `json:"currentProcessVerified"`
+	Activation             string `json:"activation"`
 }
 
 type DiagnosticCheck struct {
@@ -107,8 +110,12 @@ func Diagnose(ctx context.Context, options Options) (InstallationDiagnostic, err
 	}
 	for _, state := range states {
 		detected := state.Status != "not_detected"
-		item := DiagnosticHarness{ID: state.Harness, Detected: detected, PluginStatus: state.Status, MCPConfigured: state.MCPConfigured}
-		item.Ready = detected && state.Status == "installed" && state.MCPConfigured
+		item := DiagnosticHarness{ID: state.Harness, Detected: detected, PluginStatus: state.Status, MCPConfigured: state.MCPConfigured, CurrentProcessVerified: false, Activation: "fresh-session-or-cli-fallback"}
+		item.ConfigurationReady = detected && state.Status == "installed" && state.MCPConfigured
+		// v1alpha1 Ready is activation readiness, not persisted registration
+		// health. No supported probe proves the caller's already-running harness
+		// loaded the new MCP registration, so it remains false.
+		item.Ready = item.ConfigurationReady && item.CurrentProcessVerified
 		report.Harnesses = append(report.Harnesses, item)
 		add("harness."+state.Harness+".detected", detected, "harness_detected", "harness_not_detected")
 		add("harness."+state.Harness+".plugin", state.Status == "installed", "plugin_installed", "plugin_not_installed")

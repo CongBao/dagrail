@@ -6,43 +6,50 @@ an existing controller automatically.
 
 ## Contract
 
-An external converter produces a `LifecycleMigration` v1alpha1 JSON file. The converter
-may understand a requirement tool, registry, issue tracker, or another controller;
+An external converter normally produces a `LifecycleMigration` v1beta1 JSON file. The
+legacy v1alpha1 form remains readable and means exactly one command per source record.
+The converter may understand a requirement tool, registry, issue tracker, or another controller;
 DAGrail does not. Its output must contain:
 
 - the target Project UUID, Graph Revision, and current journal head;
 - one complete, contiguous, bounded source prefix;
 - a source event ID/hash chain and declared source head;
 - a canonical records digest;
-- one or more closed DAGrail native lifecycle events for every source record.
+- one or more ordered, independently closed DAGrail commands for every source record.
 
-`source.system`, `source.project`, and source event IDs are closed portable identifiers matching
-`[A-Za-z0-9][A-Za-z0-9._@-]*`; they are not filesystem paths or URLs. Keep private
+`source.system`, `source.project`, and source event IDs are closed portable identifiers
+matching `[A-Za-z0-9][A-Za-z0-9._@-]*`; they are not filesystem paths or URLs. Keep private
 authority locators in the external converter or operator evidence.
 
 Every `sourceEventHash` is SHA-256 over the bytes
-`dagrail-lifecycle-source-event-v1\0` followed by RFC 8785 canonical JSON containing
-that record's sequence, ID, optional previous hash, timestamp, and native events. After
+`dagrail-lifecycle-source-event-v2\0` followed by RFC 8785 canonical JSON containing
+that record's sequence, ID, optional previous hash, timestamp, and `commands`. After
 computing the chain and `recordsDigest`, compute `source.authorityHash` over
-`dagrail-lifecycle-source-authority-v1\0` followed by the complete canonical manifest
+`dagrail-lifecycle-source-authority-v2\0` followed by the complete canonical manifest
 with `source.authorityHash` set to the empty string. This statement binds the source
 identity, target Project/Graph/head, complete prefix, and native mapping.
 
 Only generic Role, Attempt, checkpoint, Decision, evidence, Effect, Resource, action,
 and Incident events are accepted. Graph import/revision events, automatic settlement,
 and nested migration receipts cannot be imported. Unknown fields and event types fail
-closed. Action kinds and Incident source types use DAGrail's closed public vocabulary;
+closed at the manifest, source-record, command, and native-event envelopes in both
+v1alpha1 and v1beta1; custom decoding does not weaken the schemas'
+`additionalProperties: false` contract. Action kinds and Incident source types use
+DAGrail's closed public vocabulary;
 source-project terms belong in the external converter, not native event fields. The
-target may contain only its initial Graph import and DAGrail's deterministic
-join/milestone settlement from that import; it must contain no assigned runtime work.
-Each normalized source record represents one source command. Keep the command's native
-events and its `action.applied` summary in that same record. An action input is required
+target may contain only its initial authority-establishment fence, Graph import, and
+DAGrail's deterministic join/milestone settlement from that import; it must contain no
+assigned runtime work.
+Each `commands[]` entry represents one source command and has a contiguous one-based
+`commandIndex`. Keep that command's native events and its `action.applied` summary in
+the same entry. Multiple entries preserve one immutable source record while each entry
+is validated and closed before the next begins. An action input is required
 and may be any valid authority JSON when the current writer treats it as opaque; actions
 that summarize checkpoints, evidence, Decisions, completion, Effects, or Resources are
 matched to their exact native events during preflight. These matches form a one-shot
-proof ledger: one support event cannot justify two actions, unmatched support events
-are rejected at record end, and each accepted record must equal one closed current-writer
-command shape. Effect requests, action inputs, and Resource/Effect receipt bodies may be
+proof ledger: one support event cannot justify two actions, unmatched support events are
+rejected at command end, and each accepted command must equal one closed current-writer
+shape. Effect requests, action inputs, and Resource/Effect receipt bodies may be
 any valid authority JSON; `null` is still rejected where the current writer requires an
 actual request or receipt.
 
@@ -109,10 +116,11 @@ dagrail lifecycle import-history --root . --file migration.json \
   --actor-role migration-operator --idempotency-key migration/source-prefix-1
 ```
 
-The migration receipt and all mapped native events commit in one journal segment.
+The migration receipt and all mapped native events commit in source-record and command
+order in one journal segment.
 Journal rename is the commit point. A changed retry fails; an exact retry returns the
 same receipt and repairs a stale SQLite projection. The 8 MiB input, 10,000-record, and
-10,000-event segment bounds are fixed in v1alpha1.
+10,000-event segment bounds remain fixed; each v1beta1 record and command is additionally bounded.
 
 Export the rebuildable, deterministic view with:
 

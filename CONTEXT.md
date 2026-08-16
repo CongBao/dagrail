@@ -70,9 +70,13 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Lifecycle migration manifest**: a bounded mapping of one complete external
   append-only prefix to closed DAGrail native events. Its records digest and source
   chain are portable input; source-specific conversion stays outside the kernel.
-- **Source command proof ledger**: the per-record, one-shot association between one
+- **Source command bundle**: the ordered v1beta1 mapping inside one immutable external
+  source record. It may contain several current-writer-equivalent commands without
+  pretending the source emitted several records.
+- **Source command proof ledger**: the per-command, one-shot association between one
   current-writer command shape, its optional `action.applied`, and every native event
-  that proves that action. A proof cannot be reused by another action or left orphaned.
+  that proves that action. A proof cannot cross a command boundary, be reused, or remain
+  orphaned when that command closes.
 - **Source authority trust anchor**: an out-of-band SHA-256 digest supplied separately
   from a migration manifest. Import fails unless it exactly matches the manifest's
   claimed source authority.
@@ -111,6 +115,12 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
   domain reports.
 - **Installation diagnostic**: path-free local evidence over the verified runtime,
   linked plugin bundle, selected harness registrations, and MCP launcher state.
+- **Harness activation boundary**: plugin and MCP registration can be verified from a
+  fresh process, but an already-running harness cannot be declared hot-reloaded. It
+  must expose the tools itself, start a fresh session, or use the typed CLI fallback.
+- **Authority lineage**: claim-bound local provenance binding a replacement Project UUID
+  to an immutable prior journal head and authenticated backup/LKG prefix. Rotation
+  creates empty new authority, appends one terminal fence, and never rewrites old bytes.
 - **Historical binary matrix**: a closed manifest of exact beta release commits used to
   build real old binaries and test adjacent runtime upgrade and rollback paths.
 - **Readiness decision**: an aggregate structural verdict that may allow external
@@ -181,12 +191,11 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
     24-hour lease ceiling, event-time partial order, Decision/completion binding, and
     Effect crash prefixes as the current writer; project-specific action or Incident
     vocabulary is rejected before journal commit.
-34. One normalized source record represents one source command. Its `action.applied`
-    summary must bind the exact checkpoint, evidence package, reuse/semantic Decision,
-    terminal outcome, Effect preparation, or Resource closure events emitted by that
-    same record. Every support event is consumed exactly once, the record must be
-    closed at its end, and final projection equality cannot substitute for command
-    causality.
+34. A v1alpha1 normalized source record represents exactly one source command. A
+    v1beta1 source record may carry an ordered Source command bundle, but every command
+    has a separate proof ledger and closes before the next begins. Its `action.applied`
+    summary binds the exact support events in that command; proof cannot be shared, and
+    final projection equality cannot substitute for command causality.
 35. A persisted mutation has one authoritative event time. Slow policy/effect
     preparation must recheck the original head, action expiry, session binding, and
     Role lease at that persistence boundary; external observations after an authorized
@@ -204,6 +213,22 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
     cannot downgrade a confirmed Effect or erase an operator circuit. Incident lock
     waits carry caller cancellation end to end and never commit after cancellation is
     observed.
+38. Authority recovery replaces identity instead of truncating history. The selected
+    backup must be an authenticated exact prefix of the old authority; the replacement
+    receives a fresh UUID, a bootstrap writer fence, and digest-bound lineage, while the old
+    journal receives one append-only retirement fence and no prior byte is rewritten.
+    Rotation rejects live Role, Effect, Resource, or Incident
+    ownership that could make the cut ambiguous.
+39. Runtime installation, bundled skills, and MCP registration do not prove that an
+    existing harness process loaded them. Diagnostics and hooks state this uncertainty;
+    a caller uses a fresh session or the typed CLI fallback before lifecycle work.
+40. Every journal mutation requires a local claim bound to the canonical runtime path.
+    Ordinary open never creates claims. Explicit exact-head adoption retires a
+    pre-v0.22 UUID and creates a fresh, lineage-bound replacement; it never makes the
+    legacy UUID writable under v0.22. The replacement's schema-4 establishment fence
+    commits before locator publication. Newly initialized v0.22 authorities use the
+    same fence-before-locator order. Copies, missing provenance, stale pre-v0.22 writers,
+    and terminal retirement fences fail closed.
 
 ## Bounded contexts
 
@@ -221,7 +246,11 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Migration observation**: bounded source digests, private locators, isolated shadow
   import, and repeatable drift verification without lifecycle control.
 - **Lifecycle bootstrap**: external native-event conversion, out-of-band trust anchor,
-  complete-prefix validation, atomic import receipt, and redacted rebuildable projection.
+  complete-prefix validation, per-command proof closure, atomic import receipt, and
+  redacted rebuildable projection.
+- **Authority recovery**: authenticated backup-prefix selection, non-destructive Project
+  identity rotation, local writer claims, durable per-generation provenance, and
+  explicit later graph/history re-bootstrap.
 - **Release readiness**: closed historical binary inputs, source qualification,
   optional project/install evidence, and explicitly outstanding adoption evidence.
 

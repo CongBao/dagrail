@@ -24,7 +24,7 @@ func TestImmutableLegacyFixtureVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := Open(t.TempDir(), "11111111-1111-4111-8111-111111111111")
+	store, err := openClaimed(t, t.TempDir(), "11111111-1111-4111-8111-111111111111")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestImmutableLegacyFixtureVerifies(t *testing.T) {
 }
 
 func TestMixedVersionJournalPreservesLegacyBytes(t *testing.T) {
-	store, err := Open(t.TempDir(), "project-mixed")
+	store, err := openClaimed(t, t.TempDir(), "project-mixed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestMixedVersionJournalPreservesLegacyBytes(t *testing.T) {
 }
 
 func TestPreviousV2SegmentWithoutCommandIntentFieldsRemainsReadable(t *testing.T) {
-	store, err := Open(t.TempDir(), "project-v2")
+	store, err := openClaimed(t, t.TempDir(), "project-v2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestPreviousV2SegmentWithoutCommandIntentFieldsRemainsReadable(t *testing.T
 func TestPreviousSegmentsRejectV3CommandIntentFields(t *testing.T) {
 	for _, version := range []int{LegacySegmentSchemaVersion, PreviousSegmentSchemaVersion} {
 		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
-			store, err := Open(t.TempDir(), "project-hybrid")
+			store, err := openClaimed(t, t.TempDir(), "project-hybrid")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -169,12 +169,12 @@ func TestJournalRejectsFutureSegmentAndEventSchemas(t *testing.T) {
 		eventSchema   int
 		want          string
 	}{
-		{name: "future segment", segmentSchema: CurrentSegmentSchemaVersion + 1, eventSchema: CurrentEventSchemaVersion, want: "unsupported segment schema version"},
+		{name: "future segment", segmentSchema: AuthorityFenceSchemaVersion + 1, eventSchema: CurrentEventSchemaVersion, want: "unsupported segment schema version"},
 		{name: "future event", segmentSchema: CurrentSegmentSchemaVersion, eventSchema: CurrentEventSchemaVersion + 1, want: "unsupported schema version"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			store, err := Open(t.TempDir(), "project-future")
+			store, err := openClaimed(t, t.TempDir(), "project-future")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -195,7 +195,7 @@ func TestJournalRejectsFutureSegmentAndEventSchemas(t *testing.T) {
 }
 
 func TestAppendRejectsInvalidEventWithoutCommitting(t *testing.T) {
-	store, err := Open(t.TempDir(), "project-invalid")
+	store, err := openClaimed(t, t.TempDir(), "project-invalid")
 	if err != nil {
 		t.Fatal(err)
 	}

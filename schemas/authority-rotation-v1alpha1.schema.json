@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/authority-rotation-v1alpha1.schema.json",
+  "title": "DAGrail Authority Rotation Receipt v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "previousProjectId", "previousHead", "recoveryHead", "recoveryBackupDigest", "replacementProjectId", "rotatedAt", "reason", "idempotencyKey", "receiptDigest"],
+  "properties": {
+    "apiVersion": {"const": "dagrail.io/authority-rotation/v1alpha1"},
+    "kind": {"const": "AuthorityRotationReceipt"},
+    "previousProjectId": {"type": "string", "format": "uuid"},
+    "previousHead": {"$ref": "#/$defs/hash"},
+    "recoveryHead": {"$ref": "#/$defs/hash"},
+    "recoveryBackupDigest": {"$ref": "#/$defs/digest"},
+    "replacementProjectId": {"type": "string", "format": "uuid"},
+    "rotatedAt": {"type": "string", "format": "date-time"},
+    "reason": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "idempotencyKey": {"type": "string", "minLength": 1, "maxLength": 256},
+    "receiptDigest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

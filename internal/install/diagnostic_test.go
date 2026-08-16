@@ -27,6 +27,9 @@ func TestInstallationDiagnosticIsBoundedPathFreeAndSchemaValid(t *testing.T) {
 	if report.Healthy || len(raw) > 16*1024 || strings.Contains(string(raw), root) {
 		t.Fatalf("diagnostic is unexpectedly healthy, unbounded, or path-leaking: %s", raw)
 	}
+	if len(report.Harnesses) != 1 || report.Harnesses[0].CurrentProcessVerified || report.Harnesses[0].Activation != "fresh-session-or-cli-fallback" {
+		t.Fatalf("diagnostic overstated current-process MCP activation: %+v", report.Harnesses)
+	}
 	schemaRaw, err := os.ReadFile(filepath.Join("..", "..", "schemas", "installation-diagnostic-v1alpha1.schema.json"))
 	if err != nil {
 		t.Fatal(err)

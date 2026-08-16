@@ -42,6 +42,10 @@ func TestServiceReplaysLegacyGraphEventIntoCurrentProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	bootstrap, err := service.Journal.ReadAll()
+	if err != nil || len(bootstrap) != 1 {
+		t.Fatalf("read authority bootstrap: %#v %v", bootstrap, err)
+	}
 	graph := domain.GraphDefinition{
 		APIVersion: "dagrail.io/v1alpha1",
 		Kind:       "Graph",
@@ -70,8 +74,9 @@ func TestServiceReplaysLegacyGraphEventIntoCurrentProjection(t *testing.T) {
 	}
 	unsigned := legacyUnsignedSegment{
 		SchemaVersion: journal.LegacySegmentSchemaVersion,
-		Sequence:      1,
+		Sequence:      2,
 		ProjectID:     service.Project.Config.ProjectID,
+		PreviousHash:  bootstrap[0].SegmentHash,
 		Command: journal.Command{
 			ID:             "22222222-2222-4222-8222-222222222222",
 			Kind:           "graph.import",
@@ -90,6 +95,11 @@ func TestServiceReplaysLegacyGraphEventIntoCurrentProjection(t *testing.T) {
 	}
 	hasher := sha256.New()
 	_, _ = hasher.Write([]byte("dagrail-journal-v1\x00"))
+	previousHash, err := hex.DecodeString(unsigned.PreviousHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = hasher.Write(previousHash)
 	_, _ = hasher.Write(canonicalUnsigned)
 	hash := hex.EncodeToString(hasher.Sum(nil))
 	stored := legacyStoredSegment{

@@ -13,7 +13,7 @@ import (
 
 func TestReadRejectsCanonicalUnknownFieldsThatAreOutsideTheHashEnvelope(t *testing.T) {
 	root := t.TempDir()
-	store, err := Open(root, reliabilityProjectID)
+	store, err := openClaimed(t, root, reliabilityProjectID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestReadRejectsCanonicalUnknownFieldsThatAreOutsideTheHashEnvelope(t *testi
 }
 
 func TestAppendRejectsSensitiveCommandAndEventMaterial(t *testing.T) {
-	store, err := Open(t.TempDir(), reliabilityProjectID)
+	store, err := openClaimed(t, t.TempDir(), reliabilityProjectID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestAppendRejectsSensitiveCommandAndEventMaterial(t *testing.T) {
 }
 
 func TestAppendOnceRejectsChangedIntentWithTheSameCommandKind(t *testing.T) {
-	store, err := Open(t.TempDir(), reliabilityProjectID)
+	store, err := openClaimed(t, t.TempDir(), reliabilityProjectID)
 	if err != nil {
 		t.Fatal(err)
 	}

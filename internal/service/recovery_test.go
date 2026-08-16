@@ -37,11 +37,11 @@ func TestReadOnlyOpenDoesNotSettlePendingAutomaticNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.HeadSequence != 1 || state.Nodes["done"].Status != "planned" {
+	if state.HeadSequence != 2 || state.Nodes["done"].Status != "planned" {
 		t.Fatalf("read-only open settled authority: head=%d node=%+v", state.HeadSequence, state.Nodes["done"])
 	}
 	segments, err := inspected.VerifyJournal()
-	if err != nil || len(segments) != 1 {
+	if err != nil || len(segments) != 2 {
 		t.Fatalf("read-only open changed journal: segments=%d err=%v", len(segments), err)
 	}
 }

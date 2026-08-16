@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	rootbundle "github.com/CongBao/dagrail"
 	"github.com/CongBao/dagrail/internal/version"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -186,12 +188,16 @@ func linkedPluginBundle() ([]bundleFile, string, int, error) {
 		"plugins/dagrail/skills/govern-dag/assets/icon-large.svg":       false,
 		"plugins/dagrail/skills/govern-dag/assets/icon-small.svg":       false,
 		"plugins/dagrail/skills/execute-dag-node/agents/openai.yaml":    false,
+		"plugins/dagrail/skills/execute-dag-node/SKILL.md":              false,
 		"plugins/dagrail/skills/execute-dag-node/assets/icon-large.svg": false,
 		"plugins/dagrail/skills/execute-dag-node/assets/icon-small.svg": false,
 		"plugins/dagrail/skills/review-dag-node/agents/openai.yaml":     false,
+		"plugins/dagrail/skills/review-dag-node/SKILL.md":               false,
 		"plugins/dagrail/skills/review-dag-node/assets/icon-large.svg":  false,
 		"plugins/dagrail/skills/review-dag-node/assets/icon-small.svg":  false,
 		"plugins/dagrail/hooks/hooks.json":                              false,
+		"plugins/dagrail/hooks/claude-hooks.json":                       false,
+		"plugins/dagrail/hooks/copilot-hooks.json":                      false,
 	}
 	hash := sha256.New()
 	_, _ = hash.Write([]byte(pluginBundleDomain))
@@ -209,7 +215,125 @@ func linkedPluginBundle() ([]bundleFile, string, int, error) {
 			return nil, "", 0, fmt.Errorf("embedded plugin bundle is missing %s", path)
 		}
 	}
+	if err := validateBundledManifestReferences(files); err != nil {
+		return nil, "", 0, err
+	}
 	return files, "sha256:" + hex.EncodeToString(hash.Sum(nil)), total, nil
+}
+
+func validateBundledManifestReferences(files []bundleFile) error {
+	byPath := make(map[string][]byte, len(files))
+	for _, file := range files {
+		byPath[file.Path] = file.Data
+	}
+	for _, manifestPath := range []string{
+		"plugins/dagrail/.codex-plugin/plugin.json",
+		"plugins/dagrail/.claude-plugin/plugin.json",
+		"plugins/dagrail/.plugin/plugin.json",
+	} {
+		var manifest struct {
+			Skills    string `json:"skills"`
+			Hooks     string `json:"hooks"`
+			Interface struct {
+				ComposerIcon string `json:"composerIcon"`
+				Logo         string `json:"logo"`
+				LogoDark     string `json:"logoDark"`
+			} `json:"interface"`
+		}
+		if err := json.Unmarshal(byPath[manifestPath], &manifest); err != nil {
+			return fmt.Errorf("embedded plugin manifest %s is invalid: %w", manifestPath, err)
+		}
+		if manifest.Skills == "" || !bundleDirectoryContains(files, manifest.Skills, "SKILL.md") {
+			return fmt.Errorf("embedded plugin manifest %s has an unresolved skills reference", manifestPath)
+		}
+		for _, reference := range []string{manifest.Hooks, manifest.Interface.ComposerIcon, manifest.Interface.Logo, manifest.Interface.LogoDark} {
+			if reference == "" {
+				continue
+			}
+			resolved, err := resolvePluginBundleReference(reference)
+			if err != nil {
+				return fmt.Errorf("embedded plugin manifest %s: %w", manifestPath, err)
+			}
+			if _, ok := byPath[resolved]; !ok {
+				return fmt.Errorf("embedded plugin manifest %s references missing %s", manifestPath, resolved)
+			}
+		}
+	}
+	for path, data := range byPath {
+		if !strings.HasSuffix(path, "/agents/openai.yaml") {
+			continue
+		}
+		var metadata struct {
+			Interface struct {
+				DisplayName      string `yaml:"display_name"`
+				ShortDescription string `yaml:"short_description"`
+				IconSmall        string `yaml:"icon_small"`
+				IconLarge        string `yaml:"icon_large"`
+				BrandColor       string `yaml:"brand_color"`
+				DefaultPrompt    string `yaml:"default_prompt"`
+			} `yaml:"interface"`
+		}
+		decoder := yaml.NewDecoder(bytes.NewReader(data))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&metadata); err != nil {
+			return fmt.Errorf("embedded skill metadata %s is invalid: %w", path, err)
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			return fmt.Errorf("embedded skill metadata %s contains multiple YAML documents", path)
+		}
+		for _, reference := range []string{metadata.Interface.IconSmall, metadata.Interface.IconLarge} {
+			resolved, err := resolveBundleReferenceFrom(path, reference)
+			if err != nil {
+				return fmt.Errorf("embedded skill metadata %s: %w", path, err)
+			}
+			if _, ok := byPath[resolved]; !ok {
+				return fmt.Errorf("embedded skill metadata %s references missing %s", path, resolved)
+			}
+		}
+	}
+	return nil
+}
+
+func resolveBundleReferenceFrom(declaringPath, reference string) (string, error) {
+	if reference == "" || filepath.IsAbs(reference) {
+		return "", fmt.Errorf("plugin bundle reference must be relative")
+	}
+	base := filepath.Dir(filepath.FromSlash(declaringPath))
+	if strings.HasSuffix(filepath.ToSlash(declaringPath), "/agents/openai.yaml") {
+		base = filepath.Dir(base)
+	}
+	resolved := filepath.ToSlash(filepath.Clean(filepath.Join(base, filepath.FromSlash(reference))))
+	if resolved == "plugins/dagrail" || !strings.HasPrefix(resolved, "plugins/dagrail/") {
+		return "", fmt.Errorf("plugin bundle reference escapes its plugin root")
+	}
+	return resolved, nil
+}
+
+func bundleDirectoryContains(files []bundleFile, reference, base string) bool {
+	resolved, err := resolvePluginBundleReference(reference)
+	if err != nil {
+		return false
+	}
+	prefix := strings.TrimSuffix(resolved, "/") + "/"
+	for _, file := range files {
+		if strings.HasPrefix(file.Path, prefix) && filepath.Base(file.Path) == base {
+			return true
+		}
+	}
+	return false
+}
+
+func resolvePluginBundleReference(reference string) (string, error) {
+	if reference == "" || filepath.IsAbs(reference) {
+		return "", fmt.Errorf("plugin bundle reference must be relative")
+	}
+	normalized := filepath.ToSlash(filepath.Clean(filepath.FromSlash(reference)))
+	normalized = strings.TrimPrefix(normalized, "./")
+	if normalized == ".." || strings.HasPrefix(normalized, "../") {
+		return "", fmt.Errorf("plugin bundle reference escapes its plugin root")
+	}
+	return "plugins/dagrail/" + normalized, nil
 }
 
 func bundledMarketplaceFiles() ([]bundleFile, error) {

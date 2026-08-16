@@ -67,7 +67,7 @@ exit 1
 	t.Setenv("PATH", binRoot+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	results, err := Install(context.Background(), Options{Harnesses: []string{"codex"}, RuntimePath: runtimePath, MarketplaceSource: bundle.Root})
-	if err != nil || len(results) != 1 || results[0].Status != "installed_or_updated" || !results[0].MCPConfigured {
+	if err != nil || len(results) != 1 || results[0].Status != "installed_or_updated" || !results[0].MCPConfigured || !results[0].FreshSessionRequired || results[0].CurrentProcessVerified || results[0].Activation != "fresh-session-or-cli-fallback" {
 		t.Fatalf("automated bundled upgrade failed: %+v, %v", results, err)
 	}
 	logRaw, err := os.ReadFile(logPath)
@@ -77,6 +77,34 @@ exit 1
 	log := string(logRaw)
 	if strings.Contains(log, "marketplace upgrade") || strings.Count(log, "plugin marketplace add") != 2 || !strings.Contains(log, "plugin marketplace remove dagrail-bundled") || !strings.Contains(log, "plugin remove dagrail@dagrail-bundled") {
 		t.Fatalf("host upgrade did not use the bounded local rotation: %s", log)
+	}
+}
+
+func TestPluginStatusDoesNotClaimCurrentProcessActivation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	root := t.TempDir()
+	binRoot := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	codex := filepath.Join(binRoot, "codex")
+	if err := os.WriteFile(codex, []byte(`#!/bin/sh
+if [ "$1 $2" = "plugin list" ]; then echo '{"plugins":[{"id":"dagrail@dagrail"}]}'; exit 0; fi
+if [ "$1 $2" = "mcp list" ]; then echo '{}'; exit 0; fi
+exit 1
+`), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binRoot+string(os.PathListSeparator)+os.Getenv("PATH"))
+	results, err := Status(Options{Harnesses: []string{"codex"}, RuntimePath: filepath.Join(binRoot, "dagrail")})
+	if err != nil || len(results) != 1 {
+		t.Fatalf("status failed: %+v %v", results, err)
+	}
+	result := results[0]
+	if result.Status != "installed" || !result.FreshSessionRequired || result.CurrentProcessVerified || result.Activation != "fresh-session-or-cli-fallback" {
+		t.Fatalf("status overstated hot activation: %+v", result)
 	}
 }
 

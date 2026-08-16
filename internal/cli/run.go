@@ -1124,18 +1124,61 @@ func runSupport(args []string, stdout, stderr io.Writer) error {
 }
 
 func runRecovery(args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "rehearse" {
-		return fmt.Errorf("usage: dagrail recovery rehearse [--root path]")
+	if len(args) == 0 {
+		return fmt.Errorf("usage: dagrail recovery <rehearse|rotate-authority|adopt-legacy-authority>")
 	}
-	flags := flag.NewFlagSet("recovery rehearse", flag.ContinueOnError)
+	flags := flag.NewFlagSet("recovery "+args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
+	backupPath := flags.String("backup", "", "authenticated recovery backup")
+	expectedHead := flags.String("expected-current-head", "", "exact current journal head")
+	reason := flags.String("reason", "", "bounded authority replacement reason")
+	idempotencyKey := flags.String("idempotency-key", "", "stable authority rotation key")
+	expectedProjectID := flags.String("expected-project-id", "", "exact Project UUID for explicit legacy adoption")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected recovery arguments")
 	}
 	s, err := service.OpenForRecovery(*root)
 	if err != nil {
 		return err
+	}
+	if args[0] == "rotate-authority" {
+		if *backupPath == "" || *expectedHead == "" || *reason == "" || *idempotencyKey == "" {
+			return fmt.Errorf("--backup, --expected-current-head, --reason, and --idempotency-key are required")
+		}
+		info, err := os.Lstat(*backupPath)
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > 256*1024*1024 {
+			return fmt.Errorf("recovery backup must be a regular non-symlink file no larger than 256 MiB")
+		}
+		data, err := os.ReadFile(*backupPath)
+		if err != nil {
+			return err
+		}
+		receipt, err := s.RotateAuthority(data, *expectedHead, *reason, *idempotencyKey)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, receipt)
+	}
+	if args[0] == "adopt-legacy-authority" {
+		if *expectedProjectID == "" || *expectedHead == "" || *reason == "" || *idempotencyKey == "" {
+			return fmt.Errorf("--expected-project-id, --expected-current-head (or empty), --reason, and --idempotency-key are required")
+		}
+		head := *expectedHead
+		if head == "empty" {
+			head = ""
+		}
+		receipt, err := s.AdoptLegacyAuthority(*expectedProjectID, head, *reason, *idempotencyKey)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, receipt)
+	}
+	if args[0] != "rehearse" {
+		return fmt.Errorf("unknown recovery command %q", args[0])
 	}
 	report, err := s.RehearseRecovery()
 	if err != nil {

@@ -169,3 +169,13 @@ kernel. Cold-review and external-shadow evidence are release checks, not product
 
 The first real adoption remains an external validation subject. Its converter,
 vocabulary, repository paths, and cutover policy are not shipped as DAGrail contracts.
+
+## v0.22.0 — Lossless bootstrap and authority recovery
+
+- add ordered source command bundles without weakening per-command proof closure;
+- add authenticated, non-destructive Project authority rotation from an exact LKG
+  backup prefix;
+- make fresh-session MCP activation and CLI fallback explicit across plugin surfaces;
+- extend the exact historical-binary window through v0.21;
+- fence every new v0.22 authority before locator publication and rotate legacy adoption
+  to a fresh Project UUID rather than promoting the historical identity.

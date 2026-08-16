@@ -7,6 +7,12 @@ description: Review one DAGrail review or decision node using bounded evidence. 
 
 Review only the Role, Node, candidate, and evidence boundary in the assigned package.
 
+First verify that the DAGrail MCP tools are callable in this process. Skill discovery is
+not proof that a long-running harness loaded an upgraded MCP registration. If tools are
+absent, run `dagrail doctor install`, start a fresh session, or use `dagrail context`,
+`dagrail inspect`, `dagrail action apply`, and `dagrail pre-wait`; never construct a
+review transition manually.
+
 1. Bind the assigned review Role and call `dag_context` with `view: reviewer`, `role_id`,
    and `node_id`. Never reuse a worker or controller session as the formal reviewer.
 2. Inspect only the candidate, actual artifact, Decision, policy result, or evidence refs

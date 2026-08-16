@@ -190,6 +190,29 @@ func FuzzDecodeGraphPatch(f *testing.F) {
 	})
 }
 
+func FuzzDecodeLifecycleMigrationAuthority(f *testing.F) {
+	f.Add([]byte(`{"apiVersion":"dagrail.io/lifecycle-migration/v1alpha1","kind":"LifecycleMigration","projectId":"00000000-0000-0000-0000-000000000001","graphRevision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","expectedJournalHead":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","source":{"system":"source","project":"project","authorityHash":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","headSequence":1,"headEventId":"event-1","headEventHash":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"recordsDigest":"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","records":[]}`))
+	f.Add([]byte(`{"apiVersion":"dagrail.io/lifecycle-migration/v1beta1","kind":"LifecycleMigration","records":[{"sourceSequence":1,"sourceEventId":"event-1","sourceEventHash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","occurredAt":"2026-08-16T00:00:00Z","commands":[{"commandIndex":1,"events":[{"type":"role.released","payload":{"roleId":"worker","releasedAt":"2026-08-16T00:00:00Z"}}]}]}]}`))
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		if len(raw) > 256*1024 {
+			t.Skip()
+		}
+		var manifest LifecycleMigrationManifest
+		if err := decodeStrictAuthorityJSON(raw, &manifest); err != nil {
+			return
+		}
+		if err := domain.RejectSensitiveFields(raw); err != nil {
+			return
+		}
+		_, _ = LifecycleRecordsDigest(manifest.Records)
+		_, _ = LifecycleSourceAuthorityHash(manifest)
+		for _, record := range manifest.Records {
+			_, _ = LifecycleSourceEventHash(record)
+			_, _ = lifecycleRecordCommands(manifest.APIVersion, record)
+		}
+	})
+}
+
 func scaleGraph(count int) domain.GraphDefinition {
 	graph := domain.GraphDefinition{APIVersion: domain.GraphAPIVersion, Kind: domain.GraphKind, Metadata: domain.GraphMetadata{Name: "scale"}}
 	graph.Spec.Roles = []domain.RoleDefinition{{ID: "dev", Capabilities: []string{"node.run"}}}

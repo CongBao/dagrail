@@ -55,9 +55,15 @@ two-minute ceiling and a 64-KiB combined-output cap.
 
 `dagrail doctor install` is a local, path-free diagnostic for the linked runtime,
 plugin bundle, selected harness registrations, and MCP launchers. It reports closed
-status codes without including executable paths or raw host output.
+status codes without including executable paths or raw host output. It cannot attest
+that the caller's already-running harness hot-loaded a registration, so it reports
+`configurationReady: true` when persisted registration is complete, but keeps
+activation `ready: false`, `currentProcessVerified: false`, and
+`fresh-session-or-cli-fallback` until a fresh process exposes the tools.
 
-`lifecycle validate-history|import-history` is a separate operator surface. Both require
+`lifecycle validate-history|import-history` is a separate operator surface. v1beta1
+records contain ordered `commands[]`, each validated as an independent closed writer
+command; v1alpha1 remains readable with exactly one command per record. Both require
 an external manifest and an independently supplied source-authority digest; import also
 requires an actor Role label and stable idempotency key. It is deliberately absent from
 MCP so an agent cannot turn source-specific conversion or cutover into an ordinary
@@ -101,7 +107,8 @@ generic provider invocation output alone never advances a Node.
 Published schemas live in `schemas/`. Current governed reports include lifecycle
 migration/projection, the Explorer UI
 API, security audit, journal verification, plugin conformance, support report, recovery
-rehearsal, release qualification, and the compatibility contract itself. Reports use
+rehearsal, explicit legacy-authority adoption, authority rotation, release qualification,
+and the compatibility contract itself. Reports use
 closed objects so misspelled or silently added fields fail validation. ReleaseManifest
 v1beta1 and ReleaseVerification v1alpha1 bind the complete distribution set separately
 from source qualification.

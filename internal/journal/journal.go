@@ -10,13 +10,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/CongBao/dagrail/internal/domain"
+	"github.com/CongBao/dagrail/internal/project"
 	"github.com/gofrs/flock"
 	"github.com/gowebpki/jcs"
 )
@@ -33,6 +33,7 @@ const (
 	LegacySegmentSchemaVersion   = 1
 	PreviousSegmentSchemaVersion = 2
 	CurrentSegmentSchemaVersion  = 3
+	AuthorityFenceSchemaVersion  = 4
 	CurrentEventSchemaVersion    = 1
 )
 
@@ -85,13 +86,26 @@ type unsignedSegment struct {
 	CommittedAt   string  `json:"committedAt"`
 }
 
+type storeCapability uint8
+
+const (
+	storeCapabilityOrdinary storeCapability = iota
+	storeCapabilityEstablishment
+	storeCapabilityRecovery
+	storeCapabilityRehearsal
+)
+
 type Store struct {
-	dir       string
-	projectID string
-	lock      *flock.Flock
-	mu        *sync.Mutex
-	fault     func(string) error
+	dir                    string
+	projectID              string
+	capability             storeCapability
+	testAllowUnestablished bool
+	lock                   *flock.Flock
+	mu                     *sync.Mutex
+	fault                  func(string) error
 }
+
+const authorityRetirementFile = "authority-retired.json"
 
 var processLocks sync.Map
 
@@ -105,8 +119,66 @@ var eventUpcasters = map[int]eventUpcaster{
 }
 
 func Open(dataDir, projectID string) (*Store, error) {
+	store, err := open(dataDir, projectID, storeCapabilityOrdinary)
+	if err != nil {
+		return nil, err
+	}
+	if err := project.ValidateAuthorityClaim(dataDir, projectID); err != nil {
+		return nil, err
+	}
+	segments, err := store.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	if err := validateEstablishedAuthorityPrefix(projectID, segments); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+// OpenForAuthorityEstablishment opens a claimed, empty authority only for its
+// schema-4 bootstrap transaction. Ordinary writes remain unavailable until a
+// fresh Open verifies the committed establishment prefix.
+func OpenForAuthorityEstablishment(dataDir, projectID string) (*Store, error) {
+	store, err := open(dataDir, projectID, storeCapabilityEstablishment)
+	if err != nil {
+		return nil, err
+	}
+	if err := project.ValidateAuthorityClaim(dataDir, projectID); err != nil {
+		return nil, err
+	}
+	segments, err := store.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(segments) != 0 {
+		if err := validateEstablishedAuthorityPrefix(projectID, segments); err != nil {
+			return nil, err
+		}
+	}
+	return store, nil
+}
+
+// OpenRecovery permits only the dedicated authority retirement/rotation
+// transactions. Generic append and restore remain disabled even if a caller
+// accidentally invokes a normal Service mutation through an inspection handle.
+func OpenRecovery(dataDir, projectID string) (*Store, error) {
+	return open(dataDir, projectID, storeCapabilityRecovery)
+}
+
+// OpenRehearsal creates a disposable store that can restore one verified
+// snapshot but cannot append ordinary commands. It deliberately does not mint
+// or validate a writer claim for the duplicated Project UUID.
+func OpenRehearsal(dataDir, projectID string) (*Store, error) {
+	if err := project.EnsureDurableDirectory(dataDir); err != nil {
+		return nil, err
+	}
+	return open(dataDir, projectID, storeCapabilityRehearsal)
+}
+
+func open(dataDir, projectID string, capability storeCapability) (*Store, error) {
 	dir := filepath.Join(dataDir, "journal")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := project.EnsureDurableDirectoryWithin(dir, dataDir); err != nil {
 		return nil, err
 	}
 	if info, err := os.Lstat(dir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
@@ -114,7 +186,7 @@ func Open(dataDir, projectID string) (*Store, error) {
 	}
 	lockPath := filepath.Join(dataDir, "writer.lock")
 	mutex, _ := processLocks.LoadOrStore(lockPath, &sync.Mutex{})
-	return &Store{dir: dir, projectID: projectID, lock: flock.New(lockPath), mu: mutex.(*sync.Mutex)}, nil
+	return &Store{dir: dir, projectID: projectID, capability: capability, lock: flock.New(lockPath), mu: mutex.(*sync.Mutex)}, nil
 }
 
 func (s *Store) WithLock(fn func() error) error {
@@ -144,6 +216,12 @@ func (s *Store) Append(command Command, events []Event, now time.Time) (Segment,
 // immutable segment was committed.
 func (s *Store) AppendOnce(command Command, events []Event, now time.Time, expectedHead *string) (Segment, bool, error) {
 	var result Segment
+	if s.capability == storeCapabilityEstablishment {
+		return result, false, fmt.Errorf("authority establishment store cannot accept ordinary journal writes")
+	}
+	if s.capability != storeCapabilityOrdinary {
+		return result, false, fmt.Errorf("recovery inspection store cannot accept ordinary journal writes")
+	}
 	created := false
 	commandRaw, err := json.Marshal(command)
 	if err != nil {
@@ -161,9 +239,25 @@ func (s *Store) AppendOnce(command Command, events []Event, now time.Time, expec
 		}
 	}
 	err = s.WithLock(func() error {
+		if err := project.ValidateAuthorityClaim(filepath.Dir(s.dir), s.projectID); err != nil {
+			return err
+		}
+		if _, retired, retirementErr := s.authorityRetirementUnlocked(); retirementErr != nil {
+			return retirementErr
+		} else if retired {
+			return fmt.Errorf("project authority is retired and cannot accept journal writes")
+		}
 		segments, err := s.readAllUnlocked()
 		if err != nil {
 			return err
+		}
+		if !s.testAllowUnestablished {
+			if err := validateEstablishedAuthorityPrefix(s.projectID, segments); err != nil {
+				return err
+			}
+		}
+		if _, retired := retirementEvent(segments); retired {
+			return fmt.Errorf("project authority is retired and cannot accept journal writes")
 		}
 		if command.IdempotencyKey != "" {
 			for _, existing := range segments {
@@ -180,10 +274,6 @@ func (s *Store) AppendOnce(command Command, events []Event, now time.Time, expec
 				return nil
 			}
 		}
-		preparedEvents, err := prepareEvents(events)
-		if err != nil {
-			return err
-		}
 		previous := ""
 		sequence := uint64(1)
 		if len(segments) > 0 {
@@ -193,75 +283,355 @@ func (s *Store) AppendOnce(command Command, events []Event, now time.Time, expec
 		if expectedHead != nil && previous != *expectedHead {
 			return fmt.Errorf("journal head changed; refresh context before retrying")
 		}
-		unsigned := unsignedSegment{SchemaVersion: CurrentSegmentSchemaVersion, Sequence: sequence, ProjectID: s.projectID, PreviousHash: previous, Command: command, Events: preparedEvents, CommittedAt: now.UTC().Format(time.RFC3339Nano)}
-		hash, err := computeHash(unsigned)
-		if err != nil {
-			return err
-		}
-		result = Segment{SchemaVersion: unsigned.SchemaVersion, Sequence: unsigned.Sequence, ProjectID: unsigned.ProjectID, PreviousHash: unsigned.PreviousHash, Command: unsigned.Command, Events: unsigned.Events, CommittedAt: unsigned.CommittedAt, SegmentHash: hash}
-		data, err := json.Marshal(result)
-		if err != nil {
-			return err
-		}
-		canonical, err := jcs.Transform(data)
-		if err != nil {
-			return err
-		}
-		if len(canonical) > MaxSegmentBytes {
-			return fmt.Errorf("journal segment exceeds %d bytes", MaxSegmentBytes)
-		}
-		name := fmt.Sprintf("%012d-%s.json", sequence, hash)
-		if err := s.injectFault("before-temp-create"); err != nil {
-			return err
-		}
-		tmp, err := os.CreateTemp(s.dir, ".segment-*.tmp")
-		if err != nil {
-			return err
-		}
-		tmpName := tmp.Name()
-		defer os.Remove(tmpName)
-		if err := tmp.Chmod(0o600); err != nil {
-			_ = tmp.Close()
-			return err
-		}
-		if err := s.injectFault("before-temp-write"); err != nil {
-			_ = tmp.Close()
-			return err
-		}
-		if _, err := tmp.Write(canonical); err != nil {
-			_ = tmp.Close()
-			return err
-		}
-		if err := s.injectFault("before-temp-sync"); err != nil {
-			_ = tmp.Close()
-			return err
-		}
-		if err := tmp.Sync(); err != nil {
-			_ = tmp.Close()
-			return err
-		}
-		if err := tmp.Close(); err != nil {
-			return err
-		}
-		if err := s.injectFault("before-rename"); err != nil {
-			return err
-		}
-		if err := os.Rename(tmpName, filepath.Join(s.dir, name)); err != nil {
-			return err
-		}
-		created = true
-		if err := s.injectFault("after-rename"); err != nil {
-			return err
-		}
-		if err := s.injectFault("before-directory-sync"); err != nil {
-			return err
-		}
-		if err := syncDirectory(s.dir); err != nil {
-			return err
-		}
-		return nil
+		result, created, err = s.appendSegmentUnlocked(command, events, now, previous, sequence)
+		return err
 	})
 	return result, created, err
+}
+
+func (s *Store) appendSegmentUnlocked(command Command, events []Event, now time.Time, previous string, sequence uint64) (Segment, bool, error) {
+	return s.appendSegmentWithSchemaUnlocked(CurrentSegmentSchemaVersion, command, events, now, previous, sequence)
+}
+
+func (s *Store) appendSegmentWithSchemaUnlocked(segmentSchema int, command Command, events []Event, now time.Time, previous string, sequence uint64) (Segment, bool, error) {
+	preparedEvents, err := prepareEvents(events)
+	if err != nil {
+		return Segment{}, false, err
+	}
+	unsigned := unsignedSegment{SchemaVersion: segmentSchema, Sequence: sequence, ProjectID: s.projectID, PreviousHash: previous, Command: command, Events: preparedEvents, CommittedAt: now.UTC().Format(time.RFC3339Nano)}
+	hash, err := computeHash(unsigned)
+	if err != nil {
+		return Segment{}, false, err
+	}
+	result := Segment{SchemaVersion: unsigned.SchemaVersion, Sequence: unsigned.Sequence, ProjectID: unsigned.ProjectID, PreviousHash: unsigned.PreviousHash, Command: unsigned.Command, Events: unsigned.Events, CommittedAt: unsigned.CommittedAt, SegmentHash: hash}
+	data, err := json.Marshal(result)
+	if err != nil {
+		return Segment{}, false, err
+	}
+	canonical, err := jcs.Transform(data)
+	if err != nil {
+		return Segment{}, false, err
+	}
+	if len(canonical) > MaxSegmentBytes {
+		return Segment{}, false, fmt.Errorf("journal segment exceeds %d bytes", MaxSegmentBytes)
+	}
+	name := fmt.Sprintf("%012d-%s.json", sequence, hash)
+	if err := s.injectFault("before-temp-create"); err != nil {
+		return Segment{}, false, err
+	}
+	tmp, err := os.CreateTemp(s.dir, ".segment-*.tmp")
+	if err != nil {
+		return Segment{}, false, err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return Segment{}, false, err
+	}
+	if err := s.injectFault("before-temp-write"); err != nil {
+		_ = tmp.Close()
+		return Segment{}, false, err
+	}
+	if _, err := tmp.Write(canonical); err != nil {
+		_ = tmp.Close()
+		return Segment{}, false, err
+	}
+	if err := s.injectFault("before-temp-sync"); err != nil {
+		_ = tmp.Close()
+		return Segment{}, false, err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return Segment{}, false, err
+	}
+	if err := tmp.Close(); err != nil {
+		return Segment{}, false, err
+	}
+	if err := s.injectFault("before-rename"); err != nil {
+		return Segment{}, false, err
+	}
+	if err := os.Rename(tmpName, filepath.Join(s.dir, name)); err != nil {
+		return Segment{}, false, err
+	}
+	if err := s.injectFault("after-rename"); err != nil {
+		return result, true, err
+	}
+	if err := s.injectFault("before-directory-sync"); err != nil {
+		return result, true, err
+	}
+	if err := syncDirectory(s.dir); err != nil {
+		return result, true, err
+	}
+	return result, true, nil
+}
+
+func retirementEvent(segments []Segment) ([]byte, bool) {
+	for _, segment := range segments {
+		for _, event := range segment.Events {
+			if event.Type == "authority.retired" {
+				return event.Payload, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// EstablishAuthority writes the first and only bootstrap fence for a fresh
+// replacement UUID. It must commit before the repository locator is published,
+// so pre-v0.22 binaries cannot treat the replacement journal as writable.
+func (s *Store) EstablishAuthority(establishment []byte, now time.Time) (Segment, error) {
+	var result Segment
+	if s.capability != storeCapabilityEstablishment {
+		return result, fmt.Errorf("authority establishment requires an establishment-only store")
+	}
+	if len(establishment) == 0 || len(establishment) > 64*1024 || !json.Valid(establishment) {
+		return result, fmt.Errorf("authority establishment is invalid")
+	}
+	if err := domain.ValidateAuthorityJSON(establishment); err != nil {
+		return result, fmt.Errorf("authority establishment: %w", err)
+	}
+	if err := domain.RejectSensitiveFields(establishment); err != nil {
+		return result, fmt.Errorf("authority establishment: %w", err)
+	}
+	establishment, err := jcs.Transform(establishment)
+	if err != nil {
+		return result, fmt.Errorf("authority establishment: %w", err)
+	}
+	err = s.WithLock(func() error {
+		if err := project.ValidateAuthorityClaim(filepath.Dir(s.dir), s.projectID); err != nil {
+			return err
+		}
+		segments, err := s.readAllUnlocked()
+		if err != nil {
+			return err
+		}
+		if len(segments) != 0 {
+			if len(segments) == 1 && segments[0].SchemaVersion == AuthorityFenceSchemaVersion && len(segments[0].Events) == 1 && segments[0].Events[0].Type == "authority.established" && bytes.Equal(segments[0].Events[0].Payload, establishment) {
+				result = segments[0]
+				return syncDirectory(s.dir)
+			}
+			return fmt.Errorf("replacement authority journal is not pristine")
+		}
+		sum := sha256.Sum256(establishment)
+		digest := hex.EncodeToString(sum[:])
+		command := Command{ID: "authority-establish-" + hex.EncodeToString(sum[:16]), Kind: "authority.establish", ActorRole: "dagrail.recovery", IdempotencyKey: "authority-establish/" + digest, ObjectRef: "project:" + s.projectID, RequestDigest: "sha256:" + digest}
+		segment, _, err := s.appendSegmentWithSchemaUnlocked(AuthorityFenceSchemaVersion, command, []Event{{Type: "authority.established", Payload: establishment}}, now, "", 1)
+		if err != nil {
+			return err
+		}
+		result = segment
+		return nil
+	})
+	return result, err
+}
+
+// AuthorityRetirement returns the immutable retirement evidence. The journal
+// fence is authoritative; the sidecar is a rebuildable crash-resume index.
+func (s *Store) AuthorityRetirement() ([]byte, bool, error) {
+	var raw []byte
+	var exists bool
+	err := s.WithLock(func() error {
+		sidecar, sidecarExists, err := s.authorityRetirementUnlocked()
+		if err != nil {
+			return err
+		}
+		segments, readErr := s.readAllUnlocked()
+		if readErr != nil {
+			return readErr
+		}
+		fenced, fencedExists := retirementEvent(segments)
+		if sidecarExists && !fencedExists {
+			return fmt.Errorf("authority retirement sidecar has no journal fence")
+		}
+		if sidecarExists && !bytes.Equal(sidecar, fenced) {
+			return fmt.Errorf("authority retirement sidecar does not match journal fence")
+		}
+		raw, exists = fenced, fencedExists
+		return nil
+	})
+	return raw, exists, err
+}
+
+// RetireAuthority appends an immutable authority.retired fence before applying
+// the locator change. Historical reducers reject the unknown fence before any
+// append, while current writers recognize it explicitly. The sidecar is written
+// only after the fence and can be reconstructed by an exact retry.
+func (s *Store) RetireAuthority(expectedHead string, retirement []byte, now time.Time, validate func([]Segment) error, sameIntent func([]byte) error, apply func([]byte) error) ([]byte, error) {
+	if s.capability != storeCapabilityOrdinary {
+		return nil, fmt.Errorf("claimed authority retirement requires an ordinary journal store")
+	}
+	return s.retireAuthority(true, expectedHead, retirement, "", now, validate, sameIntent, apply)
+}
+
+// RetireLegacyAuthority fences a pre-v0.22 store that has no current writer
+// claim. The caller must positively reserve the exact legacy data root from
+// validate while the historical writer lock is held. The old UUID never gains
+// a v0.22 claim; apply must publish a fresh replacement identity.
+func (s *Store) RetireLegacyAuthority(expectedHead string, retirement []byte, reservationDigest string, now time.Time, validate func([]Segment) error, sameIntent func([]byte) error, apply func([]byte) error) ([]byte, error) {
+	if s.capability != storeCapabilityRecovery {
+		return nil, fmt.Errorf("legacy authority retirement requires a recovery journal store")
+	}
+	return s.retireAuthority(false, expectedHead, retirement, reservationDigest, now, validate, sameIntent, apply)
+}
+
+func (s *Store) retireAuthority(requireClaim bool, expectedHead string, retirement []byte, reservationDigest string, now time.Time, validate func([]Segment) error, sameIntent func([]byte) error, apply func([]byte) error) ([]byte, error) {
+	if apply == nil {
+		return nil, fmt.Errorf("authority retirement requires replacement application")
+	}
+	if len(retirement) == 0 || len(retirement) > 64*1024 || !json.Valid(retirement) {
+		return nil, fmt.Errorf("authority retirement marker is invalid")
+	}
+	if err := domain.ValidateAuthorityJSON(retirement); err != nil {
+		return nil, fmt.Errorf("authority retirement marker: %w", err)
+	}
+	if err := domain.RejectSensitiveFields(retirement); err != nil {
+		return nil, fmt.Errorf("authority retirement marker: %w", err)
+	}
+	retirement, err := jcs.Transform(retirement)
+	if err != nil {
+		return nil, fmt.Errorf("authority retirement marker: %w", err)
+	}
+	var committed []byte
+	err = s.WithLock(func() error {
+		if requireClaim {
+			if err := project.ValidateAuthorityClaim(filepath.Dir(s.dir), s.projectID); err != nil {
+				return err
+			}
+		}
+		segments, err := s.readAllUnlocked()
+		if err != nil {
+			return err
+		}
+		if requireClaim && !s.testAllowUnestablished {
+			if err := validateEstablishedAuthorityPrefix(s.projectID, segments); err != nil {
+				return err
+			}
+		}
+		sidecar, sidecarExists, err := s.authorityRetirementUnlocked()
+		if err != nil {
+			return err
+		}
+		fenced, fenceExists := retirementEvent(segments)
+		if sidecarExists && !fenceExists {
+			return fmt.Errorf("authority retirement sidecar has no journal fence")
+		}
+		if sidecarExists && !bytes.Equal(sidecar, fenced) {
+			return fmt.Errorf("authority retirement sidecar does not match journal fence")
+		}
+		if fenceExists {
+			if !requireClaim {
+				if err := project.ValidateLegacyRetirementReservation(filepath.Dir(s.dir), s.projectID, ""); err != nil {
+					return err
+				}
+			}
+			if sameIntent == nil {
+				if !bytes.Equal(fenced, retirement) {
+					return fmt.Errorf("project authority is already retired with different intent")
+				}
+			} else if err := sameIntent(fenced); err != nil {
+				return err
+			}
+			committed = fenced
+			if err := syncDirectory(s.dir); err != nil {
+				return err
+			}
+		} else {
+			head := ""
+			sequence := uint64(1)
+			if len(segments) != 0 {
+				head = segments[len(segments)-1].SegmentHash
+				sequence = segments[len(segments)-1].Sequence + 1
+			}
+			if head != expectedHead {
+				return fmt.Errorf("project authority changed before retirement")
+			}
+			if validate == nil {
+				return fmt.Errorf("first authority retirement requires a reservation validator")
+			}
+			if err := validate(segments); err != nil {
+				return err
+			}
+			if !requireClaim {
+				if err := project.ValidateLegacyRetirementReservation(filepath.Dir(s.dir), s.projectID, reservationDigest); err != nil {
+					return err
+				}
+			}
+			sum := sha256.Sum256(retirement)
+			command := Command{ID: "authority-retire-" + hex.EncodeToString(sum[:16]), Kind: "authority.retire", ActorRole: "dagrail.recovery", IdempotencyKey: "authority-retire/" + hex.EncodeToString(sum[:]), ObjectRef: "project:" + s.projectID, RequestDigest: "sha256:" + hex.EncodeToString(sum[:])}
+			if _, _, err := s.appendSegmentWithSchemaUnlocked(AuthorityFenceSchemaVersion, command, []Event{{Type: "authority.retired", Payload: retirement}}, now, head, sequence); err != nil {
+				return err
+			}
+			committed = retirement
+		}
+		existing, markerExists, err := s.authorityRetirementUnlocked()
+		if err != nil {
+			return err
+		}
+		if markerExists {
+			if sameIntent == nil {
+				if !bytes.Equal(existing, committed) {
+					return fmt.Errorf("project authority is already retired with different intent")
+				}
+			} else if err := sameIntent(existing); err != nil {
+				return err
+			}
+			if err := syncDirectory(filepath.Dir(s.dir)); err != nil {
+				return err
+			}
+		} else if err := writeExclusiveAtomic(filepath.Join(filepath.Dir(s.dir), authorityRetirementFile), committed, 0o600); err != nil {
+			return err
+		}
+		return apply(committed)
+	})
+	return committed, err
+}
+
+func (s *Store) authorityRetirementUnlocked() ([]byte, bool, error) {
+	path := filepath.Join(filepath.Dir(s.dir), authorityRetirementFile)
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() <= 0 || info.Size() > 64*1024 {
+		return nil, false, fmt.Errorf("authority retirement marker is not a bounded regular file")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := domain.ValidateAuthorityJSON(raw); err != nil {
+		return nil, false, fmt.Errorf("authority retirement marker: %w", err)
+	}
+	return raw, true, nil
+}
+
+func writeExclusiveAtomic(path string, data []byte, mode os.FileMode) error {
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".authority-retired-*")
+	if err != nil {
+		return err
+	}
+	name := temporary.Name()
+	defer func() { _ = os.Remove(name) }()
+	if err := temporary.Chmod(mode); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(path))
 }
 
 func (s *Store) ReadAll() ([]Segment, error) {
@@ -296,16 +666,93 @@ func ValidateSegments(projectID string, segments []Segment) error {
 	return nil
 }
 
+type authorityEstablishmentEnvelope struct {
+	APIVersion        string `json:"apiVersion"`
+	Kind              string `json:"kind"`
+	ProjectID         string `json:"projectId"`
+	PreviousProjectID string `json:"previousProjectId,omitempty"`
+	Operation         string `json:"operation"`
+	EstablishedAt     string `json:"establishedAt"`
+	ProvenanceDigest  string `json:"provenanceDigest"`
+}
+
+func validateEstablishedAuthorityPrefix(projectID string, segments []Segment) error {
+	if len(segments) == 0 {
+		return fmt.Errorf("claimed authority is missing its schema-4 establishment fence")
+	}
+	first := segments[0]
+	if first.SchemaVersion != AuthorityFenceSchemaVersion || first.Sequence != 1 || first.PreviousHash != "" || first.ProjectID != projectID || first.Command.Kind != "authority.establish" || first.Command.ActorRole != "dagrail.recovery" || first.Command.ObjectRef != "project:"+projectID || len(first.Events) != 1 || first.Events[0].Type != "authority.established" || first.Events[0].SchemaVersion != CurrentEventSchemaVersion {
+		return fmt.Errorf("claimed authority has an invalid schema-4 establishment prefix")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(first.Events[0].Payload))
+	decoder.DisallowUnknownFields()
+	var establishment authorityEstablishmentEnvelope
+	if err := decoder.Decode(&establishment); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return fmt.Errorf("claimed authority establishment payload is invalid")
+	}
+	if establishment.APIVersion != "dagrail.io/authority-establishment/v1alpha1" || establishment.Kind != "AuthorityEstablishment" || establishment.ProjectID != projectID || establishment.EstablishedAt != first.CommittedAt {
+		return fmt.Errorf("claimed authority establishment is bound to different authority")
+	}
+	switch establishment.Operation {
+	case "initialization":
+		if establishment.PreviousProjectID != "" {
+			return fmt.Errorf("initial authority establishment has a predecessor")
+		}
+	case "rotation", "legacy-adoption":
+		if establishment.PreviousProjectID == "" || establishment.PreviousProjectID == projectID {
+			return fmt.Errorf("replacement authority establishment predecessor is invalid")
+		}
+	default:
+		return fmt.Errorf("claimed authority establishment operation is invalid")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, establishment.EstablishedAt); err != nil || len(establishment.ProvenanceDigest) != len("sha256:")+64 || !strings.HasPrefix(establishment.ProvenanceDigest, "sha256:") {
+		return fmt.Errorf("claimed authority establishment evidence is invalid")
+	}
+	if _, err := hex.DecodeString(strings.TrimPrefix(establishment.ProvenanceDigest, "sha256:")); err != nil {
+		return fmt.Errorf("claimed authority establishment evidence is invalid")
+	}
+	sum := sha256.Sum256(first.Events[0].Payload)
+	digest := hex.EncodeToString(sum[:])
+	if first.Command.ID != "authority-establish-"+hex.EncodeToString(sum[:16]) || first.Command.IdempotencyKey != "authority-establish/"+digest || first.Command.RequestDigest != "sha256:"+digest {
+		return fmt.Errorf("claimed authority establishment command binding is invalid")
+	}
+	return nil
+}
+
 // RestoreSegments resumes an exact-prefix restore. It never overwrites an
 // existing segment and refuses any divergent journal.
 func (s *Store) RestoreSegments(segments []Segment) error {
+	if s.capability == storeCapabilityEstablishment {
+		return fmt.Errorf("authority establishment store cannot restore journal writes")
+	}
+	if s.capability != storeCapabilityOrdinary && s.capability != storeCapabilityRehearsal {
+		return fmt.Errorf("recovery inspection store cannot restore journal writes")
+	}
 	if err := ValidateSegments(s.projectID, segments); err != nil {
 		return err
 	}
+	if s.capability != storeCapabilityRehearsal && !s.testAllowUnestablished {
+		if err := validateEstablishedAuthorityPrefix(s.projectID, segments); err != nil {
+			return err
+		}
+	}
 	return s.WithLock(func() error {
+		if s.capability != storeCapabilityRehearsal {
+			if err := project.ValidateAuthorityClaim(filepath.Dir(s.dir), s.projectID); err != nil {
+				return err
+			}
+			if _, retired, retirementErr := s.authorityRetirementUnlocked(); retirementErr != nil {
+				return retirementErr
+			} else if retired {
+				return fmt.Errorf("project authority is retired and cannot restore journal writes")
+			}
+		}
 		existing, err := s.readAllUnlocked()
 		if err != nil {
 			return err
+		}
+		if _, retired := retirementEvent(existing); retired && s.capability != storeCapabilityRehearsal {
+			return fmt.Errorf("project authority is retired and cannot restore journal writes")
 		}
 		if len(existing) > len(segments) {
 			return fmt.Errorf("existing journal is longer than backup")
@@ -374,7 +821,7 @@ func CompatibilityForSegments(segments []Segment) (CompatibilityReport, error) {
 	report := CompatibilityReport{
 		Compatible:              true,
 		SegmentCount:            len(segments),
-		ReadableSegmentSchemas:  []int{LegacySegmentSchemaVersion, PreviousSegmentSchemaVersion, CurrentSegmentSchemaVersion},
+		ReadableSegmentSchemas:  []int{LegacySegmentSchemaVersion, PreviousSegmentSchemaVersion, CurrentSegmentSchemaVersion, AuthorityFenceSchemaVersion},
 		CurrentWriteSchema:      CurrentSegmentSchemaVersion,
 		CurrentWriteEventSchema: CurrentEventSchemaVersion,
 		SegmentSchemas:          map[int]int{},
@@ -516,7 +963,7 @@ func prepareEvents(events []Event) ([]Event, error) {
 }
 
 func validateStoredEvents(segmentSchema int, events []Event) error {
-	if segmentSchema < LegacySegmentSchemaVersion || segmentSchema > CurrentSegmentSchemaVersion {
+	if segmentSchema < LegacySegmentSchemaVersion || segmentSchema > AuthorityFenceSchemaVersion {
 		return fmt.Errorf("unsupported segment schema version %d", segmentSchema)
 	}
 	if len(events) == 0 {
@@ -531,7 +978,7 @@ func validateStoredEvents(segmentSchema int, events []Event) error {
 			if event.SchemaVersion != 0 {
 				return fmt.Errorf("legacy event %d unexpectedly declares schema version %d", index, event.SchemaVersion)
 			}
-		case PreviousSegmentSchemaVersion, CurrentSegmentSchemaVersion:
+		case PreviousSegmentSchemaVersion, CurrentSegmentSchemaVersion, AuthorityFenceSchemaVersion:
 			if event.SchemaVersion != CurrentEventSchemaVersion {
 				return fmt.Errorf("event %d uses unsupported schema version %d", index, event.SchemaVersion)
 			}
@@ -544,7 +991,7 @@ func validateStoredEvents(segmentSchema int, events []Event) error {
 }
 
 func validateStoredCommand(segmentSchema int, command Command) error {
-	if segmentSchema < LegacySegmentSchemaVersion || segmentSchema > CurrentSegmentSchemaVersion {
+	if segmentSchema < LegacySegmentSchemaVersion || segmentSchema > AuthorityFenceSchemaVersion {
 		return fmt.Errorf("unsupported segment schema version %d", segmentSchema)
 	}
 	if segmentSchema < CurrentSegmentSchemaVersion && (command.ObjectRef != "" || command.RequestDigest != "") {
@@ -622,12 +1069,5 @@ func computeHash(value unsignedSegment) (string, error) {
 }
 
 func syncDirectory(path string) error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-	dir, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	return errors.Join(dir.Sync(), dir.Close())
+	return project.SyncDirectory(path)
 }

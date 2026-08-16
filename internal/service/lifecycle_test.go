@@ -112,7 +112,7 @@ func TestLifecycleHistoryImportIsAtomicIdempotentAndProjectable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.ID != validation.MigrationID || receipt.TargetSequence != 2 || receipt.SourceHeadSequence != 4 {
+	if receipt.ID != validation.MigrationID || receipt.TargetSequence != 3 || receipt.SourceHeadSequence != 4 {
 		t.Fatalf("unexpected migration receipt: %+v", receipt)
 	}
 	retried, err := svc.ImportLifecycleHistory(manifest, manifest.Source.AuthorityHash, "migration-admin", "history/import-1")
@@ -123,7 +123,7 @@ func TestLifecycleHistoryImportIsAtomicIdempotentAndProjectable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(projection.Migrations) != 1 || len(projection.Attempts) != 1 || len(projection.Nodes) != 2 || projection.HeadSequence != 3 || projection.Nodes[0].Status != "terminal" || projection.Nodes[1].Status != "terminal" || projection.ProjectionDigest == "" {
+	if len(projection.Migrations) != 1 || len(projection.Attempts) != 1 || len(projection.Nodes) != 2 || projection.HeadSequence != 4 || projection.Nodes[0].Status != "terminal" || projection.Nodes[1].Status != "terminal" || projection.ProjectionDigest == "" {
 		t.Fatalf("unexpected lifecycle projection: %+v", projection)
 	}
 	validateLifecycleProjectionSchema(t, projection)
@@ -137,9 +137,336 @@ func TestLifecycleHistoryImportIsAtomicIdempotentAndProjectable(t *testing.T) {
 	}
 }
 
+func TestLifecycleV1Beta1ImportsMultipleClosedCommandsFromOneSourceRecord(t *testing.T) {
+	svc := lifecycleService(t)
+	state, err := svc.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := lifecycleManifest(t, state.ProjectID, state.GraphRevision, state.HeadHash)
+	manifest.APIVersion = LifecycleMigrationBundleAPIVersion
+	manifest.Records = []LifecycleMigrationRecord{
+		{SourceEventID: manifest.Records[0].SourceEventID, OccurredAt: manifest.Records[0].OccurredAt, Commands: []LifecycleMigrationCommand{{CommandIndex: 1, Events: manifest.Records[0].Events}}},
+		{SourceEventID: manifest.Records[1].SourceEventID, OccurredAt: manifest.Records[1].OccurredAt, Commands: []LifecycleMigrationCommand{{CommandIndex: 1, Events: manifest.Records[1].Events}, {CommandIndex: 2, Events: manifest.Records[2].Events}}},
+		{SourceEventID: manifest.Records[3].SourceEventID, OccurredAt: manifest.Records[3].OccurredAt, Commands: []LifecycleMigrationCommand{{CommandIndex: 1, Events: manifest.Records[3].Events}}},
+	}
+	sealLifecycleManifest(t, &manifest)
+	validateLifecycleMigrationSchema(t, manifest)
+	validation, err := svc.ValidateLifecycleMigration(manifest, manifest.Source.AuthorityHash)
+	if err != nil || !validation.Valid || validation.RecordCount != 3 || validation.NativeEventCount != 8 {
+		t.Fatalf("bundle validation = %+v, %v", validation, err)
+	}
+	if _, err := svc.ImportLifecycleHistory(manifest, manifest.Source.AuthorityHash, "migration-admin", "history/bundle-1"); err != nil {
+		t.Fatal(err)
+	}
+	projection, err := svc.LifecycleProjection()
+	if err != nil || len(projection.Actions) != 3 || projection.Nodes[0].Status != "terminal" {
+		t.Fatalf("bundle projection = %+v, %v", projection, err)
+	}
+}
+
+func TestLifecycleHistoryImportBootstrapsAfterLegacyIdentityReplacement(t *testing.T) {
+	for _, apiVersion := range []string{LifecycleMigrationAPIVersion, LifecycleMigrationBundleAPIVersion} {
+		t.Run(apiVersion, func(t *testing.T) {
+			svc := adoptedLifecycleService(t)
+			state, err := svc.State()
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest := lifecycleManifest(t, state.ProjectID, state.GraphRevision, state.HeadHash)
+			if apiVersion == LifecycleMigrationBundleAPIVersion {
+				manifest.APIVersion = apiVersion
+				for index := range manifest.Records {
+					manifest.Records[index].Commands = []LifecycleMigrationCommand{{CommandIndex: 1, Events: manifest.Records[index].Events}}
+					manifest.Records[index].Events = nil
+				}
+				sealLifecycleManifest(t, &manifest)
+			}
+			validation, err := svc.ValidateLifecycleMigration(manifest, manifest.Source.AuthorityHash)
+			if err != nil || !validation.Valid {
+				t.Fatalf("replacement authority migration validation = %+v, %v", validation, err)
+			}
+			if _, err := svc.ImportLifecycleHistory(manifest, manifest.Source.AuthorityHash, "migration-admin", "history/adopted-"+apiVersion); err != nil {
+				t.Fatalf("replacement authority migration import: %v", err)
+			}
+		})
+	}
+}
+
+func TestLifecycleV1Beta1KeepsCommandProofLedgersIndependent(t *testing.T) {
+	svc := lifecycleService(t)
+	state, _ := svc.State()
+	manifest := lifecycleManifest(t, state.ProjectID, state.GraphRevision, state.HeadHash)
+	manifest.APIVersion = LifecycleMigrationBundleAPIVersion
+	combined := append(append([]LifecycleMigrationEvent{}, manifest.Records[1].Events...), manifest.Records[2].Events...)
+	manifest.Records = []LifecycleMigrationRecord{
+		{SourceEventID: "source-1", OccurredAt: manifest.Records[0].OccurredAt, Commands: []LifecycleMigrationCommand{{CommandIndex: 1, Events: manifest.Records[0].Events}}},
+		{SourceEventID: "source-2", OccurredAt: manifest.Records[1].OccurredAt, Commands: []LifecycleMigrationCommand{{CommandIndex: 1, Events: combined}}},
+		{SourceEventID: "source-4", OccurredAt: manifest.Records[3].OccurredAt, Commands: []LifecycleMigrationCommand{{CommandIndex: 1, Events: manifest.Records[3].Events}}},
+	}
+	sealLifecycleManifest(t, &manifest)
+	if _, err := svc.ValidateLifecycleMigration(manifest, manifest.Source.AuthorityHash); err == nil || !strings.Contains(err.Error(), "one source command") {
+		t.Fatalf("two actions in one bundle command were accepted: %v", err)
+	}
+
+	manifest = lifecycleManifest(t, state.ProjectID, state.GraphRevision, state.HeadHash)
+	manifest.APIVersion = LifecycleMigrationBundleAPIVersion
+	manifest.Records[0].Commands = []LifecycleMigrationCommand{{CommandIndex: 2, Events: manifest.Records[0].Events}}
+	manifest.Records[0].Events = nil
+	for index := 1; index < len(manifest.Records); index++ {
+		manifest.Records[index].Commands = []LifecycleMigrationCommand{{CommandIndex: 1, Events: manifest.Records[index].Events}}
+		manifest.Records[index].Events = nil
+	}
+	if _, err := LifecycleSourceEventHash(manifest.Records[0]); err == nil || !strings.Contains(err.Error(), "commandIndex") {
+		t.Fatalf("non-contiguous command indexes reached a public hash helper: %v", err)
+	}
+
+	manifest = lifecycleManifest(t, state.ProjectID, state.GraphRevision, state.HeadHash)
+	manifest.APIVersion = LifecycleMigrationBundleAPIVersion
+	for index := range manifest.Records {
+		manifest.Records[index].Commands = []LifecycleMigrationCommand{{CommandIndex: 1, Events: manifest.Records[index].Events}}
+		manifest.Records[index].Events = nil
+	}
+	startEvents := manifest.Records[1].Commands[0].Events
+	manifest.Records[1].Commands = []LifecycleMigrationCommand{
+		{CommandIndex: 1, Events: append([]LifecycleMigrationEvent{}, startEvents[:2]...)},
+		{CommandIndex: 2, Events: append([]LifecycleMigrationEvent{}, startEvents[2:]...)},
+	}
+	sealLifecycleManifest(t, &manifest)
+	if _, err := svc.ValidateLifecycleMigration(manifest, manifest.Source.AuthorityHash); err == nil {
+		t.Fatal("support events in one command authorized action.applied in another command")
+	}
+
+	manifest = lifecycleManifest(t, state.ProjectID, state.GraphRevision, state.HeadHash)
+	manifest.APIVersion = LifecycleMigrationBundleAPIVersion
+	for index := range manifest.Records {
+		manifest.Records[index].Commands = []LifecycleMigrationCommand{{CommandIndex: 1, Events: manifest.Records[index].Events}}
+		manifest.Records[index].Events = nil
+	}
+	sealLifecycleManifest(t, &manifest)
+	boundAuthority := manifest.Source.AuthorityHash
+	manifest.Records[1].Commands[0].Events, manifest.Records[2].Commands[0].Events = manifest.Records[2].Commands[0].Events, manifest.Records[1].Commands[0].Events
+	if _, err := svc.ValidateLifecycleMigration(manifest, boundAuthority); err == nil {
+		t.Fatal("command event order changed without updating authority hashes was accepted")
+	}
+
+	manifest = lifecycleManifest(t, state.ProjectID, state.GraphRevision, state.HeadHash)
+	manifest.APIVersion = LifecycleMigrationBundleAPIVersion
+	manifest.Records[0].Commands = make([]LifecycleMigrationCommand, 129)
+	for index := range manifest.Records[0].Commands {
+		manifest.Records[0].Commands[index] = LifecycleMigrationCommand{CommandIndex: uint64(index + 1), Events: append([]LifecycleMigrationEvent{}, manifest.Records[0].Events...)}
+	}
+	manifest.Records[0].Events = nil
+	for index := 1; index < len(manifest.Records); index++ {
+		manifest.Records[index].Commands = []LifecycleMigrationCommand{{CommandIndex: 1, Events: manifest.Records[index].Events}}
+		manifest.Records[index].Events = nil
+	}
+	if _, err := LifecycleSourceEventHash(manifest.Records[0]); err == nil || !strings.Contains(err.Error(), "128") {
+		t.Fatalf("129 commands in one source record reached authority hashing: %v", err)
+	}
+}
+
+func TestLifecycleRecordRejectsForbiddenCrossVersionFieldsEvenWhenEmpty(t *testing.T) {
+	var alpha LifecycleMigrationRecord
+	if err := json.Unmarshal([]byte(`{"sourceSequence":1,"sourceEventId":"a","sourceEventHash":"`+strings.Repeat("a", 64)+`","occurredAt":"2026-08-16T00:00:00Z","events":[{"type":"role.bound","payload":{}}],"commands":[]}`), &alpha); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lifecycleRecordCommands(LifecycleMigrationAPIVersion, alpha); err == nil || !strings.Contains(err.Error(), "forbids commands") {
+		t.Fatalf("v1alpha1 accepted an explicitly present empty commands field: %v", err)
+	}
+	assertLifecycleHashHelpersReject(t, LifecycleMigrationAPIVersion, alpha)
+	var beta LifecycleMigrationRecord
+	if err := json.Unmarshal([]byte(`{"sourceSequence":1,"sourceEventId":"b","sourceEventHash":"`+strings.Repeat("b", 64)+`","occurredAt":"2026-08-16T00:00:00Z","events":[],"commands":[{"commandIndex":1,"events":[{"type":"role.bound","payload":{}}]}]}`), &beta); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lifecycleRecordCommands(LifecycleMigrationBundleAPIVersion, beta); err == nil || !strings.Contains(err.Error(), "forbids record-level events") {
+		t.Fatalf("v1beta1 accepted an explicitly present empty events field: %v", err)
+	}
+	assertLifecycleHashHelpersReject(t, LifecycleMigrationBundleAPIVersion, beta)
+}
+
+func TestLifecycleHashHelpersRejectInvalidCommandAndNestedPayload(t *testing.T) {
+	invalidOrdinal := LifecycleMigrationRecord{
+		SourceSequence: 1,
+		SourceEventID:  "source-1",
+		OccurredAt:     "2026-08-16T00:00:00Z",
+		Commands: []LifecycleMigrationCommand{{
+			CommandIndex: 2,
+			Events:       []LifecycleMigrationEvent{{Type: "role.bound", Payload: json.RawMessage(`{}`)}},
+		}},
+	}
+	assertLifecycleHashHelpersReject(t, LifecycleMigrationBundleAPIVersion, invalidOrdinal)
+
+	unknownPayload := LifecycleMigrationRecord{
+		SourceSequence: 1,
+		SourceEventID:  "source-1",
+		OccurredAt:     "2026-08-16T00:00:00Z",
+		Events: []LifecycleMigrationEvent{{
+			Type:    "role.bound",
+			Payload: json.RawMessage(`{"roleId":"worker","harness":"manual","sessionId":"session","boundAt":"2026-08-16T00:00:00Z","expiresAt":"2026-08-16T01:00:00Z","active":true,"unknown":true}`),
+		}},
+	}
+	assertLifecycleHashHelpersReject(t, LifecycleMigrationAPIVersion, unknownPayload)
+}
+
+func TestLifecyclePublicHashHelpersCloseEveryScalarPreimage(t *testing.T) {
+	svc := lifecycleService(t)
+	state, _ := svc.State()
+	alpha := lifecycleManifest(t, state.ProjectID, state.GraphRevision, state.HeadHash)
+	beta := cloneLifecycleManifest(t, alpha)
+	beta.APIVersion = LifecycleMigrationBundleAPIVersion
+	for index := range beta.Records {
+		beta.Records[index].Commands = []LifecycleMigrationCommand{{CommandIndex: 1, Events: beta.Records[index].Events}}
+		beta.Records[index].Events = nil
+		beta.Records[index].eventsPresent = false
+		beta.Records[index].commandsPresent = true
+	}
+	sealLifecycleManifest(t, &beta)
+
+	for _, base := range []LifecycleMigrationManifest{alpha, beta} {
+		t.Run(base.APIVersion, func(t *testing.T) {
+			for name, mutate := range map[string]func(*LifecycleMigrationRecord){
+				"zero-sequence":     func(record *LifecycleMigrationRecord) { record.SourceSequence = 0 },
+				"large-sequence":    func(record *LifecycleMigrationRecord) { record.SourceSequence = maxMigrationRecords + 1 },
+				"empty-id":          func(record *LifecycleMigrationRecord) { record.SourceEventID = "" },
+				"non-portable-id":   func(record *LifecycleMigrationRecord) { record.SourceEventID = "bad id" },
+				"bad-previous-hash": func(record *LifecycleMigrationRecord) { record.PreviousSourceHash = "bad" },
+				"bad-time":          func(record *LifecycleMigrationRecord) { record.OccurredAt = "not-a-time" },
+			} {
+				t.Run(name, func(t *testing.T) {
+					candidate := cloneLifecycleManifest(t, base)
+					mutate(&candidate.Records[0])
+					assertLifecycleHashHelpersReject(t, candidate.APIVersion, candidate.Records[0])
+				})
+			}
+
+			badOutput := cloneLifecycleManifest(t, base)
+			badOutput.Records[0].SourceEventHash = "bad"
+			if _, err := LifecycleSourceEventHash(badOutput.Records[0]); err != nil {
+				t.Fatalf("source-event helper incorrectly validated its own output field: %v", err)
+			}
+			if _, err := LifecycleRecordsDigest(badOutput.Records); err == nil {
+				t.Fatal("records digest accepted an invalid sourceEventHash")
+			}
+			if _, err := LifecycleSourceAuthorityHash(badOutput); err == nil {
+				t.Fatal("source authority hash accepted an invalid sourceEventHash")
+			}
+
+			for name, mutate := range map[string]func(*LifecycleMigrationManifest){
+				"wrong-kind":       func(manifest *LifecycleMigrationManifest) { manifest.Kind = "WrongKind" },
+				"bad-project":      func(manifest *LifecycleMigrationManifest) { manifest.ProjectID = "not-a-uuid" },
+				"bad-graph":        func(manifest *LifecycleMigrationManifest) { manifest.GraphRevision = "bad" },
+				"bad-journal-head": func(manifest *LifecycleMigrationManifest) { manifest.ExpectedJournalHead = "bad" },
+				"bad-source":       func(manifest *LifecycleMigrationManifest) { manifest.Source.System = "bad source" },
+				"zero-head":        func(manifest *LifecycleMigrationManifest) { manifest.Source.HeadSequence = 0 },
+				"bad-head-id":      func(manifest *LifecycleMigrationManifest) { manifest.Source.HeadEventID = "bad id" },
+				"bad-head-hash":    func(manifest *LifecycleMigrationManifest) { manifest.Source.HeadEventHash = "bad" },
+				"bad-records-hash": func(manifest *LifecycleMigrationManifest) { manifest.RecordsDigest = "bad" },
+			} {
+				t.Run(name, func(t *testing.T) {
+					candidate := cloneLifecycleManifest(t, base)
+					mutate(&candidate)
+					if _, err := LifecycleSourceAuthorityHash(candidate); err == nil {
+						t.Fatal("source authority hash accepted an invalid manifest preimage")
+					}
+				})
+			}
+		})
+	}
+}
+
+func cloneLifecycleManifest(t *testing.T, manifest LifecycleMigrationManifest) LifecycleMigrationManifest {
+	t.Helper()
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clone LifecycleMigrationManifest
+	if err := json.Unmarshal(raw, &clone); err != nil {
+		t.Fatal(err)
+	}
+	return clone
+}
+
+func assertLifecycleHashHelpersReject(t *testing.T, apiVersion string, record LifecycleMigrationRecord) {
+	t.Helper()
+	if _, err := LifecycleRecordsDigest([]LifecycleMigrationRecord{record}); err == nil {
+		t.Fatal("LifecycleRecordsDigest accepted an invalid lifecycle wrapper")
+	}
+	if _, err := LifecycleSourceEventHash(record); err == nil {
+		t.Fatal("LifecycleSourceEventHash accepted an invalid lifecycle wrapper")
+	}
+	manifest := LifecycleMigrationManifest{APIVersion: apiVersion, Records: []LifecycleMigrationRecord{record}}
+	if _, err := LifecycleSourceAuthorityHash(manifest); err == nil {
+		t.Fatal("LifecycleSourceAuthorityHash accepted an invalid lifecycle wrapper")
+	}
+}
+
+func TestLifecycleMigrationDecodeRejectsUnknownNestedFields(t *testing.T) {
+	for _, apiVersion := range []string{LifecycleMigrationAPIVersion, LifecycleMigrationBundleAPIVersion} {
+		for _, layer := range []string{"record", "event", "command"} {
+			if apiVersion == LifecycleMigrationAPIVersion && layer == "command" {
+				continue
+			}
+			t.Run(apiVersion+"/"+layer, func(t *testing.T) {
+				event := map[string]any{"type": "role.bound", "payload": map[string]any{}}
+				record := map[string]any{
+					"sourceSequence":  1,
+					"sourceEventId":   "source-1",
+					"sourceEventHash": strings.Repeat("a", 64),
+					"occurredAt":      "2026-08-16T00:00:00Z",
+				}
+				command := map[string]any{"commandIndex": 1, "events": []any{event}}
+				if apiVersion == LifecycleMigrationAPIVersion {
+					record["events"] = []any{event}
+				} else {
+					record["commands"] = []any{command}
+				}
+				switch layer {
+				case "record":
+					record["unexpectedRecordField"] = true
+				case "event":
+					event["unexpectedEventField"] = true
+				case "command":
+					command["unexpectedCommandField"] = true
+				}
+				manifest := map[string]any{
+					"apiVersion":          apiVersion,
+					"kind":                "LifecycleMigration",
+					"projectId":           "project",
+					"graphRevision":       "revision",
+					"expectedJournalHead": "",
+					"source": map[string]any{
+						"system": "source", "project": "project",
+						"authorityHash": "sha256:" + strings.Repeat("b", 64),
+						"headSequence":  1, "headEventId": "source-1", "headEventHash": strings.Repeat("a", 64),
+					},
+					"recordsDigest": "sha256:" + strings.Repeat("c", 64),
+					"records":       []any{record},
+				}
+				raw, err := json.Marshal(manifest)
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(t.TempDir(), "migration.json")
+				if err := os.WriteFile(path, raw, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := DecodeLifecycleMigrationFile(path); err == nil || !strings.Contains(err.Error(), "unknown field") {
+					t.Fatalf("%s nested unknown field was accepted: %v", layer, err)
+				}
+			})
+		}
+	}
+}
+
 func validateLifecycleMigrationSchema(t *testing.T, manifest LifecycleMigrationManifest) {
 	t.Helper()
-	validateLifecycleSchema(t, filepath.Join("..", "..", "schemas", "lifecycle-migration-v1alpha1.schema.json"), "urn:dagrail:lifecycle-migration", manifest)
+	name := "lifecycle-migration-v1alpha1.schema.json"
+	if manifest.APIVersion == LifecycleMigrationBundleAPIVersion {
+		name = "lifecycle-migration-v1beta1.schema.json"
+	}
+	validateLifecycleSchema(t, filepath.Join("..", "..", "schemas", name), "urn:dagrail:lifecycle-migration", manifest)
 }
 
 func validateLifecycleProjectionSchema(t *testing.T, projection LifecycleProjection) {
@@ -209,9 +536,8 @@ func TestLifecycleHistoryImportRejectsUnknownNativeEventBeforeAppend(t *testing.
 	state, _ := svc.State()
 	manifest := lifecycleManifest(t, state.ProjectID, state.GraphRevision, state.HeadHash)
 	manifest.Records[0].Events[0].Type = "project-specific.accepted"
-	sealLifecycleManifest(t, &manifest)
-	if _, err := svc.ImportLifecycleHistory(manifest, manifest.Source.AuthorityHash, "migration-admin", "history/import-unknown"); err == nil || !strings.Contains(err.Error(), "unsupported native event") {
-		t.Fatalf("unknown native event was not rejected: %v", err)
+	if _, err := LifecycleSourceEventHash(manifest.Records[0]); err == nil || !strings.Contains(err.Error(), "unsupported native event") {
+		t.Fatalf("unknown native event reached authority hashing: %v", err)
 	}
 	after, _ := svc.State()
 	if after.HeadSequence != state.HeadSequence || after.HeadHash != state.HeadHash {
@@ -224,9 +550,8 @@ func TestLifecycleHistoryImportRejectsUnknownNativePayloadField(t *testing.T) {
 	state, _ := svc.State()
 	manifest := lifecycleManifest(t, state.ProjectID, state.GraphRevision, state.HeadHash)
 	manifest.Records[0].Events[0].Payload = json.RawMessage(`{"roleId":"worker","harness":"manual","sessionId":"source-session","boundAt":"2026-08-15T01:02:03Z","expiresAt":"2026-08-16T01:02:03Z","active":true,"projectSpecificStage":"S1"}`)
-	sealLifecycleManifest(t, &manifest)
-	if _, err := svc.ValidateLifecycleMigration(manifest, manifest.Source.AuthorityHash); err == nil || !strings.Contains(err.Error(), "closed event payload") {
-		t.Fatalf("project-specific native event field was accepted: %v", err)
+	if _, err := LifecycleSourceEventHash(manifest.Records[0]); err == nil || !strings.Contains(err.Error(), "closed event payload") {
+		t.Fatalf("project-specific native event field reached authority hashing: %v", err)
 	}
 }
 
@@ -250,11 +575,11 @@ func TestLifecycleHistoryRecomputesEveryNormalizedSourceEventHash(t *testing.T) 
 	state, _ := svc.State()
 	manifest := lifecycleManifest(t, state.ProjectID, state.GraphRevision, state.HeadHash)
 	manifest.Records[0].Events[0].Payload = json.RawMessage(`{"roleId":"worker","harness":"manual","sessionId":"changed-without-rehash","boundAt":"2026-08-15T01:02:03Z","expiresAt":"2026-08-16T01:02:03Z","active":true}`)
-	manifest.RecordsDigest, _ = LifecycleRecordsDigest(manifest.Records)
-	manifest.Source.AuthorityHash = ""
-	manifest.Source.AuthorityHash, _ = LifecycleSourceAuthorityHash(manifest)
-	if _, err := svc.ValidateLifecycleMigration(manifest, manifest.Source.AuthorityHash); err == nil || !strings.Contains(err.Error(), "source lifecycle chain is invalid") {
-		t.Fatalf("native mapping changed without a matching normalized event hash: %v", err)
+	if _, err := LifecycleRecordsDigest(manifest.Records); err == nil || !strings.Contains(err.Error(), "does not bind") {
+		t.Fatalf("records digest accepted a stale normalized source hash: %v", err)
+	}
+	if _, err := LifecycleSourceAuthorityHash(manifest); err == nil || !strings.Contains(err.Error(), "does not bind") {
+		t.Fatalf("source authority hash accepted a stale normalized source hash: %v", err)
 	}
 }
 
@@ -1779,6 +2104,38 @@ func lifecycleService(t *testing.T) *Service {
 	return svc
 }
 
+func adoptedLifecycleService(t *testing.T) *Service {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, "data"))
+	svc, err := Init(root, "adopted-lifecycle-migration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"migration"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"task","kind":"task","role":"worker","title":"task","outcomes":[{"id":"done","class":"success"}]},{"id":"complete","kind":"milestone","title":"complete","outcomes":[{"id":"complete","class":"success"}]}],"edges":[{"id":"task-complete","from":"task","to":"complete","when":{"outcome":"done"}}]}}`
+	path := filepath.Join(root, "graph.json")
+	if err := os.WriteFile(path, []byte(graph), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(path, "graph/import", "bootstrap"); err != nil {
+		t.Fatal(err)
+	}
+	previousProjectID := svc.Project.Config.ProjectID
+	previousHead := simulatePreV022Authority(t, svc, testAuthorityHome(t))
+	receipt, err := svc.AdoptLegacyAuthority(previousProjectID, previousHead, "adopt lifecycle fixture", "adopt/lifecycle-fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := Open(root)
+	if err != nil || replacement.Project.Config.ProjectID != receipt.ReplacementProjectID {
+		t.Fatalf("open replacement lifecycle authority: %+v %v", replacement, err)
+	}
+	if _, err := replacement.ImportGraph(path, "graph/import/replacement", "bootstrap"); err != nil {
+		t.Fatalf("bootstrap replacement graph: %v", err)
+	}
+	return replacement
+}
+
 func lifecycleManifest(t *testing.T, projectID, graphRevision, head string) LifecycleMigrationManifest {
 	t.Helper()
 	now := time.Date(2026, 8, 15, 1, 2, 3, 0, time.UTC).Format(time.RFC3339Nano)
@@ -1833,6 +2190,34 @@ func sealLifecycleManifest(t *testing.T, manifest *LifecycleMigrationManifest) {
 		t.Fatal(err)
 	}
 	manifest.Source.AuthorityHash = authorityHash
+}
+
+func TestLifecyclePublicHashHelpersRejectDuplicateSourceIdentity(t *testing.T) {
+	svc := lifecycleService(t)
+	state, err := svc.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := lifecycleManifest(t, state.ProjectID, state.GraphRevision, state.HeadHash)
+	manifest.Records[1].SourceEventID = manifest.Records[0].SourceEventID
+	previous := ""
+	for index := range manifest.Records {
+		manifest.Records[index].PreviousSourceHash = previous
+		hash, err := LifecycleSourceEventHash(manifest.Records[index])
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest.Records[index].SourceEventHash = hash
+		previous = hash
+	}
+	manifest.Source.HeadEventID = manifest.Records[len(manifest.Records)-1].SourceEventID
+	manifest.Source.HeadEventHash = previous
+	if _, err := LifecycleRecordsDigest(manifest.Records); err == nil || !strings.Contains(err.Error(), "repeats source identity") {
+		t.Fatalf("records digest accepted duplicate sourceEventId: %v", err)
+	}
+	if _, err := LifecycleSourceAuthorityHash(manifest); err == nil || !strings.Contains(err.Error(), "repeats source identity") {
+		t.Fatalf("authority hash accepted duplicate sourceEventId: %v", err)
+	}
 }
 
 func digest(character string) string { return "sha256:" + strings.Repeat(character, 64) }

@@ -43,7 +43,7 @@ func TestJournalIsAuthoritativeIdempotentAndTamperEvident(t *testing.T) {
 		t.Fatalf("idempotent import changed result: %s %s", first, second)
 	}
 	verified, err := run("journal", "verify", "--root", root)
-	if err != nil || !strings.Contains(verified, `"segments":1`) {
+	if err != nil || !strings.Contains(verified, `"segments":2`) {
 		t.Fatalf("verify: %v %s", err, verified)
 	}
 	svc, err := service.Open(root)

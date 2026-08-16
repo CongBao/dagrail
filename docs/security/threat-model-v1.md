@@ -1,6 +1,6 @@
 # Threat model v1
 
-This model applies to DAGrail v0.21's local CLI, stdio MCP server, compile-in
+This model applies to DAGrail v0.22's local CLI, stdio MCP server, compile-in
 providers, harness subprocesses, loopback Explorer, immutable journal, SQLite
 projection, portable exports, and plugin runtime. It is versioned because changing a
 trust boundary is an architecture change, not a documentation edit.
@@ -28,6 +28,7 @@ diagnostic format and never contain journal payloads or graph identifiers.
 | Portable files | backup/export bytes | digest plus optional detached Ed25519 signature | signature trust depends on separately distributed public keys |
 | Artifact bodies and secrets | external stores | only digest, size, type, provenance, and credential-free URI enter authority | field screening cannot detect every secret or PII form |
 | Imported lifecycle prefix | external authority plus operator trust anchor | separate authority digest, complete-prefix chain, closed event mapping, reducer/invariant preflight, atomic append | DAGrail cannot prove that an external converter understood its source correctly |
+| Local writer identity | per-user anchor, path-bound claim, lineage, journal fences | one UUID/data-root binding across `DAGRAIL_HOME`, fresh identity on recovery, locked retirement and pre-publication establishment | the same OS user can deliberately alter private evidence or run modified code |
 
 The project locator is repository content and may be world-readable, but must not be
 group/other writable on POSIX. Runtime data, journal segments, projections, observation
@@ -37,7 +38,8 @@ proved by the portable binary.
 
 ## Entry points and abuse cases
 
-- Graph, GraphPatch, project locator, backup, journal segment, signature envelope,
+- Graph, GraphPatch, project locator, lifecycle migration, authority establishment/retirement/rotation,
+  backup, journal segment, signature envelope,
   install receipt, observation locator, hook input, MCP message, MCP tool input,
   provider input/output, Explorer query, and API response are bounded before durable
   use.
@@ -88,6 +90,11 @@ proved by the portable binary.
 - Recovery rehearsal binds all checks to one captured journal head, restores only into
   disposable storage, and compares a stable logical-table fingerprint rather than
   SQLite page bytes. It cannot overwrite or truncate the live journal.
+- Legacy adoption requires positive absence of v0.22 claim/lineage plus a per-user,
+  canonical-path reservation independent of `DAGRAIL_HOME`. It retires the old UUID;
+  the fresh UUID receives a schema-4 establishment fence before locator publication.
+  A copied v0.22 locator, deleted claim, second legacy copy, or already-admitted v0.21
+  writer therefore fails closed without making the old identity writable.
 - Release qualification accepts only fixed, bounded, regular source files under the
   selected root, verifies workflow action commit pins, emits no paths, and keeps
   structural automation declarations separate from external adoption evidence.
@@ -111,6 +118,13 @@ proved by the portable binary.
 - complete secret, PII, malware, or legal-content detection;
 - universal exactly-once delivery where the external system lacks an idempotency or
   observation surface.
+
+The per-user anchor and canonical-path-bound local claim prevent accidental or typed-API
+resurrection from a copied locator, portable backup, complete runtime directory, or
+alternate `DAGRAIL_HOME`. Append-only retirement and establishment fences make old
+reducers fail before stale mutation. These records are not secrets or hostile-user
+credentials: a malicious same-user process that edits private evidence or code remains
+outside this boundary.
 
 ## Verification
 

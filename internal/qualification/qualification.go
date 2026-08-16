@@ -93,7 +93,7 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 		"CODE_OF_CONDUCT.md", "CONTRIBUTING.md", "COMPATIBILITY.md", "CONTEXT.md",
 		"CHANGELOG.md", "docs/api.md", "docs/tutorial.md", "docs/release.md", "docs/readiness.md", "docs/migration.md",
 		"docs/qualification.md", "docs/recovery.md", "schemas/compatibility-contract-v1beta1.schema.json",
-		"schemas/lifecycle-migration-v1alpha1.schema.json", "schemas/lifecycle-projection-v1alpha1.schema.json",
+		"schemas/lifecycle-migration-v1alpha1.schema.json", "schemas/lifecycle-migration-v1beta1.schema.json", "schemas/authority-adoption-v1alpha1.schema.json", "schemas/authority-rotation-v1alpha1.schema.json", "schemas/lifecycle-projection-v1alpha1.schema.json",
 		"internal/compatibility/beta-window.json",
 	}
 	layoutOK := true
@@ -111,9 +111,9 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 	surfaces := []contract.DocumentedSurface{
 		contractReport.CommandCatalog, contractReport.CLIError, contractReport.DecisionRecord, contractReport.Installation, contractReport.HistoricalMatrix, contractReport.Readiness,
 		contractReport.UI, contractReport.Security, contractReport.JournalVerification,
-		contractReport.PluginConformance, contractReport.Support, contractReport.Recovery,
+		contractReport.PluginConformance, contractReport.Support, contractReport.Recovery, contractReport.AuthorityAdoption, contractReport.AuthorityRotation,
 		contractReport.ReleaseQualification, contractReport.ReleaseManifest, contractReport.ReleaseVerification,
-		contractReport.LifecycleMigration, contractReport.LifecycleProjection,
+		contractReport.LifecycleMigrationV1Alpha1, contractReport.LifecycleMigration, contractReport.LifecycleProjection,
 	}
 	digestsOK := true
 	for _, surface := range surfaces {
@@ -190,10 +190,19 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 func validationSubjectBoundary(root string) bool {
 	adr, adrErr := readSourceFile(root, "docs/adr/0017-validation-subjects-do-not-define-kernel-contracts.md")
 	migration, migrationErr := readSourceFile(root, "docs/migration.md")
-	schemaRaw, schemaErr := readSourceFile(root, "schemas/lifecycle-migration-v1alpha1.schema.json")
-	if adrErr != nil || migrationErr != nil || schemaErr != nil || !containsAll(string(adr), []string{"repository-neutral", "external converter", "outside DAGrail"}) || !containsAll(string(migration), []string{"Project-neutral boundary", "outside the DAGrail repository and binary"}) {
+	if adrErr != nil || migrationErr != nil || !containsAll(string(adr), []string{"repository-neutral", "external converter", "outside DAGrail"}) || !containsAll(string(migration), []string{"Project-neutral boundary", "outside the DAGrail repository and binary"}) {
 		return false
 	}
+	for _, path := range []string{"schemas/lifecycle-migration-v1alpha1.schema.json", "schemas/lifecycle-migration-v1beta1.schema.json"} {
+		schemaRaw, schemaErr := readSourceFile(root, path)
+		if schemaErr != nil || !closedLifecycleEventSchema(schemaRaw) {
+			return false
+		}
+	}
+	return true
+}
+
+func closedLifecycleEventSchema(schemaRaw []byte) bool {
 	var schema map[string]any
 	if json.Unmarshal(schemaRaw, &schema) != nil {
 		return false

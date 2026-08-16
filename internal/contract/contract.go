@@ -47,36 +47,39 @@ type ContextBudget struct {
 }
 
 type Report struct {
-	APIVersion           string                   `json:"apiVersion"`
-	Kind                 string                   `json:"kind"`
-	Version              string                   `json:"version"`
-	Stability            string                   `json:"stability"`
-	Graph                GraphSurface             `json:"graph"`
-	CLI                  VersionedSurface         `json:"cli"`
-	CommandCatalog       DocumentedSurface        `json:"commandCatalog"`
-	CLIError             DocumentedSurface        `json:"cliError"`
-	DecisionRecord       DocumentedSurface        `json:"decisionRecord"`
-	Installation         DocumentedSurface        `json:"installationDiagnostic"`
-	HistoricalMatrix     DocumentedSurface        `json:"historicalBinaryMatrix"`
-	Readiness            DocumentedSurface        `json:"readinessDecision"`
-	UI                   DocumentedSurface        `json:"ui"`
-	Security             DocumentedSurface        `json:"security"`
-	JournalVerification  DocumentedSurface        `json:"journalVerification"`
-	PluginConformance    DocumentedSurface        `json:"pluginConformance"`
-	Support              DocumentedSurface        `json:"support"`
-	Recovery             DocumentedSurface        `json:"recovery"`
-	ReleaseQualification DocumentedSurface        `json:"releaseQualification"`
-	ReleaseManifest      DocumentedSurface        `json:"releaseManifest"`
-	ReleaseVerification  DocumentedSurface        `json:"releaseVerification"`
-	LifecycleMigration   DocumentedSurface        `json:"lifecycleMigration"`
-	LifecycleProjection  DocumentedSurface        `json:"lifecycleProjection"`
-	Provider             VersionedSurface         `json:"providerSdk"`
-	Journal              JournalContract          `json:"journal"`
-	Projection           int                      `json:"projectionSchema"`
-	MCP                  []mcpserver.ToolContract `json:"mcpTools"`
-	Contexts             []ContextBudget          `json:"contextBudgets"`
-	Commands             []string                 `json:"topLevelCommands"`
-	Promises             []string                 `json:"compatibilityPromises"`
+	APIVersion                 string                   `json:"apiVersion"`
+	Kind                       string                   `json:"kind"`
+	Version                    string                   `json:"version"`
+	Stability                  string                   `json:"stability"`
+	Graph                      GraphSurface             `json:"graph"`
+	CLI                        VersionedSurface         `json:"cli"`
+	CommandCatalog             DocumentedSurface        `json:"commandCatalog"`
+	CLIError                   DocumentedSurface        `json:"cliError"`
+	DecisionRecord             DocumentedSurface        `json:"decisionRecord"`
+	Installation               DocumentedSurface        `json:"installationDiagnostic"`
+	HistoricalMatrix           DocumentedSurface        `json:"historicalBinaryMatrix"`
+	Readiness                  DocumentedSurface        `json:"readinessDecision"`
+	UI                         DocumentedSurface        `json:"ui"`
+	Security                   DocumentedSurface        `json:"security"`
+	JournalVerification        DocumentedSurface        `json:"journalVerification"`
+	PluginConformance          DocumentedSurface        `json:"pluginConformance"`
+	Support                    DocumentedSurface        `json:"support"`
+	Recovery                   DocumentedSurface        `json:"recovery"`
+	AuthorityAdoption          DocumentedSurface        `json:"authorityAdoption"`
+	AuthorityRotation          DocumentedSurface        `json:"authorityRotation"`
+	ReleaseQualification       DocumentedSurface        `json:"releaseQualification"`
+	ReleaseManifest            DocumentedSurface        `json:"releaseManifest"`
+	ReleaseVerification        DocumentedSurface        `json:"releaseVerification"`
+	LifecycleMigrationV1Alpha1 DocumentedSurface        `json:"lifecycleMigrationV1Alpha1"`
+	LifecycleMigration         DocumentedSurface        `json:"lifecycleMigration"`
+	LifecycleProjection        DocumentedSurface        `json:"lifecycleProjection"`
+	Provider                   VersionedSurface         `json:"providerSdk"`
+	Journal                    JournalContract          `json:"journal"`
+	Projection                 int                      `json:"projectionSchema"`
+	MCP                        []mcpserver.ToolContract `json:"mcpTools"`
+	Contexts                   []ContextBudget          `json:"contextBudgets"`
+	Commands                   []string                 `json:"topLevelCommands"`
+	Promises                   []string                 `json:"compatibilityPromises"`
 }
 
 func Current() Report {
@@ -115,19 +118,19 @@ func Current() Report {
 			APIVersion:   install.InstallationDiagnosticAPIVersion,
 			Stability:    "additive-local-diagnostic",
 			SchemaPath:   "schemas/installation-diagnostic-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:575f4d580dacc1b81c8ab5787d0d4c2e1904927beb5449a850d3ce35e60a3942",
+			SchemaSHA256: "sha256:d4580e50ff9b9f1f219dc46d9d49b7ff71a1554734ab7410ef46b1a70cdea884",
 		},
 		HistoricalMatrix: DocumentedSurface{
 			APIVersion:   compatibility.APIVersion,
 			Stability:    "closed-beta-window",
 			SchemaPath:   "schemas/historical-binary-matrix-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:88f4cf5f44ef604698d58f315696291fd8d94ea00a26ba699e5b94be3b570f7c",
+			SchemaSHA256: "sha256:cfd486451a7f94e2dfddda078aafb24d502b20975763ce3733425db04b1614d2",
 		},
 		Readiness: DocumentedSurface{
 			APIVersion:   "dagrail.io/readiness-decision/v1alpha1",
 			Stability:    "additive-structural-decision",
 			SchemaPath:   "schemas/readiness-decision-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:3accab79286031db41164b8dee5217ba8295ddd8af066101101e6e55fa500565",
+			SchemaSHA256: "sha256:cc3fa5dd656101d80bab33bdb2a288846e5aa9daec6b7577cca707577730e637",
 		},
 		UI: DocumentedSurface{
 			APIVersion:   "dagrail.io/ui/v1beta1",
@@ -165,6 +168,18 @@ func Current() Report {
 			SchemaPath:   "schemas/recovery-rehearsal-v1alpha1.schema.json",
 			SchemaSHA256: "sha256:8a465d234f701ee98247117021f92657f603161aeb16f00a3ae3c1537e58b514",
 		},
+		AuthorityAdoption: DocumentedSurface{
+			APIVersion:   service.AuthorityAdoptionAPIVersion,
+			Stability:    "alpha-fresh-identity-migration",
+			SchemaPath:   "schemas/authority-adoption-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:d01a2416b7176a5261d93396cf3ea73d13f545b56ab216bdb351ba8a1bb49d04",
+		},
+		AuthorityRotation: DocumentedSurface{
+			APIVersion:   service.AuthorityRotationAPIVersion,
+			Stability:    "alpha-non-destructive-recovery",
+			SchemaPath:   "schemas/authority-rotation-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:a8785ac0e39ccbf99cf4eec8921f122fda7e9839312a4783b563676f2dfbe41f",
+		},
 		ReleaseQualification: DocumentedSurface{
 			APIVersion:   "dagrail.io/release-qualification/v1alpha1",
 			Stability:    "additive-structural-candidate",
@@ -183,11 +198,17 @@ func Current() Report {
 			SchemaPath:   "schemas/release-verification-v1alpha1.schema.json",
 			SchemaSHA256: "sha256:9a23a60cdef7b2444f5deb0ed802935b1f2052aea3156582eb3e0244989cb283",
 		},
-		LifecycleMigration: DocumentedSurface{
+		LifecycleMigrationV1Alpha1: DocumentedSurface{
 			APIVersion:   service.LifecycleMigrationAPIVersion,
-			Stability:    "alpha-operator-import",
+			Stability:    "alpha-operator-import-compatible",
 			SchemaPath:   "schemas/lifecycle-migration-v1alpha1.schema.json",
 			SchemaSHA256: "sha256:ba1ba1b15c72624a9ffe3d15e6397655016c73665a390b5881d80fa2e47a827e",
+		},
+		LifecycleMigration: DocumentedSurface{
+			APIVersion:   service.LifecycleMigrationBundleAPIVersion,
+			Stability:    "alpha-operator-import",
+			SchemaPath:   "schemas/lifecycle-migration-v1beta1.schema.json",
+			SchemaSHA256: "sha256:ae3bae94da0b464bb8e5aae7fc80781af18f7d9994f6d356d7fd0f89d68b9c05",
 		},
 		LifecycleProjection: DocumentedSurface{
 			APIVersion:   service.LifecycleProjectionAPIVersion,
@@ -197,7 +218,7 @@ func Current() Report {
 		},
 		Provider: VersionedSurface{APIVersion: sdk.APIVersion, Stability: "source-compatible"},
 		Journal: JournalContract{
-			ReadableSegmentSchemas: []int{journal.LegacySegmentSchemaVersion, journal.PreviousSegmentSchemaVersion, journal.CurrentSegmentSchemaVersion},
+			ReadableSegmentSchemas: []int{journal.LegacySegmentSchemaVersion, journal.PreviousSegmentSchemaVersion, journal.CurrentSegmentSchemaVersion, journal.AuthorityFenceSchemaVersion},
 			WriteSegmentSchema:     journal.CurrentSegmentSchemaVersion,
 			WriteEventSchema:       journal.CurrentEventSchemaVersion,
 		},
@@ -224,7 +245,7 @@ func Current() Report {
 			"command discovery and completion are generated from one bounded catalog",
 			"opt-in CLI error envelopes keep stable broad exit classes and preserve interruption",
 			"host plugin commands are output-bounded, time-bounded, and cancellation-aware",
-			"the v0.10 through v0.20 beta binaries are immutable inputs to the current upgrade and rollback matrix",
+			"the v0.10 through v0.21 beta binaries are immutable inputs to the current upgrade and rollback matrix",
 			"readiness can declare external-validation readiness but cannot infer production validation or 1.0 readiness",
 			"the loopback explorer rejects non-loopback Host values and cross-port Origin values without exposing CORS access",
 			"SQLite remains disposable and rebuildable from the verified journal",
@@ -236,6 +257,14 @@ func Current() Report {
 			"the explorer exposes typed decision and resource closure summaries without decision facts, evidence URIs, or receipt bodies",
 			"graph capability discovery is schema-bound and does not depend on harness adapter inference",
 			"historical lifecycle import accepts only one authenticated complete source prefix into a pristine graph-only project",
+			"lifecycle migration v1beta1 preserves one source record while independently closing every ordered command proof ledger",
+			"authority rotation creates a fresh Project identity and never truncates or rewrites the previous journal",
+			"authority rotation appends one terminal fence while preserving every previous segment byte",
+			"authority establishment and retirement fences use readable segment schema 4 so v0.21 writers reject them during the locked append reread",
+			"portable backup or runtime-directory copy cannot recreate the same writable Project UUID without a canonical-path-bound local authority claim",
+			"ordinary project open never creates a writer claim; pre-v0.22 adoption is explicit and exact-head-bound, retires the legacy UUID, and establishes a fenced fresh identity before locator publication",
+			"Project v1alpha1 remains readable by the v0.21 rollback binary after authority rotation",
+			"plugin registration never claims an already-running harness loaded MCP without process-visible proof",
 			"historical lifecycle preflight preserves current writer ready, capability, lease, causal time, decision, resource, incident, and effect-prefix invariants",
 			"lifecycle projection omits action inputs and external evidence locators and digests effect and resource receipt bodies",
 		},

@@ -7,6 +7,14 @@ description: Govern a DAGrail project as the orchestration role. Use when inspec
 
 Treat DAGrail—not chat, a roadmap projection, or a harness thread—as runtime authority.
 
+Before binding a Role, verify that `dag_context`, `dag_inspect`, `dag_apply`,
+`dag_graph_change`, `dag_reconcile`, and `dag_pre_wait` are callable in this process.
+Skill discovery does not prove that a long-running harness loaded a newly registered MCP
+server. If any tool is absent, run `dagrail doctor install`, then start a fresh harness
+session; until then use the corresponding `dagrail context`, `dagrail inspect`,
+`dagrail action apply`, `dagrail graph preview-change|apply-change`, `dagrail reconcile`,
+or `dagrail pre-wait` command, never a hand-built transition.
+
 1. Bind only the assigned control Role. It needs the capabilities for actions it will
    perform, such as `graph.change`; takeover is valid only after the former lease expires.
 2. Call `dag_context` with `view: orchestrator` and a cursor when available. Inspect

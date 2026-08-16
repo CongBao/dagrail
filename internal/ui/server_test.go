@@ -405,15 +405,15 @@ func TestHistoryBeforeCursorsRoundTripWithoutOverlap(t *testing.T) {
 		return response
 	}
 	newest := decode("/api/v1/history?limit=50")
-	middle := decode("/api/v1/history?before=59&limit=50")
-	oldest := decode("/api/v1/history?before=9&limit=50")
-	if newest.Page.Entries[0].Sequence != 59 || newest.Page.Entries[len(newest.Page.Entries)-1].Sequence != 108 || newest.OlderBefore == nil || *newest.OlderBefore != 59 || newest.NewerBefore != nil {
+	middle := decode("/api/v1/history?before=60&limit=50")
+	oldest := decode("/api/v1/history?before=10&limit=50")
+	if newest.Page.Entries[0].Sequence != 60 || newest.Page.Entries[len(newest.Page.Entries)-1].Sequence != 109 || newest.OlderBefore == nil || *newest.OlderBefore != 60 || newest.NewerBefore != nil {
 		t.Fatalf("newest page cursors mismatch: %+v", newest)
 	}
-	if middle.Page.Entries[0].Sequence != 9 || middle.Page.Entries[len(middle.Page.Entries)-1].Sequence != 58 || middle.OlderBefore == nil || *middle.OlderBefore != 9 || middle.NewerBefore == nil || *middle.NewerBefore != 109 {
+	if middle.Page.Entries[0].Sequence != 10 || middle.Page.Entries[len(middle.Page.Entries)-1].Sequence != 59 || middle.OlderBefore == nil || *middle.OlderBefore != 10 || middle.NewerBefore == nil || *middle.NewerBefore != 110 {
 		t.Fatalf("middle page cursors mismatch: %+v", middle)
 	}
-	if oldest.Page.Entries[0].Sequence != 1 || oldest.Page.Entries[len(oldest.Page.Entries)-1].Sequence != 8 || oldest.OlderBefore != nil || oldest.NewerBefore == nil || *oldest.NewerBefore != 59 {
+	if oldest.Page.Entries[0].Sequence != 1 || oldest.Page.Entries[len(oldest.Page.Entries)-1].Sequence != 9 || oldest.OlderBefore != nil || oldest.NewerBefore == nil || *oldest.NewerBefore != 60 {
 		t.Fatalf("oldest page cursors mismatch: %+v", oldest)
 	}
 }

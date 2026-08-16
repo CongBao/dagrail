@@ -1,7 +1,7 @@
 {
   "name": "dagrail",
   "owner": {"name": "CongBao"},
-  "metadata": {"description": "LLM-led local DAG governance with durable machine state.", "version": "0.21.0"},
+  "metadata": {"description": "LLM-led local DAG governance with durable machine state.", "version": "0.22.0"},
   "plugins": [{
     "name": "dagrail",
     "description": "Advance recoverable agent DAGs through typed, auditable actions.",

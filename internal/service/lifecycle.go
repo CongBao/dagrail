@@ -1,10 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -17,9 +19,14 @@ import (
 )
 
 const (
-	LifecycleMigrationAPIVersion  = "dagrail.io/lifecycle-migration/v1alpha1"
-	LifecycleProjectionAPIVersion = "dagrail.io/lifecycle-projection/v1alpha1"
-	maxMigrationRecords           = 10_000
+	// LifecycleMigrationAPIVersion is the legacy single-command record contract.
+	LifecycleMigrationAPIVersion = "dagrail.io/lifecycle-migration/v1alpha1"
+	// LifecycleMigrationBundleAPIVersion adds ordered, independently closed
+	// commands to one immutable source record without weakening v1alpha1.
+	LifecycleMigrationBundleAPIVersion = "dagrail.io/lifecycle-migration/v1beta1"
+	LifecycleProjectionAPIVersion      = "dagrail.io/lifecycle-projection/v1alpha1"
+	maxMigrationRecords                = 10_000
+	maxMigrationCommandsPerRecord      = 128
 )
 
 type LifecycleMigrationSource struct {
@@ -36,13 +43,45 @@ type LifecycleMigrationEvent struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
+// LifecycleMigrationCommand is one current-writer-equivalent command inside a
+// source record. CommandIndex is contiguous and one-based. Its events have an
+// independent proof ledger and must be closed before the next command begins.
+type LifecycleMigrationCommand struct {
+	CommandIndex uint64                    `json:"commandIndex"`
+	Events       []LifecycleMigrationEvent `json:"events"`
+}
+
 type LifecycleMigrationRecord struct {
-	SourceSequence     uint64                    `json:"sourceSequence"`
-	SourceEventID      string                    `json:"sourceEventId"`
-	SourceEventHash    string                    `json:"sourceEventHash"`
-	PreviousSourceHash string                    `json:"previousSourceEventHash,omitempty"`
-	OccurredAt         string                    `json:"occurredAt"`
-	Events             []LifecycleMigrationEvent `json:"events"`
+	SourceSequence     uint64                      `json:"sourceSequence"`
+	SourceEventID      string                      `json:"sourceEventId"`
+	SourceEventHash    string                      `json:"sourceEventHash"`
+	PreviousSourceHash string                      `json:"previousSourceEventHash,omitempty"`
+	OccurredAt         string                      `json:"occurredAt"`
+	Events             []LifecycleMigrationEvent   `json:"events,omitempty"`
+	Commands           []LifecycleMigrationCommand `json:"commands,omitempty"`
+	eventsPresent      bool
+	commandsPresent    bool
+}
+
+func (record *LifecycleMigrationRecord) UnmarshalJSON(data []byte) error {
+	type wire LifecycleMigrationRecord
+	var decoded wire
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return fmt.Errorf("lifecycle migration record has trailing content")
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*record = LifecycleMigrationRecord(decoded)
+	_, record.eventsPresent = fields["events"]
+	_, record.commandsPresent = fields["commands"]
+	return nil
 }
 
 type LifecycleMigrationManifest struct {
@@ -170,6 +209,13 @@ func MigratableLifecycleEventTypes() []string {
 }
 
 func LifecycleRecordsDigest(records []LifecycleMigrationRecord) (string, error) {
+	apiVersion := LifecycleMigrationAPIVersion
+	if lifecycleRecordsUseBundles(records) {
+		apiVersion = LifecycleMigrationBundleAPIVersion
+	}
+	if err := validateLifecycleHashRecords(apiVersion, records, true); err != nil {
+		return "", err
+	}
 	raw, err := json.Marshal(records)
 	if err != nil {
 		return "", err
@@ -178,8 +224,110 @@ func LifecycleRecordsDigest(records []LifecycleMigrationRecord) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(append([]byte("dagrail-lifecycle-migration-records-v1\x00"), canonical...))
+	hashDomain := "dagrail-lifecycle-migration-records-v1\x00"
+	if apiVersion == LifecycleMigrationBundleAPIVersion {
+		hashDomain = "dagrail-lifecycle-migration-records-v2\x00"
+	}
+	sum := sha256.Sum256(append([]byte(hashDomain), canonical...))
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+func lifecycleRecordsUseBundles(records []LifecycleMigrationRecord) bool {
+	for _, record := range records {
+		if record.commandsPresent || len(record.Commands) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func validateLifecycleHashRecords(apiVersion string, records []LifecycleMigrationRecord, requireSourceEventHash bool) error {
+	if len(records) == 0 || len(records) > maxMigrationRecords {
+		return fmt.Errorf("lifecycle migration hash input must contain 1..%d records", maxMigrationRecords)
+	}
+	previousHash := ""
+	previousTime := time.Time{}
+	seenIDs := map[string]bool{}
+	seenHashes := map[string]bool{}
+	for recordIndex, record := range records {
+		if record.SourceSequence == 0 || record.SourceSequence > maxMigrationRecords {
+			return fmt.Errorf("lifecycle migration record %d sourceSequence is invalid", recordIndex+1)
+		}
+		if !portableExternalID(record.SourceEventID, 512) {
+			return fmt.Errorf("lifecycle migration record %d sourceEventId is invalid", recordIndex+1)
+		}
+		if record.PreviousSourceHash != "" && !validDigest(record.PreviousSourceHash) {
+			return fmt.Errorf("lifecycle migration record %d previousSourceEventHash is invalid", recordIndex+1)
+		}
+		occurredAt, err := time.Parse(time.RFC3339Nano, record.OccurredAt)
+		if err != nil {
+			return fmt.Errorf("lifecycle migration record %d occurredAt is invalid", recordIndex+1)
+		}
+		if requireSourceEventHash {
+			if record.SourceSequence != uint64(recordIndex+1) || record.PreviousSourceHash != previousHash || (!previousTime.IsZero() && occurredAt.Before(previousTime)) {
+				return fmt.Errorf("lifecycle migration record %d is not a contiguous source prefix", recordIndex+1)
+			}
+			if !validDigest(record.SourceEventHash) {
+				return fmt.Errorf("lifecycle migration record %d sourceEventHash is invalid", recordIndex+1)
+			}
+			if seenIDs[record.SourceEventID] || seenHashes[record.SourceEventHash] {
+				return fmt.Errorf("lifecycle migration record %d repeats source identity", recordIndex+1)
+			}
+		}
+		commands, err := lifecycleRecordCommands(apiVersion, record)
+		if err != nil {
+			return fmt.Errorf("lifecycle migration record %d: %w", recordIndex+1, err)
+		}
+		for commandIndex, command := range commands {
+			for eventIndex, event := range command.Events {
+				if !migratableEventTypes[event.Type] {
+					return fmt.Errorf("lifecycle migration record %d command %d event %d has unsupported native event %q", recordIndex+1, commandIndex+1, eventIndex+1, event.Type)
+				}
+				if err := domain.ValidateAuthorityJSON(event.Payload); err != nil {
+					return fmt.Errorf("lifecycle migration record %d command %d event %d payload: %w", recordIndex+1, commandIndex+1, eventIndex+1, err)
+				}
+				if err := domain.RejectSensitiveFields(event.Payload); err != nil {
+					return fmt.Errorf("lifecycle migration record %d command %d event %d payload: %w", recordIndex+1, commandIndex+1, eventIndex+1, err)
+				}
+				if err := validateMigratableEventPayload(event); err != nil {
+					return fmt.Errorf("lifecycle migration record %d command %d event %d payload: %w", recordIndex+1, commandIndex+1, eventIndex+1, err)
+				}
+			}
+		}
+		if requireSourceEventHash {
+			eventHash, err := lifecycleSourceEventHash(record, apiVersion)
+			if err != nil || eventHash != record.SourceEventHash {
+				return fmt.Errorf("lifecycle migration record %d sourceEventHash does not bind its preimage", recordIndex+1)
+			}
+			previousHash = record.SourceEventHash
+			previousTime = occurredAt
+			seenIDs[record.SourceEventID] = true
+			seenHashes[record.SourceEventHash] = true
+		}
+	}
+	return nil
+}
+
+func lifecycleRecordCommands(apiVersion string, record LifecycleMigrationRecord) ([]LifecycleMigrationCommand, error) {
+	switch apiVersion {
+	case LifecycleMigrationAPIVersion:
+		if record.commandsPresent || len(record.Commands) != 0 || len(record.Events) == 0 || len(record.Events) > 128 {
+			return nil, fmt.Errorf("v1alpha1 requires exactly one bounded events mapping and forbids commands")
+		}
+		return []LifecycleMigrationCommand{{CommandIndex: 1, Events: record.Events}}, nil
+	case LifecycleMigrationBundleAPIVersion:
+		if record.eventsPresent || len(record.Events) != 0 || len(record.Commands) == 0 || len(record.Commands) > maxMigrationCommandsPerRecord {
+			return nil, fmt.Errorf("v1beta1 requires 1..%d commands and forbids record-level events", maxMigrationCommandsPerRecord)
+		}
+		for index, command := range record.Commands {
+			if command.CommandIndex != uint64(index+1) || len(command.Events) == 0 || len(command.Events) > 128 {
+				return nil, fmt.Errorf("commandIndex must be contiguous from one and each command must contain 1..128 events")
+			}
+		}
+		return record.Commands, nil
+	default:
+		return nil, fmt.Errorf("unsupported lifecycle migration contract")
+	}
 }
 
 // LifecycleSourceEventHash binds one normalized source record to its native
@@ -187,13 +335,25 @@ func LifecycleRecordsDigest(records []LifecycleMigrationRecord) (string, error) 
 // converters may retain their original hashes as external evidence, but the
 // portable migration chain always uses this deterministic algorithm.
 func LifecycleSourceEventHash(record LifecycleMigrationRecord) (string, error) {
+	apiVersion := LifecycleMigrationAPIVersion
+	if record.commandsPresent || len(record.Commands) != 0 {
+		apiVersion = LifecycleMigrationBundleAPIVersion
+	}
+	if err := validateLifecycleHashRecords(apiVersion, []LifecycleMigrationRecord{record}, false); err != nil {
+		return "", err
+	}
+	return lifecycleSourceEventHash(record, apiVersion)
+}
+
+func lifecycleSourceEventHash(record LifecycleMigrationRecord, apiVersion string) (string, error) {
 	statement := struct {
-		SourceSequence     uint64                    `json:"sourceSequence"`
-		SourceEventID      string                    `json:"sourceEventId"`
-		PreviousSourceHash string                    `json:"previousSourceEventHash,omitempty"`
-		OccurredAt         string                    `json:"occurredAt"`
-		Events             []LifecycleMigrationEvent `json:"events"`
-	}{record.SourceSequence, record.SourceEventID, record.PreviousSourceHash, record.OccurredAt, record.Events}
+		SourceSequence     uint64                      `json:"sourceSequence"`
+		SourceEventID      string                      `json:"sourceEventId"`
+		PreviousSourceHash string                      `json:"previousSourceEventHash,omitempty"`
+		OccurredAt         string                      `json:"occurredAt"`
+		Events             []LifecycleMigrationEvent   `json:"events,omitempty"`
+		Commands           []LifecycleMigrationCommand `json:"commands,omitempty"`
+	}{record.SourceSequence, record.SourceEventID, record.PreviousSourceHash, record.OccurredAt, record.Events, record.Commands}
 	raw, err := json.Marshal(statement)
 	if err != nil {
 		return "", err
@@ -202,7 +362,11 @@ func LifecycleSourceEventHash(record LifecycleMigrationRecord) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(append([]byte("dagrail-lifecycle-source-event-v1\x00"), canonical...))
+	hashDomain := "dagrail-lifecycle-source-event-v1\x00"
+	if apiVersion == LifecycleMigrationBundleAPIVersion {
+		hashDomain = "dagrail-lifecycle-source-event-v2\x00"
+	}
+	sum := sha256.Sum256(append([]byte(hashDomain), canonical...))
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
@@ -211,6 +375,34 @@ func LifecycleSourceEventHash(record LifecycleMigrationRecord) (string, error) {
 // canonicalization to avoid a circular digest. Operators must obtain this
 // digest through a channel independent of the manifest supplied for import.
 func LifecycleSourceAuthorityHash(manifest LifecycleMigrationManifest) (string, error) {
+	if !oneOf(manifest.APIVersion, LifecycleMigrationAPIVersion, LifecycleMigrationBundleAPIVersion) {
+		return "", fmt.Errorf("unsupported lifecycle migration contract")
+	}
+	if manifest.Kind != "LifecycleMigration" {
+		return "", fmt.Errorf("lifecycle migration kind is invalid")
+	}
+	if parsed, err := uuid.Parse(manifest.ProjectID); err != nil || parsed.String() != manifest.ProjectID {
+		return "", fmt.Errorf("lifecycle migration projectId is invalid")
+	}
+	if !validBareHash(manifest.GraphRevision) || !validBareHash(manifest.ExpectedJournalHead) {
+		return "", fmt.Errorf("lifecycle migration target hashes are invalid")
+	}
+	if !portableExternalID(manifest.Source.System, 256) || !portableExternalID(manifest.Source.Project, 512) || manifest.Source.HeadSequence == 0 || manifest.Source.HeadSequence > maxMigrationRecords || !portableExternalID(manifest.Source.HeadEventID, 512) || !validDigest(manifest.Source.HeadEventHash) {
+		return "", fmt.Errorf("lifecycle migration source authority is incomplete")
+	}
+	if manifest.Source.AuthorityHash != "" && !validDigest(manifest.Source.AuthorityHash) {
+		return "", fmt.Errorf("lifecycle migration source authorityHash is invalid")
+	}
+	if err := validateLifecycleHashRecords(manifest.APIVersion, manifest.Records, true); err != nil {
+		return "", err
+	}
+	if uint64(len(manifest.Records)) != manifest.Source.HeadSequence || manifest.Records[len(manifest.Records)-1].SourceEventID != manifest.Source.HeadEventID || manifest.Records[len(manifest.Records)-1].SourceEventHash != manifest.Source.HeadEventHash {
+		return "", fmt.Errorf("lifecycle migration source head does not match its records")
+	}
+	recordsDigest, err := LifecycleRecordsDigest(manifest.Records)
+	if err != nil || !validDigest(manifest.RecordsDigest) || manifest.RecordsDigest != recordsDigest {
+		return "", fmt.Errorf("lifecycle migration recordsDigest does not match its records")
+	}
 	manifest.Source.AuthorityHash = ""
 	raw, err := json.Marshal(manifest)
 	if err != nil {
@@ -220,7 +412,11 @@ func LifecycleSourceAuthorityHash(manifest LifecycleMigrationManifest) (string, 
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(append([]byte("dagrail-lifecycle-source-authority-v1\x00"), canonical...))
+	hashDomain := "dagrail-lifecycle-source-authority-v1\x00"
+	if manifest.APIVersion == LifecycleMigrationBundleAPIVersion {
+		hashDomain = "dagrail-lifecycle-source-authority-v2\x00"
+	}
+	sum := sha256.Sum256(append([]byte(hashDomain), canonical...))
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
@@ -252,8 +448,8 @@ func (s *Service) ValidateLifecycleMigration(manifest LifecycleMigrationManifest
 }
 
 func (s *Service) validateLifecycleMigration(state domain.State, segments []journal.Segment, manifest LifecycleMigrationManifest, trustedSourceAuthority string) (LifecycleMigrationValidation, error) {
-	result := LifecycleMigrationValidation{APIVersion: LifecycleMigrationAPIVersion, Kind: "LifecycleMigrationValidation", GraphRevision: manifest.GraphRevision, ExpectedHead: manifest.ExpectedJournalHead}
-	if manifest.APIVersion != LifecycleMigrationAPIVersion || manifest.Kind != "LifecycleMigration" {
+	result := LifecycleMigrationValidation{APIVersion: manifest.APIVersion, Kind: "LifecycleMigrationValidation", GraphRevision: manifest.GraphRevision, ExpectedHead: manifest.ExpectedJournalHead}
+	if !oneOf(manifest.APIVersion, LifecycleMigrationAPIVersion, LifecycleMigrationBundleAPIVersion) || manifest.Kind != "LifecycleMigration" {
 		return result, fmt.Errorf("unsupported lifecycle migration contract")
 	}
 	if state.Graph == nil || manifest.ProjectID != state.ProjectID || manifest.GraphRevision != state.GraphRevision || manifest.ExpectedJournalHead != state.HeadHash {
@@ -277,6 +473,7 @@ func (s *Service) validateLifecycleMigration(state domain.State, segments []jour
 		return result, fmt.Errorf("lifecycle migration records digest mismatch")
 	}
 	events := make([]journal.Event, 0, len(manifest.Records)+1)
+	normalizedRecords := make([]LifecycleMigrationRecord, 0, len(manifest.Records))
 	seenIDs := map[string]bool{}
 	seenHashes := map[string]bool{}
 	seenIntroductions := map[string]bool{}
@@ -292,34 +489,38 @@ func (s *Service) validateLifecycleMigration(state domain.State, segments []jour
 		if err != nil || (!previousTime.IsZero() && occurredAt.Before(previousTime)) {
 			return result, fmt.Errorf("source event %s occurredAt is invalid", record.SourceEventID)
 		}
-		if len(record.Events) == 0 || len(record.Events) > 128 {
-			return result, fmt.Errorf("source event %s has an invalid native lifecycle mapping count", record.SourceEventID)
+		commands, commandErr := lifecycleRecordCommands(manifest.APIVersion, record)
+		if commandErr != nil {
+			return result, fmt.Errorf("source event %s: %w", record.SourceEventID, commandErr)
 		}
 		seenIDs[record.SourceEventID] = true
 		seenHashes[record.SourceEventHash] = true
 		previous = record.SourceEventHash
 		previousTime = occurredAt
-		for _, event := range record.Events {
-			if !migratableEventTypes[event.Type] {
-				return result, fmt.Errorf("source event %s maps to unsupported native event %s", record.SourceEventID, event.Type)
-			}
-			if err := domain.ValidateAuthorityJSON(event.Payload); err != nil {
-				return result, fmt.Errorf("source event %s native payload: %w", record.SourceEventID, err)
-			}
-			if err := domain.RejectSensitiveFields(event.Payload); err != nil {
-				return result, fmt.Errorf("source event %s native payload: %w", record.SourceEventID, err)
-			}
-			if err := validateMigratableEventPayload(event); err != nil {
-				return result, fmt.Errorf("source event %s native payload: %w", record.SourceEventID, err)
-			}
-			if identity := migrationIntroductionIdentity(event); identity != "" {
-				if seenIntroductions[identity] {
-					return result, fmt.Errorf("source event %s repeats native lifecycle identity %s", record.SourceEventID, identity)
+		for _, command := range commands {
+			normalizedRecords = append(normalizedRecords, LifecycleMigrationRecord{SourceSequence: record.SourceSequence, SourceEventID: fmt.Sprintf("%s@%d", record.SourceEventID, command.CommandIndex), OccurredAt: record.OccurredAt, Events: command.Events})
+			for _, event := range command.Events {
+				if !migratableEventTypes[event.Type] {
+					return result, fmt.Errorf("source event %s maps to unsupported native event %s", record.SourceEventID, event.Type)
 				}
-				seenIntroductions[identity] = true
+				if err := domain.ValidateAuthorityJSON(event.Payload); err != nil {
+					return result, fmt.Errorf("source event %s native payload: %w", record.SourceEventID, err)
+				}
+				if err := domain.RejectSensitiveFields(event.Payload); err != nil {
+					return result, fmt.Errorf("source event %s native payload: %w", record.SourceEventID, err)
+				}
+				if err := validateMigratableEventPayload(event); err != nil {
+					return result, fmt.Errorf("source event %s native payload: %w", record.SourceEventID, err)
+				}
+				if identity := migrationIntroductionIdentity(event); identity != "" {
+					if seenIntroductions[identity] {
+						return result, fmt.Errorf("source event %s repeats native lifecycle identity %s", record.SourceEventID, identity)
+					}
+					seenIntroductions[identity] = true
+				}
+				events = append(events, journal.Event{Type: event.Type, SchemaVersion: journal.CurrentEventSchemaVersion, Payload: event.Payload})
+				nativeCount++
 			}
-			events = append(events, journal.Event{Type: event.Type, SchemaVersion: journal.CurrentEventSchemaVersion, Payload: event.Payload})
-			nativeCount++
 		}
 	}
 	if previous != manifest.Source.HeadEventHash || manifest.Records[len(manifest.Records)-1].SourceEventID != manifest.Source.HeadEventID {
@@ -328,7 +529,7 @@ func (s *Service) validateLifecycleMigration(state domain.State, segments []jour
 	if nativeCount == 0 || nativeCount+1 > journal.MaxEventsPerSegment {
 		return result, fmt.Errorf("native lifecycle event count exceeds the atomic segment limit")
 	}
-	if err := validateLifecycleEventSequence(state, manifest.Records); err != nil {
+	if err := validateLifecycleEventSequence(state, normalizedRecords); err != nil {
 		return result, fmt.Errorf("lifecycle migration transition preflight: %w", err)
 	}
 	migrationID, err := lifecycleMigrationID(manifest)
@@ -399,8 +600,14 @@ func (s *Service) ImportLifecycleHistory(manifest LifecycleMigrationManifest, tr
 	receiptRaw, _ := json.Marshal(receipt)
 	events := []journal.Event{{Type: "lifecycle.history-imported", Payload: receiptRaw}}
 	for _, record := range manifest.Records {
-		for _, event := range record.Events {
-			events = append(events, journal.Event{Type: event.Type, Payload: event.Payload})
+		commands, err := lifecycleRecordCommands(manifest.APIVersion, record)
+		if err != nil {
+			return domain.LifecycleMigrationReceipt{}, err
+		}
+		for _, command := range commands {
+			for _, event := range command.Events {
+				events = append(events, journal.Event{Type: event.Type, Payload: event.Payload})
+			}
 		}
 	}
 	expectedHead := manifest.ExpectedJournalHead
@@ -525,10 +732,20 @@ func redactedEvidenceRefs(values []domain.EvidenceRef) []domain.EvidenceRef {
 }
 
 func pristineLifecycleState(state domain.State, segments []journal.Segment) bool {
-	if len(segments) == 0 || segments[0].Command.Kind != "graph.import" || len(state.Commands) != len(segments) {
+	if len(segments) == 0 || len(state.Commands) != len(segments) {
 		return false
 	}
-	for _, segment := range segments[1:] {
+	graphIndex := 0
+	if segments[0].Command.Kind == "authority.establish" {
+		if segments[0].SchemaVersion != journal.AuthorityFenceSchemaVersion || len(segments[0].Events) != 1 || segments[0].Events[0].Type != "authority.established" {
+			return false
+		}
+		graphIndex = 1
+	}
+	if len(segments) <= graphIndex || segments[graphIndex].Command.Kind != "graph.import" {
+		return false
+	}
+	for _, segment := range segments[graphIndex+1:] {
 		if segment.Command.Kind != "node.auto-complete" && segment.Command.Kind != "node.auto-skip" {
 			return false
 		}
@@ -574,6 +791,14 @@ func validDigest(value string) bool {
 		return false
 	}
 	_, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
+	return err == nil
+}
+
+func validBareHash(value string) bool {
+	if len(value) != 64 || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
 	return err == nil
 }
 

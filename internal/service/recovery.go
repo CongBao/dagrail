@@ -108,7 +108,8 @@ func (s *Service) RehearseRecovery() (RecoveryReport, error) {
 		return report, err
 	}
 	defer os.RemoveAll(temporary)
-	restoredJournal, err := journal.Open(filepath.Join(temporary, "journal-data"), s.Project.Config.ProjectID)
+	rehearsalData := filepath.Join(temporary, "journal-data")
+	restoredJournal, err := journal.OpenRehearsal(rehearsalData, s.Project.Config.ProjectID)
 	if err != nil {
 		return report, err
 	}

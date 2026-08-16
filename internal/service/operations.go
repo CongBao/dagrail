@@ -2,19 +2,25 @@ package service
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/CongBao/dagrail/internal/domain"
 	"github.com/CongBao/dagrail/internal/journal"
 	"github.com/CongBao/dagrail/internal/project"
+	"github.com/google/uuid"
 	"github.com/gowebpki/jcs"
 )
 
 const BackupAPIVersion = "dagrail.io/v1alpha1"
+const maxLocalAuthorityStores = 10_000
 
 type BackupEnvelope struct {
 	APIVersion string            `json:"apiVersion"`
@@ -32,6 +38,65 @@ type BackupReport struct {
 	HeadSequence uint64 `json:"headSequence"`
 	HeadHash     string `json:"headHash,omitempty"`
 	Digest       string `json:"digest"`
+}
+
+const AuthorityRotationAPIVersion = "dagrail.io/authority-rotation/v1alpha1"
+const AuthorityAdoptionAPIVersion = "dagrail.io/authority-adoption/v1alpha1"
+
+const (
+	authorityRetirementAPIVersion = "dagrail.io/authority-retirement/v1alpha1"
+	legacyRetirementKind          = "LegacyAuthorityRetirement"
+	rotationRetirementKind        = "AuthorityRetirement"
+)
+
+type AuthorityRotationReceipt struct {
+	APIVersion           string `json:"apiVersion"`
+	Kind                 string `json:"kind"`
+	PreviousProjectID    string `json:"previousProjectId"`
+	PreviousHead         string `json:"previousHead"`
+	RecoveryHead         string `json:"recoveryHead"`
+	RecoveryBackupDigest string `json:"recoveryBackupDigest"`
+	ReplacementProjectID string `json:"replacementProjectId"`
+	RotatedAt            string `json:"rotatedAt"`
+	Reason               string `json:"reason"`
+	IdempotencyKey       string `json:"idempotencyKey"`
+	ReceiptDigest        string `json:"receiptDigest"`
+}
+
+type AuthorityAdoptionReceipt struct {
+	APIVersion           string `json:"apiVersion"`
+	Kind                 string `json:"kind"`
+	PreviousProjectID    string `json:"previousProjectId"`
+	PreviousHead         string `json:"previousHead"`
+	SourceBackupDigest   string `json:"sourceBackupDigest"`
+	ReplacementProjectID string `json:"replacementProjectId"`
+	AdoptedAt            string `json:"adoptedAt"`
+	Reason               string `json:"reason"`
+	IdempotencyKey       string `json:"idempotencyKey"`
+	ReceiptDigest        string `json:"receiptDigest"`
+}
+
+type authorityRetirement struct {
+	APIVersion           string `json:"apiVersion"`
+	Kind                 string `json:"kind"`
+	PreviousProjectID    string `json:"previousProjectId"`
+	PreviousHead         string `json:"previousHead"`
+	RecoveryHead         string `json:"recoveryHead"`
+	RecoveryBackupDigest string `json:"recoveryBackupDigest"`
+	ReplacementProjectID string `json:"replacementProjectId"`
+	RotatedAt            string `json:"rotatedAt"`
+	Reason               string `json:"reason"`
+	IdempotencyKey       string `json:"idempotencyKey"`
+}
+
+type authorityEstablishment struct {
+	APIVersion        string `json:"apiVersion"`
+	Kind              string `json:"kind"`
+	ProjectID         string `json:"projectId"`
+	PreviousProjectID string `json:"previousProjectId,omitempty"`
+	Operation         string `json:"operation"`
+	EstablishedAt     string `json:"establishedAt"`
+	ProvenanceDigest  string `json:"provenanceDigest"`
 }
 
 type HistoryEntry struct {
@@ -119,6 +184,590 @@ func (s *Service) RestoreBackup(data []byte) (BackupReport, error) {
 		return BackupReport{}, err
 	}
 	return backupReport(envelope), nil
+}
+
+// AdoptLegacyAuthority retires a pre-v0.22 Project UUID and publishes a fresh
+// replacement identity. The old UUID never receives a v0.22 writer claim.
+// Its verified journal remains immutable source evidence for graph/lifecycle
+// import into the fence-only replacement authority.
+func (s *Service) AdoptLegacyAuthority(expectedProjectID, expectedHead, reason, idempotencyKey string) (AuthorityAdoptionReceipt, error) {
+	if strings.TrimSpace(expectedProjectID) == "" || strings.TrimSpace(reason) == "" || len([]byte(reason)) > 1024 || strings.TrimSpace(idempotencyKey) == "" || len([]byte(idempotencyKey)) > 256 {
+		return AuthorityAdoptionReceipt{}, fmt.Errorf("expected project ID, reason, and idempotency key are required")
+	}
+	if expectedProjectID != s.Project.Config.ProjectID {
+		return s.retryLegacyAuthorityAdoption(expectedProjectID, expectedHead, reason, idempotencyKey)
+	}
+	legacyJournal, err := journal.OpenRecovery(s.Project.DataDir, expectedProjectID)
+	if err != nil {
+		return AuthorityAdoptionReceipt{}, err
+	}
+	previousUUID, err := uuid.Parse(expectedProjectID)
+	if err != nil {
+		return AuthorityAdoptionReceipt{}, err
+	}
+	replacementProjectID := uuid.NewSHA1(previousUUID, []byte("dagrail-legacy-authority-adoption-v1\x00"+idempotencyKey)).String()
+	if existingRaw, exists, readErr := legacyJournal.AuthorityRetirement(); readErr != nil {
+		return AuthorityAdoptionReceipt{}, readErr
+	} else if exists {
+		var existing authorityRetirement
+		if err := decodeStrictAuthorityJSON(existingRaw, &existing); err != nil {
+			return AuthorityAdoptionReceipt{}, err
+		}
+		if err := validateLegacyRetirementIntent(existing, expectedProjectID, expectedHead, existing.RecoveryBackupDigest, replacementProjectID, reason, idempotencyKey); err != nil {
+			return AuthorityAdoptionReceipt{}, err
+		}
+		operationTime, _ := time.Parse(time.RFC3339Nano, existing.RotatedAt)
+		reservationDigest, err := legacyRetirementReservationDigest(existing)
+		if err != nil {
+			return AuthorityAdoptionReceipt{}, err
+		}
+		committedRaw, err := legacyJournal.RetireLegacyAuthority(expectedHead, existingRaw, reservationDigest, operationTime, nil, func(candidate []byte) error {
+			var committed authorityRetirement
+			if err := decodeStrictAuthorityJSON(candidate, &committed); err != nil {
+				return err
+			}
+			return validateLegacyRetirementIntent(committed, expectedProjectID, expectedHead, existing.RecoveryBackupDigest, replacementProjectID, reason, idempotencyKey)
+		}, func(committed []byte) error {
+			var actual authorityRetirement
+			if err := decodeStrictAuthorityJSON(committed, &actual); err != nil {
+				return err
+			}
+			return s.prepareAndPublishReplacement(actual, committed, "legacy-adoption")
+		})
+		if err != nil {
+			return AuthorityAdoptionReceipt{}, err
+		}
+		if err := decodeStrictAuthorityJSON(committedRaw, &existing); err != nil {
+			return AuthorityAdoptionReceipt{}, err
+		}
+		return authorityAdoptionReceipt(existing)
+	}
+	operationTime := s.Now().UTC()
+	if s.beforeLegacyAuthoritySnapshot != nil {
+		s.beforeLegacyAuthoritySnapshot()
+	}
+	segments, err := legacyJournal.ReadAll()
+	if err != nil {
+		return AuthorityAdoptionReceipt{}, err
+	}
+	backupEnvelope := BackupEnvelope{APIVersion: BackupAPIVersion, Kind: "JournalBackup", Project: s.Project.Config, CreatedAt: stableLegacyBackupCreatedAt(segments), Segments: segments}
+	backupEnvelope.Digest, err = backupDigest(backupEnvelope)
+	if err != nil {
+		return AuthorityAdoptionReceipt{}, err
+	}
+	backup := backupReport(backupEnvelope)
+	retirement := authorityRetirement{
+		APIVersion: AuthorityAdoptionAPIVersion, Kind: legacyRetirementKind,
+		PreviousProjectID: expectedProjectID, PreviousHead: expectedHead,
+		RecoveryHead: backup.HeadHash, RecoveryBackupDigest: backup.Digest,
+		ReplacementProjectID: replacementProjectID,
+		RotatedAt:            operationTime.Format(time.RFC3339Nano), Reason: reason, IdempotencyKey: idempotencyKey,
+	}
+	retirementRaw, err := json.Marshal(retirement)
+	if err != nil {
+		return AuthorityAdoptionReceipt{}, err
+	}
+	retirementRaw, err = jcs.Transform(retirementRaw)
+	if err != nil {
+		return AuthorityAdoptionReceipt{}, err
+	}
+	reservationDigest, err := legacyRetirementReservationDigest(retirement)
+	if err != nil {
+		return AuthorityAdoptionReceipt{}, err
+	}
+	committedRaw, err := legacyJournal.RetireLegacyAuthority(expectedHead, retirementRaw, reservationDigest, operationTime, func(current []journal.Segment) error {
+		if len(current) != len(segments) {
+			return fmt.Errorf("legacy authority changed before retirement")
+		}
+		for index := range current {
+			if current[index].SegmentHash != segments[index].SegmentHash {
+				return fmt.Errorf("legacy authority changed before retirement")
+			}
+		}
+		state, err := reduceSegments(expectedProjectID, current)
+		if err != nil {
+			return err
+		}
+		if err := validateAuthorityQuiescent(state, operationTime, "legacy authority adoption"); err != nil {
+			return err
+		}
+		return project.ReserveLegacyRetirement(s.Project.DataDir, expectedProjectID, reservationDigest)
+	}, func(existing []byte) error {
+		var committed authorityRetirement
+		if err := decodeStrictAuthorityJSON(existing, &committed); err != nil {
+			return fmt.Errorf("decode legacy authority retirement: %w", err)
+		}
+		// A concurrent winner may commit after this caller's initial sidecar
+		// check or even before its snapshot. The committed fence is authoritative:
+		// expectedProjectID/head plus the closed intent fields bind the exact
+		// pre-fence source prefix, while its own recovery digest avoids folding
+		// the winner's fence into a loser's newly derived backup.
+		return validateLegacyRetirementIntent(committed, expectedProjectID, expectedHead, committed.RecoveryBackupDigest, replacementProjectID, reason, idempotencyKey)
+	}, func(committed []byte) error {
+		var actual authorityRetirement
+		if err := decodeStrictAuthorityJSON(committed, &actual); err != nil {
+			return err
+		}
+		return s.prepareAndPublishReplacement(actual, committed, "legacy-adoption")
+	})
+	if err != nil {
+		return AuthorityAdoptionReceipt{}, err
+	}
+	if err := decodeStrictAuthorityJSON(committedRaw, &retirement); err != nil {
+		return AuthorityAdoptionReceipt{}, err
+	}
+	return authorityAdoptionReceipt(retirement)
+}
+
+// RotateAuthority creates a replacement Project identity from an authenticated
+// backup prefix without truncating or rewriting the previous journal.
+func (s *Service) RotateAuthority(data []byte, expectedCurrentHead, reason, idempotencyKey string) (AuthorityRotationReceipt, error) {
+	if expectedCurrentHead == "" || strings.TrimSpace(reason) == "" || len([]byte(reason)) > 1024 || strings.TrimSpace(idempotencyKey) == "" || len([]byte(idempotencyKey)) > 256 {
+		return AuthorityRotationReceipt{}, fmt.Errorf("expected current head, reason, and idempotency key are required")
+	}
+	envelope, err := decodeBackup(data)
+	if err != nil {
+		return AuthorityRotationReceipt{}, err
+	}
+	backup := backupReport(envelope)
+	if backup.HeadHash == "" {
+		return AuthorityRotationReceipt{}, fmt.Errorf("authority rotation requires a non-empty authenticated recovery prefix")
+	}
+	if err := project.ValidateAuthorityClaim(s.Project.DataDir, s.Project.Config.ProjectID); err != nil {
+		if repairErr := s.repairCurrentAuthorityLineage(); repairErr != nil {
+			return AuthorityRotationReceipt{}, err
+		}
+	}
+	if envelope.Project.ProjectID != s.Project.Config.ProjectID {
+		return s.retryAuthorityRotation(envelope.Project.ProjectID, backup, expectedCurrentHead, reason, idempotencyKey)
+	}
+	rotationJournal, err := journal.Open(s.Project.DataDir, s.Project.Config.ProjectID)
+	if err != nil {
+		return AuthorityRotationReceipt{}, err
+	}
+	previousUUID, parseErr := uuid.Parse(s.Project.Config.ProjectID)
+	if parseErr != nil {
+		return AuthorityRotationReceipt{}, parseErr
+	}
+	retirement := authorityRetirement{
+		APIVersion: authorityRetirementAPIVersion, Kind: rotationRetirementKind,
+		PreviousProjectID: s.Project.Config.ProjectID, PreviousHead: expectedCurrentHead,
+		RecoveryHead: backup.HeadHash, RecoveryBackupDigest: backup.Digest,
+		ReplacementProjectID: uuid.NewSHA1(previousUUID, []byte("dagrail-authority-rotation-v1\x00"+idempotencyKey)).String(),
+		RotatedAt:            s.Now().UTC().Format(time.RFC3339Nano), Reason: reason, IdempotencyKey: idempotencyKey,
+	}
+	retirementRaw, err := json.Marshal(retirement)
+	if err != nil {
+		return AuthorityRotationReceipt{}, err
+	}
+	retirementRaw, err = jcs.Transform(retirementRaw)
+	if err != nil {
+		return AuthorityRotationReceipt{}, err
+	}
+	operationTime, err := time.Parse(time.RFC3339Nano, retirement.RotatedAt)
+	if err != nil {
+		return AuthorityRotationReceipt{}, fmt.Errorf("authority retirement timestamp is invalid")
+	}
+	committedRaw, err := rotationJournal.RetireAuthority(expectedCurrentHead, retirementRaw, operationTime, func(current []journal.Segment) error {
+		state, err := reduceSegments(s.Project.Config.ProjectID, current)
+		if err != nil {
+			return err
+		}
+		for _, lease := range state.Leases {
+			if lease.Active {
+				expires, parseErr := time.Parse(time.RFC3339Nano, lease.ExpiresAt)
+				if parseErr != nil || operationTime.Before(expires) {
+					return fmt.Errorf("authority rotation requires all Role leases to be inactive or expired")
+				}
+			}
+		}
+		for _, effect := range state.Effects {
+			if !oneOf(effect.Status, "confirmed", "failed") {
+				return fmt.Errorf("authority rotation requires every Effect to be closed")
+			}
+		}
+		for _, resource := range state.Resources {
+			if resource.Status == "active" {
+				return fmt.Errorf("authority rotation requires every Resource lease to be closed")
+			}
+		}
+		for _, incident := range state.Incidents {
+			if incident.Status != "resolved" {
+				return fmt.Errorf("authority rotation requires every Incident to be resolved")
+			}
+		}
+		if len(envelope.Segments) > len(current) {
+			return fmt.Errorf("recovery backup is not a prefix of current authority")
+		}
+		for index := range envelope.Segments {
+			if envelope.Segments[index].SegmentHash != current[index].SegmentHash {
+				return fmt.Errorf("recovery backup is not a prefix of current authority")
+			}
+		}
+		return nil
+	}, func(existing []byte) error {
+		var committed authorityRetirement
+		if err := decodeStrictAuthorityJSON(existing, &committed); err != nil {
+			return fmt.Errorf("decode authority retirement marker: %w", err)
+		}
+		return validateRetirementIntent(committed, retirement.PreviousProjectID, retirement.PreviousHead, retirement.RecoveryHead, retirement.RecoveryBackupDigest, retirement.ReplacementProjectID, retirement.Reason, retirement.IdempotencyKey)
+	}, func(committed []byte) error {
+		var actual authorityRetirement
+		if err := decodeStrictAuthorityJSON(committed, &actual); err != nil {
+			return err
+		}
+		return s.prepareAndPublishReplacement(actual, committed, "rotation")
+	})
+	if err != nil {
+		return AuthorityRotationReceipt{}, err
+	}
+	if err := decodeStrictAuthorityJSON(committedRaw, &retirement); err != nil {
+		return AuthorityRotationReceipt{}, err
+	}
+	return authorityRotationReceipt(retirement)
+}
+
+func (s *Service) repairCurrentAuthorityLineage() error {
+	currentID := s.Project.Config.ProjectID
+	projectsRoot := filepath.Dir(s.Project.DataDir)
+	entries, err := os.ReadDir(projectsRoot)
+	if err != nil {
+		return err
+	}
+	if len(entries) > maxLocalAuthorityStores {
+		return fmt.Errorf("local authority root exceeds bounded recovery scan")
+	}
+	var recovered *project.AuthorityLineage
+	for _, entry := range entries {
+		candidateID := entry.Name()
+		if candidateID == currentID || !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		parsed, parseErr := uuid.Parse(candidateID)
+		if parseErr != nil || parsed.String() != candidateID {
+			continue
+		}
+		candidateDir := filepath.Join(projectsRoot, candidateID)
+		journalInfo, statErr := os.Lstat(filepath.Join(candidateDir, "journal"))
+		if statErr != nil || !journalInfo.IsDir() || journalInfo.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+		candidateJournal, openErr := journal.OpenRecovery(candidateDir, candidateID)
+		if openErr != nil {
+			continue
+		}
+		raw, exists, readErr := candidateJournal.AuthorityRetirement()
+		if readErr != nil || !exists {
+			continue
+		}
+		var retirement authorityRetirement
+		if decodeStrictAuthorityJSON(raw, &retirement) != nil || retirement.ReplacementProjectID != currentID || validateAnyRetirement(retirement) != nil {
+			continue
+		}
+		operation := "rotation"
+		if retirement.APIVersion == AuthorityAdoptionAPIVersion && retirement.Kind == legacyRetirementKind {
+			operation = "legacy-adoption"
+		}
+		lineage := authorityLineage(retirement, operation)
+		if recovered != nil && *recovered != lineage {
+			return fmt.Errorf("multiple predecessor authorities claim the current replacement identity")
+		}
+		recovered = &lineage
+	}
+	if recovered == nil {
+		return fmt.Errorf("claim-authenticated predecessor retirement was not found")
+	}
+	return project.RestoreAuthorityLineage(s.Project.DataDir, currentID, *recovered)
+}
+
+func (s *Service) retryAuthorityRotation(previousProjectID string, backup BackupReport, expectedCurrentHead, reason, idempotencyKey string) (AuthorityRotationReceipt, error) {
+	currentID := s.Project.Config.ProjectID
+	visited := map[string]bool{}
+	for len(visited) < maxLocalAuthorityStores && !visited[currentID] {
+		visited[currentID] = true
+		dataDir, err := project.DataDirForProjectID(currentID)
+		if err != nil || project.ValidateAuthorityClaim(dataDir, currentID) != nil {
+			break
+		}
+		lineage, err := project.ReadAuthorityLineage(dataDir)
+		if err != nil || lineage.Operation != "rotation" {
+			break
+		}
+		retirement := authorityRetirement{APIVersion: authorityRetirementAPIVersion, Kind: rotationRetirementKind, PreviousProjectID: lineage.PreviousProjectID, PreviousHead: lineage.PreviousHead, RecoveryHead: lineage.RecoveryHead, RecoveryBackupDigest: lineage.RecoveryBackupDigest, ReplacementProjectID: currentID, RotatedAt: lineage.RotatedAt, Reason: lineage.Reason, IdempotencyKey: lineage.IdempotencyKey}
+		if lineage.PreviousProjectID == previousProjectID {
+			if err := validateRetirementIntent(retirement, previousProjectID, expectedCurrentHead, backup.HeadHash, backup.Digest, currentID, reason, idempotencyKey); err != nil {
+				return AuthorityRotationReceipt{}, err
+			}
+			if err := s.confirmProjectLocator(); err != nil {
+				return AuthorityRotationReceipt{}, err
+			}
+			return authorityRotationReceipt(retirement)
+		}
+		currentID = lineage.PreviousProjectID
+	}
+	return AuthorityRotationReceipt{}, fmt.Errorf("backup project %s does not match current project %s", previousProjectID, s.Project.Config.ProjectID)
+}
+
+func (s *Service) confirmProjectLocator() error {
+	if s.ConfirmLocator != nil {
+		return s.ConfirmLocator(s.Project.Root)
+	}
+	return project.SyncProjectLocator(s.Project.Root)
+}
+
+func (s *Service) prepareAndPublishReplacement(retirement authorityRetirement, retirementRaw []byte, operation string) error {
+	lineage := authorityLineage(retirement, operation)
+	dataDir, err := project.PrepareReplacementAuthority(retirement.ReplacementProjectID, lineage)
+	if err != nil {
+		return err
+	}
+	retirementSum := sha256.Sum256(retirementRaw)
+	establishment := authorityEstablishment{
+		APIVersion: "dagrail.io/authority-establishment/v1alpha1", Kind: "AuthorityEstablishment",
+		ProjectID: retirement.ReplacementProjectID, PreviousProjectID: retirement.PreviousProjectID,
+		Operation: operation, EstablishedAt: retirement.RotatedAt,
+		ProvenanceDigest: "sha256:" + fmt.Sprintf("%x", retirementSum[:]),
+	}
+	raw, err := json.Marshal(establishment)
+	if err != nil {
+		return err
+	}
+	raw, err = jcs.Transform(raw)
+	if err != nil {
+		return err
+	}
+	establishedAt, err := time.Parse(time.RFC3339Nano, establishment.EstablishedAt)
+	if err != nil {
+		return err
+	}
+	replacementJournal, err := journal.OpenForAuthorityEstablishment(dataDir, retirement.ReplacementProjectID)
+	if err != nil {
+		return err
+	}
+	if _, err := replacementJournal.EstablishAuthority(raw, establishedAt); err != nil {
+		return err
+	}
+	if _, err := project.RotateAuthority(s.Project.Root, retirement.PreviousProjectID, retirement.ReplacementProjectID, lineage); err != nil {
+		return err
+	}
+	return s.confirmProjectLocator()
+}
+
+func (s *Service) retryLegacyAuthorityAdoption(previousProjectID, previousHead, reason, idempotencyKey string) (AuthorityAdoptionReceipt, error) {
+	currentID := s.Project.Config.ProjectID
+	visited := map[string]bool{}
+	for len(visited) < maxLocalAuthorityStores && !visited[currentID] {
+		visited[currentID] = true
+		dataDir, err := project.DataDirForProjectID(currentID)
+		if err != nil || project.ValidateAuthorityClaim(dataDir, currentID) != nil {
+			break
+		}
+		lineage, err := project.ReadAuthorityLineage(dataDir)
+		if err != nil {
+			break
+		}
+		if lineage.PreviousProjectID == previousProjectID {
+			if lineage.Operation != "legacy-adoption" {
+				return AuthorityAdoptionReceipt{}, fmt.Errorf("project identity was replaced by a different recovery operation")
+			}
+			retirement := authorityRetirement{APIVersion: AuthorityAdoptionAPIVersion, Kind: legacyRetirementKind, PreviousProjectID: lineage.PreviousProjectID, PreviousHead: lineage.PreviousHead, RecoveryHead: lineage.RecoveryHead, RecoveryBackupDigest: lineage.RecoveryBackupDigest, ReplacementProjectID: currentID, RotatedAt: lineage.RotatedAt, Reason: lineage.Reason, IdempotencyKey: lineage.IdempotencyKey}
+			if err := validateLegacyRetirementIntent(retirement, previousProjectID, previousHead, lineage.RecoveryBackupDigest, currentID, reason, idempotencyKey); err != nil {
+				return AuthorityAdoptionReceipt{}, err
+			}
+			if err := s.confirmProjectLocator(); err != nil {
+				return AuthorityAdoptionReceipt{}, err
+			}
+			return authorityAdoptionReceipt(retirement)
+		}
+		currentID = lineage.PreviousProjectID
+	}
+	return AuthorityAdoptionReceipt{}, fmt.Errorf("legacy project %s does not match current project %s", previousProjectID, s.Project.Config.ProjectID)
+}
+
+func validateAuthorityQuiescent(state domain.State, at time.Time, operation string) error {
+	for _, lease := range state.Leases {
+		if lease.Active {
+			expires, err := time.Parse(time.RFC3339Nano, lease.ExpiresAt)
+			if err != nil || at.Before(expires) {
+				return fmt.Errorf("%s requires all Role leases to be inactive or expired", operation)
+			}
+		}
+	}
+	for _, effect := range state.Effects {
+		if !oneOf(effect.Status, "confirmed", "failed") {
+			return fmt.Errorf("%s requires every Effect to be closed", operation)
+		}
+	}
+	for _, resource := range state.Resources {
+		if resource.Status == "active" {
+			return fmt.Errorf("%s requires every Resource lease to be closed", operation)
+		}
+	}
+	for _, incident := range state.Incidents {
+		if incident.Status != "resolved" {
+			return fmt.Errorf("%s requires every Incident to be resolved", operation)
+		}
+	}
+	return nil
+}
+
+func authorityLineage(retirement authorityRetirement, operation string) project.AuthorityLineage {
+	return project.AuthorityLineage{Operation: operation, PreviousProjectID: retirement.PreviousProjectID, PreviousHead: retirement.PreviousHead, RecoveryHead: retirement.RecoveryHead, RecoveryBackupDigest: retirement.RecoveryBackupDigest, RotatedAt: retirement.RotatedAt, Reason: retirement.Reason, IdempotencyKey: retirement.IdempotencyKey}
+}
+
+func legacyRetirementReservationDigest(retirement authorityRetirement) (string, error) {
+	retirement.RotatedAt = ""
+	return authorityDigest("dagrail-legacy-authority-retirement-reservation-v1\x00", retirement)
+}
+
+func stableLegacyBackupCreatedAt(segments []journal.Segment) string {
+	if len(segments) == 0 {
+		return time.Unix(0, 0).UTC().Format(time.RFC3339Nano)
+	}
+	return segments[len(segments)-1].CommittedAt
+}
+
+func validateRetirementIntent(retirement authorityRetirement, previousProjectID, previousHead, recoveryHead, backupDigest, replacementProjectID, reason, idempotencyKey string) error {
+	if retirement.APIVersion != authorityRetirementAPIVersion || retirement.Kind != rotationRetirementKind || retirement.PreviousProjectID != previousProjectID || retirement.PreviousHead != previousHead || retirement.RecoveryHead != recoveryHead || retirement.RecoveryBackupDigest != backupDigest || retirement.ReplacementProjectID != replacementProjectID || retirement.Reason != reason || retirement.IdempotencyKey != idempotencyKey {
+		return fmt.Errorf("authority rotation idempotency key is already bound to different intent")
+	}
+	if !validAuthorityHash(retirement.PreviousHead) || !validAuthorityHash(retirement.RecoveryHead) || !validAuthorityDigest(retirement.RecoveryBackupDigest) {
+		return fmt.Errorf("authority retirement recovery evidence is invalid")
+	}
+	if parsed, err := uuid.Parse(retirement.ReplacementProjectID); err != nil || parsed.String() != retirement.ReplacementProjectID || retirement.ReplacementProjectID == retirement.PreviousProjectID {
+		return fmt.Errorf("authority retirement replacement identity is invalid")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, retirement.RotatedAt); err != nil {
+		return fmt.Errorf("authority retirement timestamp is invalid")
+	}
+	return nil
+}
+
+func validateLegacyRetirementIntent(retirement authorityRetirement, previousProjectID, previousHead, backupDigest, replacementProjectID, reason, idempotencyKey string) error {
+	if retirement.APIVersion != AuthorityAdoptionAPIVersion || retirement.Kind != legacyRetirementKind || retirement.PreviousProjectID != previousProjectID || retirement.PreviousHead != previousHead || retirement.RecoveryHead != previousHead || retirement.RecoveryBackupDigest != backupDigest || retirement.ReplacementProjectID != replacementProjectID || retirement.Reason != reason || retirement.IdempotencyKey != idempotencyKey {
+		return fmt.Errorf("legacy authority adoption idempotency key is already bound to different intent")
+	}
+	if (retirement.PreviousHead != "" && !validAuthorityHash(retirement.PreviousHead)) || !validAuthorityDigest(retirement.RecoveryBackupDigest) {
+		return fmt.Errorf("legacy authority retirement evidence is invalid")
+	}
+	previous, previousErr := uuid.Parse(retirement.PreviousProjectID)
+	replacement, replacementErr := uuid.Parse(retirement.ReplacementProjectID)
+	if previousErr != nil || previous.String() != retirement.PreviousProjectID || replacementErr != nil || replacement.String() != retirement.ReplacementProjectID || retirement.PreviousProjectID == retirement.ReplacementProjectID {
+		return fmt.Errorf("legacy authority replacement identity is invalid")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, retirement.RotatedAt); err != nil {
+		return fmt.Errorf("legacy authority retirement timestamp is invalid")
+	}
+	return nil
+}
+
+func validateAnyRetirement(retirement authorityRetirement) error {
+	switch {
+	case retirement.APIVersion == authorityRetirementAPIVersion && retirement.Kind == rotationRetirementKind:
+		return validateRetirementIntent(retirement, retirement.PreviousProjectID, retirement.PreviousHead, retirement.RecoveryHead, retirement.RecoveryBackupDigest, retirement.ReplacementProjectID, retirement.Reason, retirement.IdempotencyKey)
+	case retirement.APIVersion == AuthorityAdoptionAPIVersion && retirement.Kind == legacyRetirementKind:
+		return validateLegacyRetirementIntent(retirement, retirement.PreviousProjectID, retirement.PreviousHead, retirement.RecoveryBackupDigest, retirement.ReplacementProjectID, retirement.Reason, retirement.IdempotencyKey)
+	default:
+		return fmt.Errorf("authority retirement kind is unsupported")
+	}
+}
+
+func validateAuthorityEstablishment(establishment authorityEstablishment, projectID string) error {
+	current, currentErr := uuid.Parse(establishment.ProjectID)
+	if establishment.APIVersion != "dagrail.io/authority-establishment/v1alpha1" || establishment.Kind != "AuthorityEstablishment" || establishment.ProjectID != projectID || currentErr != nil || current.String() != establishment.ProjectID || !validAuthorityDigest(establishment.ProvenanceDigest) {
+		return fmt.Errorf("authority establishment is structurally invalid")
+	}
+	switch establishment.Operation {
+	case "initialization":
+		if establishment.PreviousProjectID != "" {
+			return fmt.Errorf("initial authority establishment has a predecessor")
+		}
+	case "rotation", "legacy-adoption":
+		previous, err := uuid.Parse(establishment.PreviousProjectID)
+		if err != nil || previous.String() != establishment.PreviousProjectID || establishment.PreviousProjectID == establishment.ProjectID {
+			return fmt.Errorf("replacement authority establishment predecessor is invalid")
+		}
+	default:
+		return fmt.Errorf("authority establishment operation is invalid")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, establishment.EstablishedAt); err != nil {
+		return fmt.Errorf("authority establishment timestamp is invalid")
+	}
+	return nil
+}
+
+func authorityRotationReceipt(retirement authorityRetirement) (AuthorityRotationReceipt, error) {
+	receipt := AuthorityRotationReceipt{APIVersion: AuthorityRotationAPIVersion, Kind: "AuthorityRotationReceipt", PreviousProjectID: retirement.PreviousProjectID, PreviousHead: retirement.PreviousHead, RecoveryHead: retirement.RecoveryHead, RecoveryBackupDigest: retirement.RecoveryBackupDigest, ReplacementProjectID: retirement.ReplacementProjectID, RotatedAt: retirement.RotatedAt, Reason: retirement.Reason, IdempotencyKey: retirement.IdempotencyKey}
+	digest, err := authorityDigest("dagrail-authority-rotation-receipt-v1\x00", receipt)
+	if err != nil {
+		return AuthorityRotationReceipt{}, err
+	}
+	receipt.ReceiptDigest = digest
+	return receipt, nil
+}
+
+func VerifyAuthorityRotationReceipt(receipt AuthorityRotationReceipt) error {
+	previous, previousErr := uuid.Parse(receipt.PreviousProjectID)
+	replacement, replacementErr := uuid.Parse(receipt.ReplacementProjectID)
+	_, timeErr := time.Parse(time.RFC3339Nano, receipt.RotatedAt)
+	if receipt.APIVersion != AuthorityRotationAPIVersion || receipt.Kind != "AuthorityRotationReceipt" || previousErr != nil || previous.String() != receipt.PreviousProjectID || replacementErr != nil || replacement.String() != receipt.ReplacementProjectID || receipt.PreviousProjectID == receipt.ReplacementProjectID || !validAuthorityHash(receipt.PreviousHead) || !validAuthorityHash(receipt.RecoveryHead) || !validAuthorityDigest(receipt.RecoveryBackupDigest) || timeErr != nil || strings.TrimSpace(receipt.Reason) == "" || len([]byte(receipt.Reason)) > 1024 || strings.TrimSpace(receipt.IdempotencyKey) == "" || len([]byte(receipt.IdempotencyKey)) > 256 || !validAuthorityDigest(receipt.ReceiptDigest) {
+		return fmt.Errorf("authority rotation receipt is structurally invalid")
+	}
+	claimed := receipt.ReceiptDigest
+	receipt.ReceiptDigest = ""
+	expected, err := authorityDigest("dagrail-authority-rotation-receipt-v1\x00", receipt)
+	if err != nil {
+		return err
+	}
+	if claimed != expected {
+		return fmt.Errorf("authority rotation receipt digest mismatch")
+	}
+	return nil
+}
+
+func authorityAdoptionReceipt(retirement authorityRetirement) (AuthorityAdoptionReceipt, error) {
+	receipt := AuthorityAdoptionReceipt{APIVersion: AuthorityAdoptionAPIVersion, Kind: "AuthorityAdoptionReceipt", PreviousProjectID: retirement.PreviousProjectID, PreviousHead: retirement.PreviousHead, SourceBackupDigest: retirement.RecoveryBackupDigest, ReplacementProjectID: retirement.ReplacementProjectID, AdoptedAt: retirement.RotatedAt, Reason: retirement.Reason, IdempotencyKey: retirement.IdempotencyKey}
+	digest, err := authorityDigest("dagrail-authority-adoption-receipt-v1\x00", receipt)
+	if err != nil {
+		return AuthorityAdoptionReceipt{}, err
+	}
+	receipt.ReceiptDigest = digest
+	return receipt, nil
+}
+
+func VerifyAuthorityAdoptionReceipt(receipt AuthorityAdoptionReceipt) error {
+	previous, previousErr := uuid.Parse(receipt.PreviousProjectID)
+	replacement, replacementErr := uuid.Parse(receipt.ReplacementProjectID)
+	_, timeErr := time.Parse(time.RFC3339Nano, receipt.AdoptedAt)
+	if receipt.APIVersion != AuthorityAdoptionAPIVersion || receipt.Kind != "AuthorityAdoptionReceipt" || previousErr != nil || previous.String() != receipt.PreviousProjectID || replacementErr != nil || replacement.String() != receipt.ReplacementProjectID || receipt.PreviousProjectID == receipt.ReplacementProjectID || (receipt.PreviousHead != "" && !validAuthorityHash(receipt.PreviousHead)) || !validAuthorityDigest(receipt.SourceBackupDigest) || timeErr != nil || strings.TrimSpace(receipt.Reason) == "" || len([]byte(receipt.Reason)) > 1024 || strings.TrimSpace(receipt.IdempotencyKey) == "" || len([]byte(receipt.IdempotencyKey)) > 256 || !validAuthorityDigest(receipt.ReceiptDigest) {
+		return fmt.Errorf("authority adoption receipt is structurally invalid")
+	}
+	claimed := receipt.ReceiptDigest
+	receipt.ReceiptDigest = ""
+	expected, err := authorityDigest("dagrail-authority-adoption-receipt-v1\x00", receipt)
+	if err != nil {
+		return err
+	}
+	if claimed != expected {
+		return fmt.Errorf("authority adoption receipt digest mismatch")
+	}
+	return nil
+}
+
+func validAuthorityHash(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if !strings.ContainsRune("0123456789abcdef", character) {
+			return false
+		}
+	}
+	return true
+}
+
+func validAuthorityDigest(value string) bool {
+	return strings.HasPrefix(value, "sha256:") && validAuthorityHash(strings.TrimPrefix(value, "sha256:"))
 }
 
 func decodeBackup(data []byte) (BackupEnvelope, error) {

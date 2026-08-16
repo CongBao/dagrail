@@ -62,7 +62,7 @@ func Run(harness, event, root string, reader io.Reader) (Output, bool, error) {
 		if len(revision) > 12 {
 			revision = revision[:12]
 		}
-		guidance = fmt.Sprintf("DAGrail project %s is authoritative outside chat (cursor %d, graph %s, ready %s). Use $govern-dag only for an assigned control Role, $execute-dag-node for assigned work, or $review-dag-node for assigned review. Read dag_context and execute only returned allowed actions; never infer or edit lifecycle state from chat.", svc.Project.Config.Name, state.HeadSequence, revision, ready)
+		guidance = fmt.Sprintf("DAGrail project %s is authoritative outside chat (cursor %d, graph %s, ready %s). Use $govern-dag only for an assigned control Role, $execute-dag-node for assigned work, or $review-dag-node for assigned review. First verify dag_context is visible: loading this skill does not prove the current harness process loaded the MCP registration. If tools are absent, start a fresh session or use the documented dagrail CLI fallback. Execute only controller-returned allowed actions; never infer or edit lifecycle state from chat.", svc.Project.Config.Name, state.HeadSequence, revision, ready)
 	} else {
 		prompt := stringField(payload, "prompt", "user_prompt", "userPrompt", "message", "text", "transformedPrompt")
 		if !looksTerminal(prompt) {

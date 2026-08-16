@@ -79,6 +79,50 @@ func TestLifecycleCLIRequiresIndependentTrustAnchorAndImportsAtomically(t *testi
 	}
 }
 
+func TestRecoveryRotateAuthorityCLIUsesAuthenticatedPrefix(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".test-data"))
+	graphPath := filepath.Join(root, "graph.json")
+	if err := os.WriteFile(graphPath, []byte(`{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"rotation-cli"},"spec":{"roles":[],"nodes":[{"id":"done","kind":"milestone","title":"done","outcomes":[{"id":"complete","class":"success"}]}],"edges":[]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) (string, error) {
+		var stdout, stderr bytes.Buffer
+		err := cli.Run(args, strings.NewReader(""), &stdout, &stderr)
+		return stdout.String(), err
+	}
+	if _, err := run("init", "--root", root, "--name", "rotation-cli"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("graph", "import", "--root", root, "--file", graphPath, "--idempotency-key", "graph"); err != nil {
+		t.Fatal(err)
+	}
+	backupPath := filepath.Join(root, "backup.json")
+	if _, err := run("backup", "create", "--root", root, "--output", backupPath); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := service.OpenForRecovery(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := svc.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := run("recovery", "rotate-authority", "--root", root, "--backup", backupPath, "--expected-current-head", state.HeadHash, "--reason", "cli recovery", "--idempotency-key", "rotate/cli")
+	if err != nil || !strings.Contains(output, `"kind":"AuthorityRotationReceipt"`) || !strings.Contains(output, `"previousProjectId":"`+state.ProjectID+`"`) {
+		t.Fatalf("authority rotation CLI failed: %v %s", err, output)
+	}
+	replacement, err := service.OpenForRecovery(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacementState, err := replacement.State()
+	if err != nil || replacementState.ProjectID == state.ProjectID || replacementState.HeadSequence != 1 || replacementState.Graph != nil {
+		t.Fatalf("authority rotation CLI did not create a fence-only replacement: %+v %v", replacementState, err)
+	}
+}
+
 func TestUserCanInitializeImportGraphAndReadFrontier(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".test-data"))
@@ -126,10 +170,10 @@ func TestUserCanInitializeImportGraphAndReadFrontier(t *testing.T) {
 		t.Fatalf("expected only A ready, got %s", out)
 	}
 	status, err := run("status", "--root", root)
-	if err != nil || !strings.Contains(status, `"headSequence":1`) || !strings.Contains(status, `"blocked":["B"]`) {
+	if err != nil || !strings.Contains(status, `"headSequence":2`) || !strings.Contains(status, `"blocked":["B"]`) {
 		t.Fatalf("operational status unavailable: %v %s", err, status)
 	}
-	history, err := run("history", "--root", root, "--after", "0", "--limit", "1")
+	history, err := run("history", "--root", root, "--after", "1", "--limit", "1")
 	if err != nil || !strings.Contains(history, `"commandKind":"graph.import"`) || strings.Contains(history, `"payload"`) {
 		t.Fatalf("bounded history contract failed: %v %s", err, history)
 	}
@@ -139,7 +183,7 @@ func TestUserCanInitializeImportGraphAndReadFrontier(t *testing.T) {
 		t.Fatalf("backup create failed: %v %s", err, created)
 	}
 	verified, err := run("backup", "verify", "--root", root, "--file", backupPath)
-	if err != nil || !strings.Contains(verified, `"segments":1`) {
+	if err != nil || !strings.Contains(verified, `"segments":2`) {
 		t.Fatalf("backup verify failed: %v %s", err, verified)
 	}
 	compatibility, err := run("journal", "compatibility", "--root", root)

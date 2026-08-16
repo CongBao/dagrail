@@ -8,6 +8,12 @@ description: Execute or resume one DAGrail task, gate, decision, or effect node.
 Operate only the stable Role and Node named by the work package. If neither is named,
 do not guess a Role or acquire a lease; ask the DAG controller for an assignment.
 
+First verify that the DAGrail MCP tools are callable in this process. A visible skill can
+outlive an older harness process and does not prove MCP activation. If tools are absent,
+run `dagrail doctor install`, start a fresh session, or use `dagrail context`,
+`dagrail inspect`, `dagrail action apply`, `dagrail reconcile`, and `dagrail pre-wait`
+as appropriate. Never replace a missing tool with a hand-authored lifecycle envelope.
+
 1. Bind that Role to this harness session. Never reuse a session bound to another
    formal Role. Use takeover only after the former lease expires.
 2. Call `dag_context` with `view: worker`, `role_id`, and `node_id`. Treat its cursor,

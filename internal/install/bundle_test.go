@@ -86,6 +86,32 @@ func TestLinkedPluginBundleContainsOnlyPublicProjectionRoots(t *testing.T) {
 	}
 }
 
+func TestLinkedPluginBundleRequiresEverySkillAndHostHook(t *testing.T) {
+	files, _, _, err := linkedPluginBundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := map[string]bool{}
+	for _, file := range files {
+		byPath[file.Path] = true
+	}
+	for _, path := range []string{
+		"plugins/dagrail/skills/govern-dag/SKILL.md",
+		"plugins/dagrail/skills/execute-dag-node/SKILL.md",
+		"plugins/dagrail/skills/review-dag-node/SKILL.md",
+		"plugins/dagrail/hooks/hooks.json",
+		"plugins/dagrail/hooks/claude-hooks.json",
+		"plugins/dagrail/hooks/copilot-hooks.json",
+	} {
+		if !byPath[path] {
+			t.Fatalf("closed plugin bundle omitted %s", path)
+		}
+	}
+	if err := validateBundledManifestReferences(files); err != nil {
+		t.Fatalf("plugin manifest reference closure: %v", err)
+	}
+}
+
 func TestLinkedPluginBundleResolvesBrandAssets(t *testing.T) {
 	files, _, _, err := linkedPluginBundle()
 	if err != nil {
@@ -151,5 +177,20 @@ func assertBundledSVG(t *testing.T, files map[string][]byte, path string) {
 	}
 	if bytes.Contains(data, []byte("<script")) || bytes.Contains(data, []byte("href=")) {
 		t.Fatalf("brand asset contains active or external content: %s", path)
+	}
+}
+
+func TestProductionBundleValidatorClosesSkillMetadataReferences(t *testing.T) {
+	files, _, _, err := linkedPluginBundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range files {
+		if files[index].Path == "plugins/dagrail/skills/govern-dag/agents/openai.yaml" {
+			files[index].Data = []byte("interface:\n  icon_small: ./assets/missing.svg\n  icon_large: ./assets/icon-large.svg\n  brand_color: '#2563EB'\n")
+		}
+	}
+	if err := validateBundledManifestReferences(files); err == nil || !strings.Contains(err.Error(), "references missing") {
+		t.Fatalf("production validator accepted a missing skill metadata asset: %v", err)
 	}
 }

@@ -26,6 +26,16 @@ Code conformance uses the public, name-specific `mcp get dagrail` command and re
 one exact `Type`, `Command`, and `Args` field set. Hosts whose current output does not
 match their closed probe remain unverified.
 
+Plugin installation and status cannot prove that an already-running harness process
+hot-loaded a newly registered MCP server. After install or upgrade, start a fresh
+harness session and verify the six tool names are callable. A visible DAGrail skill is
+not that proof. If restart is deferred, use the matching typed CLI commands
+(`context`, `inspect`, `action apply`, `graph preview-change|apply-change`, `reconcile`,
+and `pre-wait`) and never handcraft a lifecycle envelope. `dagrail doctor install`
+separates persisted `configurationReady` from activation `ready`, reports
+`fresh-session-or-cli-fallback`, and keeps both `ready` and
+`currentProcessVerified` false until process-visible proof exists.
+
 Native support is intentionally asymmetric:
 
 | Harness | Native mode | Lifecycle boundary |

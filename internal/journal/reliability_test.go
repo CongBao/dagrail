@@ -7,10 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/CongBao/dagrail/internal/project"
 )
 
 const reliabilityProjectID = "11111111-1111-4111-8111-111111111111"
@@ -19,7 +22,7 @@ func TestAppendFaultMatrixPreservesRenameCommitBoundary(t *testing.T) {
 	beforeCommit := []string{"before-temp-create", "before-temp-write", "before-temp-sync", "before-rename"}
 	for _, point := range beforeCommit {
 		t.Run(point, func(t *testing.T) {
-			store, err := Open(t.TempDir(), reliabilityProjectID)
+			store, err := openClaimed(t, t.TempDir(), reliabilityProjectID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -41,7 +44,7 @@ func TestAppendFaultMatrixPreservesRenameCommitBoundary(t *testing.T) {
 	afterCommit := []string{"after-rename", "before-directory-sync"}
 	for _, point := range afterCommit {
 		t.Run(point, func(t *testing.T) {
-			store, err := Open(t.TempDir(), reliabilityProjectID)
+			store, err := openClaimed(t, t.TempDir(), reliabilityProjectID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -71,7 +74,7 @@ func TestProcessCrashBeforeAndAfterRenameIsRecoverable(t *testing.T) {
 	}{{"before-rename", 0, true}, {"after-rename", 1, false}} {
 		t.Run(scenario.point, func(t *testing.T) {
 			dataDir := t.TempDir()
-			store, err := Open(dataDir, reliabilityProjectID)
+			store, err := openClaimed(t, dataDir, reliabilityProjectID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -105,7 +108,7 @@ func TestProcessCrashBeforeAndAfterRenameIsRecoverable(t *testing.T) {
 
 func TestCrossProcessWriterContentionSerializesAndDeduplicates(t *testing.T) {
 	dataDir := t.TempDir()
-	if _, err := Open(dataDir, reliabilityProjectID); err != nil {
+	if _, err := openClaimed(t, dataDir, reliabilityProjectID); err != nil {
 		t.Fatal(err)
 	}
 	runBatch := func(keys []string) {
@@ -141,7 +144,7 @@ func TestCrossProcessWriterContentionSerializesAndDeduplicates(t *testing.T) {
 		same[index] = "same-key"
 	}
 	runBatch(same)
-	store, err := Open(dataDir, reliabilityProjectID)
+	store, err := openClaimed(t, dataDir, reliabilityProjectID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +181,7 @@ func TestJournalCorruptionMatrixFailsClosedWhileTempFilesAreIgnored(t *testing.T
 	}
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {
-			store, err := Open(t.TempDir(), reliabilityProjectID)
+			store, err := openClaimed(t, t.TempDir(), reliabilityProjectID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -206,7 +209,7 @@ func TestJournalCorruptionMatrixFailsClosedWhileTempFilesAreIgnored(t *testing.T
 			}
 		})
 	}
-	store, err := Open(t.TempDir(), reliabilityProjectID)
+	store, err := openClaimed(t, t.TempDir(), reliabilityProjectID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +222,7 @@ func TestJournalCorruptionMatrixFailsClosedWhileTempFilesAreIgnored(t *testing.T
 }
 
 func TestLongJournalMaintainsSequenceHashChainAndIdempotency(t *testing.T) {
-	store, err := Open(t.TempDir(), reliabilityProjectID)
+	store, err := openClaimed(t, t.TempDir(), reliabilityProjectID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,12 +246,209 @@ func TestLongJournalMaintainsSequenceHashChainAndIdempotency(t *testing.T) {
 	}
 }
 
+func TestAuthorityRetirementFenceRecoversEveryJournalCommitFault(t *testing.T) {
+	for _, point := range []string{"before-temp-create", "before-temp-write", "before-temp-sync", "before-rename", "after-rename", "before-directory-sync"} {
+		t.Run(point, func(t *testing.T) {
+			dataDir := t.TempDir()
+			store, err := openClaimed(t, dataDir, reliabilityProjectID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			initial, err := store.Append(Command{ID: "initial", Kind: "initial", IdempotencyKey: "initial"}, []Event{{Type: "initial", Payload: json.RawMessage(`{}`)}}, time.Unix(1, 0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			retirement := []byte(`{"apiVersion":"test/v1","kind":"AuthorityRetirement","intent":"same"}`)
+			sameRetirement := func(existing []byte) error {
+				var got, want any
+				if json.Unmarshal(existing, &got) != nil || json.Unmarshal(retirement, &want) != nil || !reflect.DeepEqual(got, want) {
+					return fmt.Errorf("different intent")
+				}
+				return nil
+			}
+			injected := true
+			store.fault = func(candidate string) error {
+				if injected && candidate == point {
+					injected = false
+					return fmt.Errorf("injected %s", point)
+				}
+				return nil
+			}
+			applied := 0
+			apply := func(committed []byte) error {
+				if err := sameRetirement(committed); err != nil {
+					t.Fatalf("retirement intent changed: %s", committed)
+				}
+				applied++
+				return nil
+			}
+			if _, err := store.RetireAuthority(initial.SegmentHash, retirement, time.Unix(2, 0), func([]Segment) error { return nil }, sameRetirement, apply); err == nil {
+				t.Fatalf("fault %s did not interrupt first retirement", point)
+			}
+			store.fault = nil
+			committed, err := store.RetireAuthority(initial.SegmentHash, retirement, time.Unix(3, 0), func([]Segment) error { return nil }, sameRetirement, apply)
+			if err != nil || sameRetirement(committed) != nil || applied != 1 {
+				t.Fatalf("retirement retry after %s: committed=%s applied=%d err=%v", point, committed, applied, err)
+			}
+			segments, err := store.ReadAll()
+			if err != nil || len(segments) != 2 || segments[1].SchemaVersion != AuthorityFenceSchemaVersion || len(segments[1].Events) != 1 || segments[1].Events[0].Type != "authority.retired" {
+				t.Fatalf("retirement fence after %s is not exactly once: segments=%d err=%v", point, len(segments), err)
+			}
+		})
+	}
+}
+
+func TestLegacyAuthorityRetirementRecoversEveryJournalCommitFault(t *testing.T) {
+	for _, point := range []string{"before-temp-create", "before-temp-write", "before-temp-sync", "before-rename", "after-rename", "before-directory-sync"} {
+		t.Run(point, func(t *testing.T) {
+			dataDir := t.TempDir()
+			store, err := openClaimed(t, dataDir, reliabilityProjectID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			initial, err := store.Append(Command{ID: "initial", Kind: "initial", IdempotencyKey: "initial"}, []Event{{Type: "initial", Payload: json.RawMessage(`{}`)}}, time.Unix(1, 0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(dataDir, "authority-claim.json")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(dataDir, ".test-authority-home", "anchors", reliabilityProjectID+".json")); err != nil {
+				t.Fatal(err)
+			}
+			store.capability = storeCapabilityRecovery
+			retirement := []byte(`{"apiVersion":"test/v1","kind":"LegacyAuthorityRetirement","intent":"same"}`)
+			reservationDigest := "sha256:" + strings.Repeat("7", 64)
+			sameRetirement := func(existing []byte) error {
+				var got, want any
+				if json.Unmarshal(existing, &got) != nil || json.Unmarshal(retirement, &want) != nil || !reflect.DeepEqual(got, want) {
+					return fmt.Errorf("different intent")
+				}
+				return nil
+			}
+			injected := true
+			store.fault = func(candidate string) error {
+				if injected && candidate == point {
+					injected = false
+					return fmt.Errorf("injected %s", point)
+				}
+				return nil
+			}
+			applied := 0
+			apply := func(committed []byte) error {
+				if err := sameRetirement(committed); err != nil {
+					t.Fatalf("retirement intent changed: %s", committed)
+				}
+				applied++
+				return nil
+			}
+			if _, err := store.RetireLegacyAuthority(initial.SegmentHash, retirement, reservationDigest, time.Unix(2, 0), func([]Segment) error {
+				return project.ReserveLegacyRetirement(dataDir, reliabilityProjectID, reservationDigest)
+			}, sameRetirement, apply); err == nil {
+				t.Fatalf("fault %s did not interrupt first retirement", point)
+			}
+			store.fault = nil
+			committed, err := store.RetireLegacyAuthority(initial.SegmentHash, retirement, reservationDigest, time.Unix(3, 0), func([]Segment) error {
+				return project.ReserveLegacyRetirement(dataDir, reliabilityProjectID, reservationDigest)
+			}, sameRetirement, apply)
+			if err != nil || sameRetirement(committed) != nil || applied != 1 {
+				t.Fatalf("retirement retry after %s: committed=%s applied=%d err=%v", point, committed, applied, err)
+			}
+			segments, err := store.ReadAll()
+			if err != nil || len(segments) != 2 || segments[1].SchemaVersion != AuthorityFenceSchemaVersion || len(segments[1].Events) != 1 || segments[1].Events[0].Type != "authority.retired" {
+				t.Fatalf("retirement barrier after %s is not exactly once: segments=%d err=%v", point, len(segments), err)
+			}
+		})
+	}
+}
+
+func TestAuthorityEstablishmentRecoversEveryJournalCommitFault(t *testing.T) {
+	for _, point := range []string{"before-temp-create", "before-temp-write", "before-temp-sync", "before-rename", "after-rename", "before-directory-sync"} {
+		t.Run(point, func(t *testing.T) {
+			store, err := openClaimed(t, t.TempDir(), reliabilityProjectID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store.capability = storeCapabilityEstablishment
+			establishment := []byte(`{"apiVersion":"test/v1","kind":"AuthorityEstablishment","intent":"same"}`)
+			injected := true
+			store.fault = func(candidate string) error {
+				if injected && candidate == point {
+					injected = false
+					return fmt.Errorf("injected %s", point)
+				}
+				return nil
+			}
+			if _, err := store.EstablishAuthority(establishment, time.Unix(1, 0)); err == nil {
+				t.Fatalf("fault %s did not interrupt first establishment", point)
+			}
+			store.fault = nil
+			segment, err := store.EstablishAuthority(establishment, time.Unix(2, 0))
+			if err != nil || segment.Sequence != 1 || segment.SchemaVersion != AuthorityFenceSchemaVersion {
+				t.Fatalf("establishment retry after %s: segment=%+v err=%v", point, segment, err)
+			}
+			segments, err := store.ReadAll()
+			if err != nil || len(segments) != 1 || len(segments[0].Events) != 1 || segments[0].Events[0].Type != "authority.established" {
+				t.Fatalf("establishment fence after %s is not exactly once: %+v %v", point, segments, err)
+			}
+		})
+	}
+}
+
+func TestAuthorityEstablishmentRequiresPristineJournalAndExactRetry(t *testing.T) {
+	establishment := []byte(`{"apiVersion":"test/v1","kind":"AuthorityEstablishment","intent":"one"}`)
+	store, err := openClaimed(t, t.TempDir(), reliabilityProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.capability = storeCapabilityEstablishment
+	if _, err := store.EstablishAuthority(establishment, time.Unix(1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EstablishAuthority([]byte(`{"apiVersion":"test/v1","kind":"AuthorityEstablishment","intent":"two"}`), time.Unix(2, 0)); err == nil || !strings.Contains(err.Error(), "not pristine") {
+		t.Fatalf("different establishment intent was accepted: %v", err)
+	}
+
+	nonPristine, err := openClaimed(t, t.TempDir(), "22222222-2222-4222-8222-222222222222")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nonPristine.Append(Command{ID: "ordinary", Kind: "ordinary", IdempotencyKey: "ordinary"}, []Event{{Type: "ordinary", Payload: json.RawMessage(`{}`)}}, time.Unix(1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	nonPristine.capability = storeCapabilityEstablishment
+	if _, err := nonPristine.EstablishAuthority(establishment, time.Unix(2, 0)); err == nil || !strings.Contains(err.Error(), "not pristine") {
+		t.Fatalf("non-pristine journal was established: %v", err)
+	}
+}
+
+func TestAuthorityRetirementSidecarCannotCreateOrReplaceTheJournalFence(t *testing.T) {
+	store, err := openClaimed(t, t.TempDir(), reliabilityProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retirement := []byte(`{"apiVersion":"test/v1","kind":"AuthorityRetirement","intent":"sidecar-only"}`)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(store.dir), authorityRetirementFile), retirement, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AuthorityRetirement(); err == nil || !strings.Contains(err.Error(), "no journal fence") {
+		t.Fatalf("orphan retirement sidecar was accepted: %v", err)
+	}
+	if _, err := store.RetireAuthority("", retirement, time.Unix(1, 0), func([]Segment) error { return nil }, nil, func([]byte) error { return nil }); err == nil || !strings.Contains(err.Error(), "no journal fence") {
+		t.Fatalf("orphan retirement sidecar created a fence: %v", err)
+	}
+	segments, err := store.ReadAll()
+	if err != nil || len(segments) != 0 {
+		t.Fatalf("orphan sidecar changed the journal: %+v %v", segments, err)
+	}
+}
+
 func TestJournalProcessHelper(t *testing.T) {
 	mode := os.Getenv("DAGRAIL_JOURNAL_HELPER")
 	if mode == "" {
 		return
 	}
-	store, err := Open(os.Getenv("DAGRAIL_JOURNAL_DATA"), reliabilityProjectID)
+	store, err := openClaimed(t, os.Getenv("DAGRAIL_JOURNAL_DATA"), reliabilityProjectID)
 	if err != nil {
 		os.Exit(92)
 	}

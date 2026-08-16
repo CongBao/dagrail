@@ -57,7 +57,7 @@ func TestObservationSnapshotAndShadowAreSourceReadOnlyAndDriftDetecting(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.ProjectID == "" || report.HeadSequence != 1 || report.Snapshot.SnapshotDigest != first.SnapshotDigest {
+	if report.ProjectID == "" || report.HeadSequence != 2 || report.Snapshot.SnapshotDigest != first.SnapshotDigest {
 		t.Fatalf("unexpected shadow report: %#v", report)
 	}
 	if after := treeDigest(t, source); after != before {

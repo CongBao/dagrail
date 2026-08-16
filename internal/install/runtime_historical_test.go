@@ -18,6 +18,7 @@ import (
 
 	"github.com/CongBao/dagrail/internal/compatibility"
 	"github.com/CongBao/dagrail/internal/version"
+	"gopkg.in/yaml.v3"
 )
 
 type historicalBinary struct {
@@ -35,10 +36,13 @@ func TestHistoricalBinaryCompatibilityWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	buildRoot := t.TempDir()
+	t.Setenv("DAGRAIL_TEST_AUTHORITY_HOME", filepath.Join(buildRoot, "authority"))
 	binaries := make([]historicalBinary, 0, len(window.Entries)+1)
+	sources := map[string]string{}
 	for _, entry := range window.Entries {
 		source := filepath.Join(buildRoot, "source-"+entry.Version)
 		extractRevision(t, repository, entry.Commit, source)
+		sources[entry.Version] = source
 		binary := filepath.Join(buildRoot, "dagrail-"+entry.Version)
 		buildDAGrail(t, source, binary)
 		assertBinaryVersion(t, binary, entry.Version)
@@ -82,10 +86,247 @@ func TestHistoricalBinaryCompatibilityWindow(t *testing.T) {
 	}
 	runHistorical(t, binaries[0].path, dataRoot, "init", "--root", projectRoot, "--name", "beta-window")
 	runHistorical(t, binaries[0].path, dataRoot, "graph", "import", "--root", projectRoot, "--file", graphPath, "--idempotency-key", "beta-window-import")
-	for _, binary := range binaries {
-		runHistorical(t, binary.path, dataRoot, "journal", "verify", "--root", projectRoot)
+	var legacyVerifyOutput string
+	for _, binary := range binaries[:len(binaries)-1] {
+		legacyVerifyOutput = runHistorical(t, binary.path, dataRoot, "journal", "verify", "--root", projectRoot)
 	}
+	runHistoricalFailure(t, currentBinary, dataRoot, "journal", "verify", "--root", projectRoot)
+	legacyLocator, err := os.ReadFile(filepath.Join(projectRoot, ".dagrail", "project.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacyProject struct {
+		ProjectID string `yaml:"projectId"`
+	}
+	if err := yaml.Unmarshal(legacyLocator, &legacyProject); err != nil || legacyProject.ProjectID == "" {
+		t.Fatalf("decode legacy compatibility locator: %v", err)
+	}
+	var legacyVerification struct {
+		HeadHash string `json:"headHash"`
+	}
+	if err := json.Unmarshal([]byte(legacyVerifyOutput), &legacyVerification); err != nil || legacyVerification.HeadHash == "" {
+		t.Fatalf("decode legacy compatibility verification: %v %s", err, legacyVerifyOutput)
+	}
+	runHistorical(t, currentBinary, dataRoot, "recovery", "adopt-legacy-authority", "--root", projectRoot, "--expected-project-id", legacyProject.ProjectID, "--expected-current-head", legacyVerification.HeadHash, "--reason", "adopt historical compatibility window", "--idempotency-key", "adopt/historical-window")
+	runHistorical(t, currentBinary, dataRoot, "journal", "verify", "--root", projectRoot)
 	runHistorical(t, currentBinary, dataRoot, "recovery", "rehearse", "--root", projectRoot)
+
+	// Authority migration keeps the Project v1alpha1 locator parseable while
+	// schema-4 fences deliberately stop the immediately previous runtime from
+	// reading or writing either retired or replacement authority.
+	previousBinary := binaries[len(binaries)-2]
+	if previousBinary.version != "0.21.0" {
+		t.Fatalf("authority rollback fixture expected v0.21.0, got %s", previousBinary.version)
+	}
+	t.Run("v0.21-cannot-open-new-v0.22-authority", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "current-project")
+		dataRoot := filepath.Join(t.TempDir(), "current-data")
+		graphPath := filepath.Join(t.TempDir(), "current-graph.json")
+		if err := os.WriteFile(graphPath, []byte(`{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"current-authority"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"task","kind":"task","role":"worker","title":"task","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		runHistorical(t, currentBinary, dataRoot, "init", "--root", root, "--name", "current-authority")
+		runHistoricalFailure(t, previousBinary.path, dataRoot, "journal", "verify", "--root", root)
+		runHistoricalFailure(t, previousBinary.path, dataRoot, "graph", "import", "--root", root, "--file", graphPath, "--idempotency-key", "stale-v021-new-authority")
+		runHistorical(t, currentBinary, dataRoot, "journal", "verify", "--root", root)
+		runHistorical(t, currentBinary, dataRoot, "graph", "import", "--root", root, "--file", graphPath, "--idempotency-key", "current-authority-graph")
+	})
+	waitingWriterBinary := filepath.Join(buildRoot, "dagrail-0.21.0-waiting-writer")
+	injectHistoricalWriterAdmissionHook(t, sources["0.21.0"])
+	buildDAGrail(t, sources["0.21.0"], waitingWriterBinary)
+	rotationRoot := filepath.Join(t.TempDir(), "rotation-project")
+	rotationData := filepath.Join(t.TempDir(), "rotation-data")
+	rotationGraph := filepath.Join(t.TempDir(), "rotation-graph.json")
+	rotationDefinition := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"rotation-rollback"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"task","kind":"task","role":"worker","title":"task","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
+	if err := os.WriteFile(rotationGraph, []byte(rotationDefinition), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runHistorical(t, previousBinary.path, rotationData, "init", "--root", rotationRoot, "--name", "rotation-rollback")
+	runHistorical(t, previousBinary.path, rotationData, "graph", "import", "--root", rotationRoot, "--file", rotationGraph, "--idempotency-key", "rotation-graph")
+	oldLocator, err := os.ReadFile(filepath.Join(rotationRoot, ".dagrail", "project.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backupOutput := runHistorical(t, previousBinary.path, rotationData, "journal", "verify", "--root", rotationRoot)
+	var created struct {
+		HeadHash string `json:"headHash"`
+	}
+	if err := json.Unmarshal([]byte(backupOutput), &created); err != nil || created.HeadHash == "" {
+		t.Fatalf("decode authority rollback verification: %v %s", err, backupOutput)
+	}
+	var oldProject struct {
+		ProjectID string `yaml:"projectId"`
+	}
+	if err := yaml.Unmarshal(oldLocator, &oldProject); err != nil || oldProject.ProjectID == "" {
+		t.Fatalf("decode v0.21 project locator: %v", err)
+	}
+	adoptionOutput := runHistorical(t, currentBinary, rotationData, "recovery", "adopt-legacy-authority", "--root", rotationRoot, "--expected-project-id", oldProject.ProjectID, "--expected-current-head", created.HeadHash, "--reason", "adopt v0.21 rotation fixture", "--idempotency-key", "adopt/historical-rotation")
+	var adoption struct {
+		PreviousProjectID    string `json:"previousProjectId"`
+		ReplacementProjectID string `json:"replacementProjectId"`
+	}
+	if err := json.Unmarshal([]byte(adoptionOutput), &adoption); err != nil || adoption.PreviousProjectID != oldProject.ProjectID || adoption.ReplacementProjectID == "" || adoption.ReplacementProjectID == oldProject.ProjectID {
+		t.Fatalf("decode authority adoption receipt: %v %s", err, adoptionOutput)
+	}
+	// Both the retired source journal and the fresh replacement journal begin or
+	// end with schema-4 fences. The exact v0.21 binary can parse Project v1alpha1
+	// but cannot read or append either authority.
+	runHistoricalFailure(t, previousBinary.path, rotationData, "journal", "verify", "--root", rotationRoot)
+	runHistorical(t, currentBinary, rotationData, "journal", "verify", "--root", rotationRoot)
+	staleRoot := filepath.Join(t.TempDir(), "stale-authority")
+	if err := os.MkdirAll(filepath.Join(staleRoot, ".dagrail"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staleRoot, ".dagrail", "project.yaml"), oldLocator, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runHistoricalFailure(t, previousBinary.path, rotationData, "role", "bind", "--root", staleRoot, "--role", "worker", "--harness", "codex", "--session", "stale-v021", "--idempotency-key", "stale-v021-bind")
+	runHistoricalFailure(t, currentBinary, rotationData, "journal", "verify", "--root", staleRoot)
+	runHistorical(t, currentBinary, rotationData, "graph", "import", "--root", rotationRoot, "--file", rotationGraph, "--idempotency-key", "replacement-graph")
+	replacementBackupPath := filepath.Join(t.TempDir(), "replacement-backup.json")
+	replacementBackupOutput := runHistorical(t, currentBinary, rotationData, "backup", "create", "--root", rotationRoot, "--output", replacementBackupPath)
+	var replacementBackup struct {
+		Report struct {
+			HeadHash string `json:"headHash"`
+		} `json:"report"`
+	}
+	if err := json.Unmarshal([]byte(replacementBackupOutput), &replacementBackup); err != nil || replacementBackup.Report.HeadHash == "" {
+		t.Fatalf("decode replacement authority backup: %v %s", err, replacementBackupOutput)
+	}
+	runHistorical(t, currentBinary, rotationData, "recovery", "rotate-authority", "--root", rotationRoot, "--backup", replacementBackupPath, "--expected-current-head", replacementBackup.Report.HeadHash, "--reason", "historical rollback proof", "--idempotency-key", "rotate/historical")
+	runHistoricalFailure(t, previousBinary.path, rotationData, "journal", "verify", "--root", rotationRoot)
+	runHistorical(t, currentBinary, rotationData, "journal", "verify", "--root", rotationRoot)
+
+	emptyLegacyRoot := filepath.Join(t.TempDir(), "empty-v021")
+	emptyLegacyData := filepath.Join(t.TempDir(), "empty-v021-data")
+	runHistorical(t, previousBinary.path, emptyLegacyData, "init", "--root", emptyLegacyRoot, "--name", "empty-v021")
+	emptyLocator, err := os.ReadFile(filepath.Join(emptyLegacyRoot, ".dagrail", "project.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var emptyProject struct {
+		ProjectID string `yaml:"projectId"`
+	}
+	if err := yaml.Unmarshal(emptyLocator, &emptyProject); err != nil || emptyProject.ProjectID == "" {
+		t.Fatalf("decode empty v0.21 project locator: %v", err)
+	}
+	runHistoricalFailure(t, currentBinary, emptyLegacyData, "graph", "import", "--root", emptyLegacyRoot, "--file", rotationGraph, "--idempotency-key", "must-adopt-first")
+	runHistorical(t, currentBinary, emptyLegacyData, "recovery", "adopt-legacy-authority", "--root", emptyLegacyRoot, "--expected-project-id", emptyProject.ProjectID, "--expected-current-head", "empty", "--reason", "adopt empty v0.21 fixture", "--idempotency-key", "adopt/empty-v021")
+	runHistoricalFailure(t, previousBinary.path, emptyLegacyData, "graph", "import", "--root", emptyLegacyRoot, "--file", rotationGraph, "--idempotency-key", "stale-v021-after-empty-adoption")
+	runHistorical(t, currentBinary, emptyLegacyData, "graph", "import", "--root", emptyLegacyRoot, "--file", rotationGraph, "--idempotency-key", "after-explicit-adoption")
+
+	t.Run("v0.21-waiting-writer-orderings", func(t *testing.T) {
+		testHistoricalWaitingWriterOrderings(t, waitingWriterBinary, currentBinary, rotationDefinition)
+	})
+}
+
+func injectHistoricalWriterAdmissionHook(t *testing.T, source string) {
+	t.Helper()
+	path := filepath.Join(source, "internal", "journal", "journal.go")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	needle := "\terr = s.WithLock(func() error {"
+	hook := `	if ready := os.Getenv("DAGRAIL_TEST_V021_APPEND_READY"); ready != "" {
+		if err := os.WriteFile(ready, []byte("ready"), 0o600); err != nil {
+			return result, false, err
+		}
+		release := os.Getenv("DAGRAIL_TEST_V021_APPEND_RELEASE")
+		for {
+			if _, err := os.Stat(release); err == nil {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	err = s.WithLock(func() error {`
+	updated := strings.Replace(string(raw), needle, hook, 1)
+	if updated == string(raw) {
+		t.Fatal("v0.21 AppendOnce hook point was not found")
+	}
+	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testHistoricalWaitingWriterOrderings(t *testing.T, previousBinary, currentBinary, graph string) {
+	for _, fenceFirst := range []bool{true, false} {
+		name := "writer-first"
+		if fenceFirst {
+			name = "fence-first"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			dataRoot := filepath.Join(t.TempDir(), "data")
+			graphPath := filepath.Join(t.TempDir(), "graph.json")
+			if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runHistorical(t, previousBinary, dataRoot, "init", "--root", root, "--name", name)
+			runHistorical(t, previousBinary, dataRoot, "graph", "import", "--root", root, "--file", graphPath, "--idempotency-key", "graph")
+			locator, err := os.ReadFile(filepath.Join(root, ".dagrail", "project.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var projectConfig struct {
+				ProjectID string `yaml:"projectId"`
+			}
+			if err := yaml.Unmarshal(locator, &projectConfig); err != nil {
+				t.Fatal(err)
+			}
+			backupOutput := runHistorical(t, previousBinary, dataRoot, "journal", "verify", "--root", root)
+			var backup struct {
+				HeadHash string `json:"headHash"`
+			}
+			if err := json.Unmarshal([]byte(backupOutput), &backup); err != nil || backup.HeadHash == "" {
+				t.Fatalf("decode waiting-writer head: %v %s", err, backupOutput)
+			}
+			ready := filepath.Join(t.TempDir(), "ready")
+			release := filepath.Join(t.TempDir(), "release")
+			command := exec.Command(previousBinary, "role", "bind", "--root", root, "--role", "worker", "--harness", "codex", "--session", name, "--idempotency-key", "bind/"+name)
+			command.Env = append(os.Environ(), "DAGRAIL_HOME="+dataRoot, "DAGRAIL_TEST_V021_APPEND_READY="+ready, "DAGRAIL_TEST_V021_APPEND_RELEASE="+release)
+			var output boundedBuffer
+			output.remaining = 64 * 1024
+			command.Stdout, command.Stderr = &output, &output
+			if err := command.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = command.Process.Kill() }()
+			waitForHistoricalFile(t, ready)
+			if fenceFirst {
+				runHistorical(t, currentBinary, dataRoot, "recovery", "adopt-legacy-authority", "--root", root, "--expected-project-id", projectConfig.ProjectID, "--expected-current-head", backup.HeadHash, "--reason", "fence admitted v0.21 writer", "--idempotency-key", "adopt/fence-first")
+				if err := os.WriteFile(release, []byte("release"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := command.Wait(); err == nil {
+					t.Fatalf("admitted v0.21 writer appended after retirement fence: %s", output.String())
+				}
+				return
+			}
+			if err := os.WriteFile(release, []byte("release"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := command.Wait(); err != nil {
+				t.Fatalf("writer-first ordering did not commit: %v %s", err, output.String())
+			}
+			runHistoricalFailure(t, currentBinary, dataRoot, "recovery", "adopt-legacy-authority", "--root", root, "--expected-project-id", projectConfig.ProjectID, "--expected-current-head", backup.HeadHash, "--reason", "stale fence must fail", "--idempotency-key", "adopt/writer-first")
+		})
+	}
+}
+
+func waitForHistoricalFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for historical helper %s", filepath.Base(path))
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func repositoryRoot(t *testing.T) string {
@@ -171,7 +412,7 @@ func buildDAGrail(t *testing.T, source, output string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	command := exec.CommandContext(ctx, "go", "build", "-buildvcs=false", "-trimpath", "-o", output, "./cmd/dagrail")
+	command := exec.CommandContext(ctx, "go", "build", "-tags=dagrail_testauthority", "-buildvcs=false", "-trimpath", "-o", output, "./cmd/dagrail")
 	command.Dir = source
 	command.Env = append(os.Environ(), "CGO_ENABLED=0")
 	combined := &boundedBuffer{remaining: 64 * 1024}
@@ -200,6 +441,20 @@ func runHistorical(t *testing.T, binary, dataRoot string, args ...string) string
 	command.Stdout, command.Stderr = output, output
 	if err := command.Run(); err != nil {
 		t.Fatalf("%s %s: %v: %s", binary, strings.Join(args, " "), err, output.String())
+	}
+	return output.String()
+}
+
+func runHistoricalFailure(t *testing.T, binary, dataRoot string, args ...string) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(ctx, binary, args...)
+	command.Env = append(os.Environ(), "DAGRAIL_HOME="+dataRoot)
+	output := &boundedBuffer{remaining: 64 * 1024}
+	command.Stdout, command.Stderr = output, output
+	if err := command.Run(); err == nil {
+		t.Fatalf("%s %s unexpectedly succeeded: %s", binary, strings.Join(args, " "), output.String())
 	}
 	return output.String()
 }

@@ -73,7 +73,7 @@ var commands = []Command{
 	{Name: "qualify", Summary: "Evaluate structural release qualification", Effect: "read", Project: "optional", Output: "json", Subcommands: []string{"release"}},
 	{Name: "readiness", Summary: "Aggregate pre-1.0 evidence without inferring adoption", Effect: "read", Project: "optional", Output: "json", Subcommands: []string{}},
 	{Name: "reconcile", Summary: "Reconcile an uncertain external effect", Effect: "write", Project: "required", Output: "json", Subcommands: []string{}},
-	{Name: "recovery", Summary: "Rehearse disposable recovery", Effect: "read", Project: "required", Output: "json", Subcommands: []string{"rehearse"}},
+	{Name: "recovery", Summary: "Rehearse recovery, rotate identity, or retire legacy state into a fresh authority", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"adopt-legacy-authority", "rehearse", "rotate-authority"}},
 	{Name: "release", Summary: "Create or verify a closed release manifest", Effect: "mixed", Project: "none", Output: "json", Subcommands: []string{"manifest", "verify"}},
 	{Name: "role", Summary: "Bind, take over, or release a stable role", Effect: "write", Project: "required", Output: "json", Subcommands: []string{"bind", "release", "takeover"}},
 	{Name: "security", Summary: "Audit the local project security posture", Effect: "read", Project: "required", Output: "json", Subcommands: []string{"audit"}},

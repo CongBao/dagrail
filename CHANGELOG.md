@@ -2,6 +2,71 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.22.0 — 2026-08-16
+
+### Added
+
+- lifecycle migration v1beta1 source command bundles: one immutable external record may
+  carry several ordered writer-equivalent commands, each with an independent closed
+  proof ledger, while v1alpha1 retains its single-command semantics;
+- non-destructive `recovery rotate-authority`, which authenticates an exact backup/LKG
+  prefix, creates a fresh Project UUID and fence-only journal, records local recovery
+  provenance, preserves every prior segment byte, and appends one terminal retirement
+  fence to the old journal;
+- explicit `recovery adopt-legacy-authority` for exact-head, locally audited migration
+  of a pre-v0.22 runtime store; it retires the legacy UUID, creates a fresh identity,
+  and never mints v0.22 writer authority for legacy state;
+- explicit fresh-session activation and typed CLI fallback guidance across installer
+  results, installation diagnostics, hooks, harness docs, and all bundled skills.
+
+### Fixed
+
+- external histories no longer need to discard lifecycle transitions or falsify source
+  causality when one source record maps to multiple native DAGrail actions;
+- recovery from a valid-but-contaminated authority no longer depends on manual locator
+  edits or journal deletion; live leases and unclosed work fail the rotation closed;
+- repeated authority generations and exact concurrent rotation retries are idempotent;
+  every writer requires a canonical-data-root-bound local authority claim, so copying a
+  locator, backup, or complete project data directory cannot create a second writer;
+- the per-user authority anchor can no longer be redirected by production process-home
+  environment, legacy-adoption backup identity is prefix-deterministic, and concurrent
+  or reservation-before-fence crash retries return the same receipt;
+- visible locator, claim, lineage, and anchor files are revalidated and directory-synced
+  on fresh retries; copied or partially initialized locators can no longer report a
+  successful initialization without their schema-4 establishment fence;
+- journal-directory creation now flushes its writable parent chain on Unix and Windows,
+  and fresh retries replay every unproven parent boundary instead of treating a visible
+  directory as durable; normal open, mutation, and `init` fail closed when a claimed
+  initial or replacement authority has lost its establishment fence;
+- legacy-adoption backup derivation and retirement admission now converge even when a
+  same-intent loser crosses the initial retirement check before the winner commits;
+- delayed rotation and adoption retries traverse cycle-checked lineage beyond 128
+  generations, subject only to the documented 10,000-store defensive local bound;
+- retirement is an append-only journal fence, and every newly initialized or replacement
+  journal begins with an establishment fence before locator publication; the exact
+  v0.21 reducer can parse Project v1alpha1 but cannot read or mutate those authorities;
+- establishment and retirement barriers use dedicated segment schema 4; an already-open
+  v0.21 writer therefore rejects the journal again while holding the append lock, even
+  if it validated state before the barrier committed;
+- Project v1alpha1 remains byte-shape parseable by v0.21 after rotation; recovery
+  provenance is kept outside the strict repository locator and backup Project object;
+- missing or corrupt rotated lineage blocks all ordinary writes; an exact rotation retry
+  may restore only bytes already authenticated by the surviving claim and unique local
+  predecessor retirement fence;
+- recovery inspection handles reject generic append and restore at the journal layer;
+  only dedicated legacy retirement and rotation transactions can cross that boundary;
+- long-running harnesses are no longer treated as MCP-ready merely because upgraded
+  skills or registrations are visible outside that process.
+- retained LifecycleMigration v1alpha1 and bundled v1beta1 schemas are independently
+  digest-pinned by the public contract and structural qualification gate; runtime
+  decoding now rejects unknown record, command, and native-event fields at the same
+  closed boundaries declared by both schemas.
+
+### Boundaries
+
+- source converters and validation-subject vocabulary remain outside DAGrail;
+- authority rotation is an operator recovery primitive, not automatic live cutover.
+
 ## 0.21.0 — 2026-08-15
 
 ### Added

@@ -44,12 +44,17 @@ type PlanResult struct {
 }
 
 type Result struct {
-	Harness       string `json:"harness"`
-	Status        string `json:"status"`
-	Executable    string `json:"executable,omitempty"`
-	MCPConfigured bool   `json:"mcpConfigured"`
-	Message       string `json:"message,omitempty"`
+	Harness                string `json:"harness"`
+	Status                 string `json:"status"`
+	Executable             string `json:"executable,omitempty"`
+	MCPConfigured          bool   `json:"mcpConfigured"`
+	FreshSessionRequired   bool   `json:"freshSessionRequired"`
+	CurrentProcessVerified bool   `json:"currentProcessVerified"`
+	Activation             string `json:"activation"`
+	Message                string `json:"message,omitempty"`
 }
+
+const freshSessionActivation = "fresh-session-or-cli-fallback"
 
 type RuntimeResult struct {
 	Status            string `json:"status"`
@@ -128,12 +133,12 @@ func Install(ctx context.Context, options Options) ([]Result, error) {
 		executable := findExecutable(plan.Harness)
 		plan.Executable = executable
 		if executable == "" {
-			results = append(results, Result{Harness: plan.Harness, Status: "not_detected", Message: "harness executable not found"})
+			results = append(results, Result{Harness: plan.Harness, Status: "not_detected", Activation: freshSessionActivation, Message: "harness executable not found"})
 			failures = append(failures, fmt.Errorf("%s not detected", plan.Harness))
 			continue
 		}
 		if options.DryRun {
-			results = append(results, Result{Harness: plan.Harness, Status: "planned", Executable: executable, Message: strings.Join(plan.MCPAdd, " ")})
+			results = append(results, Result{Harness: plan.Harness, Status: "planned", Executable: executable, Activation: freshSessionActivation, Message: strings.Join(plan.MCPAdd, " ")})
 			continue
 		}
 		if !runtimeValidated {
@@ -144,16 +149,16 @@ func Install(ctx context.Context, options Options) ([]Result, error) {
 			runtimeValidated = true
 		}
 		if runtimeValidationErr != nil {
-			results = append(results, Result{Harness: plan.Harness, Status: "failed", Executable: executable, Message: runtimeValidationErr.Error()})
+			results = append(results, Result{Harness: plan.Harness, Status: "failed", Executable: executable, Activation: freshSessionActivation, Message: runtimeValidationErr.Error()})
 			failures = append(failures, runtimeValidationErr)
 			continue
 		}
 		if applyErr := applyInstallPlan(ctx, executable, plan, run); applyErr != nil {
-			results = append(results, Result{Harness: plan.Harness, Status: "failed", Executable: executable, Message: applyErr.Error()})
+			results = append(results, Result{Harness: plan.Harness, Status: "failed", Executable: executable, Activation: freshSessionActivation, Message: applyErr.Error()})
 			failures = append(failures, applyErr)
 			continue
 		}
-		results = append(results, Result{Harness: plan.Harness, Status: "installed_or_updated", Executable: executable, MCPConfigured: true})
+		results = append(results, Result{Harness: plan.Harness, Status: "installed_or_updated", Executable: executable, MCPConfigured: true, FreshSessionRequired: true, Activation: freshSessionActivation, Message: "start a fresh harness session before relying on newly registered MCP tools; CLI fallback remains available"})
 	}
 	return results, errors.Join(failures...)
 }
@@ -260,7 +265,11 @@ func StatusContext(ctx context.Context, options Options) ([]Result, error) {
 				mcpConfigured = mcpErr == nil && mcpConfigurationMatches(mcpOutput, options.RuntimePath)
 			}
 		}
-		results = append(results, Result{Harness: harness, Status: status, Executable: path, MCPConfigured: mcpConfigured, Message: message})
+		freshSessionRequired := status == "installed" || mcpConfigured
+		if freshSessionRequired && message == "" {
+			message = "start a fresh harness session to prove MCP activation; CLI fallback remains available"
+		}
+		results = append(results, Result{Harness: harness, Status: status, Executable: path, MCPConfigured: mcpConfigured, FreshSessionRequired: freshSessionRequired, Activation: freshSessionActivation, Message: message})
 	}
 	return results, nil
 }

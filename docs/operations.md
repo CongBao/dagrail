@@ -79,7 +79,13 @@ dagrail backup restore --root . --file dagrail-backup.json
 The backup is canonical JSON containing exact journal segments plus a content digest.
 Verification checks the digest, hash chain, sequence, and project UUID. Restore accepts
 only an empty journal or an exact prefix of the backup, never overwrites a divergent
-segment, and automatically rebuilds SQLite. Re-running the same restore is idempotent.
+segment, requires the destination data root's local authority claim, and automatically
+rebuilds SQLite. Re-running the same restore is idempotent. An empty data root reached
+only through a copied locator has no claim and cannot revive the backup's writable UUID.
+Claims are bound to the canonical data path, so copying the complete project runtime
+directory to another `DAGRAIL_HOME` also remains read-only. Pre-v0.22 stores use the
+explicit exact-head `recovery adopt-legacy-authority` command documented in the recovery
+runbook; inspection never performs adoption.
 
 Backups may contain operational metadata and external artifact URIs. Treat them as
 sensitive project records even though DAGrail rejects secrets and artifact bodies from
@@ -160,6 +166,9 @@ compatibility, exact-prefix journal restore, reducer replay, disposable projecti
 rebuild, and live/rebuilt logical fingerprints to one head. If only SQLite is damaged,
 `projection rebuild` is sufficient; journal restore is reserved for a verified backup
 whose prefix does not diverge. See `docs/recovery.md` for the bounded runbook.
+If a valid authority must be replaced rather than restored, use the separately
+documented `recovery rotate-authority` flow. It creates a new UUID and fence-only journal
+from an authenticated LKG lineage; it never truncates the current journal.
 
 Verify authority before repair. Projection rebuild never edits journal segments.
 

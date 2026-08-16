@@ -53,7 +53,7 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 
 ## Status
 
-`v0.21.0` is a pre-1.0 release candidate: local-first and single-user, with one native Go
+`v0.22.0` is a pre-1.0 release candidate: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
 stdio MCP. Its operational surface adds explainable dependency blockers, incident
 circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
@@ -114,6 +114,16 @@ Incident transitions and automatic companions are writer-equivalent, and slow pr
 or Effect preparation is reauthorized at the exact persistence boundary. Resource and
 Effect Incidents resolve only with their confirmed observation; imported Effects bind
 the Graph declaration, prepared adapter, closed receipt status, and failure classification.
+
+The v0.22 migration contract adds ordered command bundles, so one immutable external
+record can carry several independently proof-closed writer commands without dropping
+transitions or falsifying source identity. Recovery can also rotate to a fresh Project
+UUID from an authenticated backup prefix while preserving old bytes, appending a
+terminal retirement fence, and recording claim-bound lineage; this is never an in-place
+reset. Every new v0.22 Project also commits its schema-4 establishment fence before
+publishing the otherwise unchanged Project v1alpha1 locator, preventing a v0.21 binary
+from becoming its first writer. Plugin diagnostics now state that a running
+harness must expose the tools itself, start fresh, or use the typed CLI fallback.
 `dagrail contract` now publishes the exact
 Graph schema digest and a closed capability list, including resource capacity and
 request support. This release also fixes path-free installation diagnosis and
@@ -203,6 +213,11 @@ After building the binary, install its shared runtime and selected harness proje
 
 `dagrail plugin install` copies the running binary to a stable per-user location, verifies it from a fresh process, installs the plugin through each selected harness, and registers the MCP server with the absolute runtime path.
 
+After any install or upgrade, start a fresh harness session and verify the six MCP tools
+are callable. Skill visibility alone does not prove that an existing process hot-loaded
+the registration; `dagrail doctor install` exposes this explicitly and the typed CLI
+remains the safe fallback.
+
 ```bash
 dagrail plugin install --harness codex,claude-code,copilot-cli
 dagrail plugin status
@@ -249,12 +264,31 @@ dagrail doctor
 dagrail security audit
 dagrail support preview
 dagrail recovery rehearse
+# one-time, exact-head migration for a pre-v0.22 local store:
+dagrail recovery adopt-legacy-authority --expected-project-id PROJECT_UUID \
+  --expected-current-head empty --reason "upgrade local authority" \
+  --idempotency-key adoption/v021
+# high-risk recovery only; see docs/recovery.md:
+dagrail recovery rotate-authority --backup lkg.json --expected-current-head HEAD \
+  --reason "incident recovery" --idempotency-key rotation/incident
 dagrail qualify release --source .
 dagrail release verify --directory dist
 ```
 
+Legacy adoption retires the old UUID and publishes a fresh replacement identity. It
+never creates a v0.22 claim for the legacy store. The old journal ends with
+`authority.retired`; the replacement journal begins with `authority.established` before
+the locator changes. Pre-v0.22 binaries therefore cannot reduce or mutate either side
+of the cut. Import the Graph and authenticated lifecycle history into the replacement.
+Normal v0.22 initialization uses the same establishment-before-locator order.
+The one-per-user authority anchor uses a fixed OS-account location rather than
+process-selected home/config environment, and fresh retries revalidate and synchronize
+already-visible locator and claim evidence before reporting success.
+
 Create and verify a portable journal backup with `dagrail backup create` and
-`dagrail backup verify`. Restore is exact-prefix-only and rebuilds SQLite automatically.
+`dagrail backup verify`. Restore is exact-prefix-only, requires the destination's local
+writer claim, and rebuilds SQLite automatically; a portable backup cannot recreate the
+same writable UUID in a different data root.
 `recovery rehearse` restores the captured journal into disposable storage, replays the
 reducer, rebuilds SQLite, and compares logical projection fingerprints without mutating
 the live project. See [`docs/recovery.md`](docs/recovery.md) for the incident runbook and

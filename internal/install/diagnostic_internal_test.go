@@ -55,7 +55,7 @@ exit 1
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !report.Healthy || len(report.Harnesses) != 1 || !report.Harnesses[0].MCPConfigured || !report.Harnesses[0].Ready {
+	if !report.Healthy || len(report.Harnesses) != 1 || !report.Harnesses[0].MCPConfigured || !report.Harnesses[0].ConfigurationReady || report.Harnesses[0].Ready || report.Harnesses[0].CurrentProcessVerified {
 		t.Fatalf("doctor did not bind MCP diagnosis to the verified receipt runtime: %+v", report)
 	}
 }

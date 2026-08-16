@@ -23,12 +23,15 @@ import (
 )
 
 type Service struct {
-	Project         project.Project
-	Journal         *journal.Store
-	Projection      *projection.Store
-	Providers       *internalproviders.Registry
-	ProviderRuntime *internalproviders.Runtime
-	Now             func() time.Time
+	Project                       project.Project
+	Journal                       *journal.Store
+	Projection                    *projection.Store
+	Providers                     *internalproviders.Registry
+	ProviderRuntime               *internalproviders.Runtime
+	Now                           func() time.Time
+	ConfirmLocator                func(string) error
+	beforeLegacyAuthoritySnapshot func()
+	recoveryInspection            bool
 }
 
 func Open(root string) (*Service, error) {
@@ -52,7 +55,12 @@ func open(root string, recoveryInspection, settle bool) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	j, err := journal.Open(p.DataDir, p.Config.ProjectID)
+	var j *journal.Store
+	if recoveryInspection {
+		j, err = journal.OpenRecovery(p.DataDir, p.Config.ProjectID)
+	} else {
+		j, err = journal.Open(p.DataDir, p.Config.ProjectID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +114,7 @@ func open(root string, recoveryInspection, settle bool) (*Service, error) {
 			return nil, registerErr
 		}
 	}
-	service := &Service{Project: p, Journal: j, Projection: projectionStore, Providers: registry, ProviderRuntime: internalproviders.NewRuntime(registry), Now: time.Now}
+	service := &Service{Project: p, Journal: j, Projection: projectionStore, Providers: registry, ProviderRuntime: internalproviders.NewRuntime(registry), Now: time.Now, ConfirmLocator: project.SyncProjectLocator, recoveryInspection: recoveryInspection}
 	if recoveryInspection {
 		return service, nil
 	}
@@ -126,10 +134,99 @@ func open(root string, recoveryInspection, settle bool) (*Service, error) {
 }
 
 func Init(root, name string) (*Service, error) {
-	if _, err := project.Init(root, name); err != nil {
+	if _, err := project.InitWithInitializer(root, name, func(prepared project.Project, existing bool) error {
+		store, err := journal.OpenForAuthorityEstablishment(prepared.DataDir, prepared.Config.ProjectID)
+		if err != nil {
+			return err
+		}
+		segments, err := store.ReadAll()
+		if err != nil {
+			return err
+		}
+		if len(segments) != 0 {
+			return validateCurrentAuthority(prepared, segments)
+		}
+		if existing {
+			return fmt.Errorf("existing claimed authority is missing its schema-4 establishment fence")
+		}
+		establishedAt := time.Now().UTC()
+		provenance, err := authorityDigest("dagrail-initial-authority-v1\x00", prepared.Config)
+		if err != nil {
+			return err
+		}
+		establishment := authorityEstablishment{APIVersion: "dagrail.io/authority-establishment/v1alpha1", Kind: "AuthorityEstablishment", ProjectID: prepared.Config.ProjectID, Operation: "initialization", EstablishedAt: establishedAt.Format(time.RFC3339Nano), ProvenanceDigest: provenance}
+		raw, err := json.Marshal(establishment)
+		if err != nil {
+			return err
+		}
+		raw, err = jcs.Transform(raw)
+		if err != nil {
+			return err
+		}
+		_, err = store.EstablishAuthority(raw, establishedAt)
+		return err
+	}); err != nil {
 		return nil, err
 	}
 	return Open(root)
+}
+
+func validateCurrentAuthority(authority project.Project, segments []journal.Segment) error {
+	projectID := authority.Config.ProjectID
+	if len(segments) == 0 {
+		return fmt.Errorf("existing project initialization fence is missing")
+	}
+	segment := segments[0]
+	if segment.SchemaVersion != journal.AuthorityFenceSchemaVersion || segment.Sequence != 1 || segment.PreviousHash != "" || segment.Command.Kind != "authority.establish" || len(segment.Events) != 1 || segment.Events[0].Type != "authority.established" {
+		return fmt.Errorf("existing project initialization fence is invalid")
+	}
+	var establishment authorityEstablishment
+	if err := decodeStrictAuthorityJSON(segment.Events[0].Payload, &establishment); err != nil || validateAuthorityEstablishment(establishment, projectID) != nil || establishment.EstablishedAt != segment.CommittedAt {
+		return fmt.Errorf("existing project initialization fence is not bound to this authority")
+	}
+	var expectedProvenance string
+	var provenanceErr error
+	switch establishment.Operation {
+	case "initialization":
+		expectedProvenance, provenanceErr = authorityDigest("dagrail-initial-authority-v1\x00", authority.Config)
+	case "rotation", "legacy-adoption":
+		lineage, lineageErr := project.ReadAuthorityLineage(authority.DataDir)
+		if lineageErr != nil || lineage.Operation != establishment.Operation || lineage.PreviousProjectID != establishment.PreviousProjectID {
+			return fmt.Errorf("replacement authority establishment is not claim-bound to its lineage")
+		}
+		retirement := authorityRetirement{
+			PreviousProjectID: lineage.PreviousProjectID, PreviousHead: lineage.PreviousHead,
+			RecoveryHead: lineage.RecoveryHead, RecoveryBackupDigest: lineage.RecoveryBackupDigest,
+			ReplacementProjectID: projectID, RotatedAt: lineage.RotatedAt,
+			Reason: lineage.Reason, IdempotencyKey: lineage.IdempotencyKey,
+		}
+		if establishment.Operation == "rotation" {
+			retirement.APIVersion, retirement.Kind = authorityRetirementAPIVersion, rotationRetirementKind
+		} else {
+			retirement.APIVersion, retirement.Kind = AuthorityAdoptionAPIVersion, legacyRetirementKind
+		}
+		raw, marshalErr := json.Marshal(retirement)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		raw, marshalErr = jcs.Transform(raw)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		sum := sha256.Sum256(raw)
+		expectedProvenance = "sha256:" + hex.EncodeToString(sum[:])
+	}
+	if provenanceErr != nil || establishment.ProvenanceDigest != expectedProvenance {
+		return fmt.Errorf("existing project initialization provenance is not bound to this authority")
+	}
+	state, err := reduceSegments(projectID, segments)
+	if err != nil {
+		return err
+	}
+	if state.HeadSequence != segments[len(segments)-1].Sequence {
+		return fmt.Errorf("existing project initialization has unexpected runtime state")
+	}
+	return nil
 }
 
 func (s *Service) ImportGraph(path, idempotencyKey, actorRole string) (domain.CommandResult, error) {
@@ -241,6 +338,11 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 	if err != nil {
 		return domain.State{}, nil, err
 	}
+	if !s.recoveryInspection {
+		if err := validateCurrentAuthority(s.Project, segments); err != nil {
+			return domain.State{}, nil, err
+		}
+	}
 	state, err := reduceSegments(s.Project.Config.ProjectID, segments)
 	if err != nil {
 		return domain.State{}, nil, err
@@ -253,13 +355,49 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 // candidate segment has reduced successfully through this function.
 func reduceSegments(projectID string, segments []journal.Segment) (domain.State, error) {
 	state := domain.NewState(projectID)
+	retired := false
+	established := false
 	for _, segment := range segments {
+		if retired {
+			return domain.State{}, fmt.Errorf("journal contains a command after authority retirement at sequence %d", segment.Sequence)
+		}
 		for _, storedEvent := range segment.Events {
 			event, err := journal.UpcastEvent(segment.SchemaVersion, storedEvent)
 			if err != nil {
 				return domain.State{}, fmt.Errorf("upcast journal event at sequence %d: %w", segment.Sequence, err)
 			}
 			switch event.Type {
+			case "authority.established":
+				if established || segment.Sequence != 1 || segment.PreviousHash != "" || len(segment.Events) != 1 || segment.Command.Kind != "authority.establish" || segment.Command.ActorRole != "dagrail.recovery" || segment.Command.ObjectRef != "project:"+projectID {
+					return domain.State{}, fmt.Errorf("authority establishment is not a closed bootstrap command at sequence %d", segment.Sequence)
+				}
+				var establishment authorityEstablishment
+				if err := decodeStrictAuthorityJSON(event.Payload, &establishment); err != nil || validateAuthorityEstablishment(establishment, projectID) != nil || establishment.EstablishedAt != segment.CommittedAt {
+					return domain.State{}, fmt.Errorf("authority establishment event is invalid at sequence %d", segment.Sequence)
+				}
+				sum := sha256.Sum256(event.Payload)
+				hexDigest := hex.EncodeToString(sum[:])
+				if segment.Command.ID != "authority-establish-"+hex.EncodeToString(sum[:16]) || segment.Command.IdempotencyKey != "authority-establish/"+hexDigest || segment.Command.RequestDigest != "sha256:"+hexDigest {
+					return domain.State{}, fmt.Errorf("authority establishment command binding is invalid at sequence %d", segment.Sequence)
+				}
+				established = true
+			case "authority.retired":
+				if len(segment.Events) != 1 || segment.Command.Kind != "authority.retire" || segment.Command.ActorRole != "dagrail.recovery" || segment.Command.ObjectRef != "project:"+projectID {
+					return domain.State{}, fmt.Errorf("authority retirement fence is not a closed command at sequence %d", segment.Sequence)
+				}
+				var retirement authorityRetirement
+				if err := decodeStrictAuthorityJSON(event.Payload, &retirement); err != nil {
+					return domain.State{}, fmt.Errorf("authority retirement event is invalid at sequence %d: %w", segment.Sequence, err)
+				}
+				if err := validateAnyRetirement(retirement); err != nil || retirement.PreviousProjectID != projectID || retirement.PreviousHead != segment.PreviousHash || retirement.RotatedAt != segment.CommittedAt {
+					return domain.State{}, fmt.Errorf("authority retirement event is invalid at sequence %d", segment.Sequence)
+				}
+				sum := sha256.Sum256(event.Payload)
+				hexDigest := hex.EncodeToString(sum[:])
+				if segment.Command.ID != "authority-retire-"+hex.EncodeToString(sum[:16]) || segment.Command.IdempotencyKey != "authority-retire/"+hexDigest || segment.Command.RequestDigest != "sha256:"+hexDigest {
+					return domain.State{}, fmt.Errorf("authority retirement command binding is invalid at sequence %d", segment.Sequence)
+				}
+				retired = true
 			case "lifecycle.history-imported":
 				var receipt domain.LifecycleMigrationReceipt
 				if err := json.Unmarshal(event.Payload, &receipt); err != nil {
