@@ -38,6 +38,7 @@ func TestHistoricalBinaryCompatibilityWindow(t *testing.T) {
 	buildRoot := t.TempDir()
 	t.Setenv("DAGRAIL_TEST_AUTHORITY_HOME", filepath.Join(buildRoot, "authority"))
 	binaries := make([]historicalBinary, 0, len(window.Entries)+1)
+	binaryByVersion := map[string]historicalBinary{}
 	sources := map[string]string{}
 	for _, entry := range window.Entries {
 		source := filepath.Join(buildRoot, "source-"+entry.Version)
@@ -46,7 +47,9 @@ func TestHistoricalBinaryCompatibilityWindow(t *testing.T) {
 		binary := filepath.Join(buildRoot, "dagrail-"+entry.Version)
 		buildDAGrail(t, source, binary)
 		assertBinaryVersion(t, binary, entry.Version)
-		binaries = append(binaries, historicalBinary{version: entry.Version, path: binary})
+		built := historicalBinary{version: entry.Version, path: binary}
+		binaries = append(binaries, built)
+		binaryByVersion[entry.Version] = built
 	}
 	currentBinary := filepath.Join(buildRoot, "dagrail-"+version.Version)
 	buildDAGrail(t, repository, currentBinary)
@@ -87,9 +90,10 @@ func TestHistoricalBinaryCompatibilityWindow(t *testing.T) {
 	runHistorical(t, binaries[0].path, dataRoot, "init", "--root", projectRoot, "--name", "beta-window")
 	runHistorical(t, binaries[0].path, dataRoot, "graph", "import", "--root", projectRoot, "--file", graphPath, "--idempotency-key", "beta-window-import")
 	var legacyVerifyOutput string
-	for _, binary := range binaries[:len(binaries)-1] {
+	for _, binary := range binaries[:len(binaries)-2] {
 		legacyVerifyOutput = runHistorical(t, binary.path, dataRoot, "journal", "verify", "--root", projectRoot)
 	}
+	runHistoricalFailure(t, binaryByVersion["0.22.0"].path, dataRoot, "journal", "verify", "--root", projectRoot)
 	runHistoricalFailure(t, currentBinary, dataRoot, "journal", "verify", "--root", projectRoot)
 	legacyLocator, err := os.ReadFile(filepath.Join(projectRoot, ".dagrail", "project.yaml"))
 	if err != nil {
@@ -114,7 +118,7 @@ func TestHistoricalBinaryCompatibilityWindow(t *testing.T) {
 	// Authority migration keeps the Project v1alpha1 locator parseable while
 	// schema-4 fences deliberately stop the immediately previous runtime from
 	// reading or writing either retired or replacement authority.
-	previousBinary := binaries[len(binaries)-2]
+	previousBinary := binaryByVersion["0.21.0"]
 	if previousBinary.version != "0.21.0" {
 		t.Fatalf("authority rollback fixture expected v0.21.0, got %s", previousBinary.version)
 	}
@@ -196,6 +200,62 @@ func TestHistoricalBinaryCompatibilityWindow(t *testing.T) {
 	runHistorical(t, currentBinary, rotationData, "recovery", "rotate-authority", "--root", rotationRoot, "--backup", replacementBackupPath, "--expected-current-head", replacementBackup.Report.HeadHash, "--reason", "historical rollback proof", "--idempotency-key", "rotate/historical")
 	runHistoricalFailure(t, previousBinary.path, rotationData, "journal", "verify", "--root", rotationRoot)
 	runHistorical(t, currentBinary, rotationData, "journal", "verify", "--root", rotationRoot)
+
+	t.Run("v0.22-established-replacement-relocates", func(t *testing.T) {
+		v022 := binaryByVersion["0.22.0"]
+		sourceRoot := filepath.Join(t.TempDir(), "source-project")
+		targetRoot := filepath.Join(t.TempDir(), "target-project")
+		sourceData := filepath.Join(t.TempDir(), "source-data")
+		destinationData := filepath.Join(t.TempDir(), "destination-data")
+		graphPath := filepath.Join(t.TempDir(), "relocation-graph.json")
+		if err := os.WriteFile(graphPath, []byte(rotationDefinition), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		runHistorical(t, previousBinary.path, sourceData, "init", "--root", sourceRoot, "--name", "historical-relocation")
+		runHistorical(t, previousBinary.path, sourceData, "graph", "import", "--root", sourceRoot, "--file", graphPath, "--idempotency-key", "relocation/legacy-graph")
+		legacyLocator, err := os.ReadFile(filepath.Join(sourceRoot, ".dagrail", "project.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var legacyProject struct {
+			ProjectID string `yaml:"projectId"`
+		}
+		if err := yaml.Unmarshal(legacyLocator, &legacyProject); err != nil || legacyProject.ProjectID == "" {
+			t.Fatalf("decode relocation legacy locator: %v", err)
+		}
+		var legacyVerification struct {
+			HeadHash string `json:"headHash"`
+		}
+		legacyOutput := runHistorical(t, previousBinary.path, sourceData, "journal", "verify", "--root", sourceRoot)
+		if err := json.Unmarshal([]byte(legacyOutput), &legacyVerification); err != nil || legacyVerification.HeadHash == "" {
+			t.Fatalf("decode relocation legacy verification: %v %s", err, legacyOutput)
+		}
+		runHistorical(t, v022.path, sourceData, "recovery", "adopt-legacy-authority", "--root", sourceRoot, "--expected-project-id", legacyProject.ProjectID, "--expected-current-head", legacyVerification.HeadHash, "--reason", "establish released v0.22 replacement", "--idempotency-key", "relocation/adopt-v022")
+		runHistorical(t, v022.path, sourceData, "graph", "import", "--root", sourceRoot, "--file", graphPath, "--idempotency-key", "relocation/replacement-graph")
+		backupPath := filepath.Join(t.TempDir(), "replacement-backup.json")
+		backupOutput := runHistorical(t, v022.path, sourceData, "backup", "create", "--root", sourceRoot, "--output", backupPath)
+		var backup struct {
+			Report struct {
+				HeadHash string `json:"headHash"`
+			} `json:"report"`
+		}
+		if err := json.Unmarshal([]byte(backupOutput), &backup); err != nil || backup.Report.HeadHash == "" {
+			t.Fatalf("decode released replacement backup: %v %s", err, backupOutput)
+		}
+		if err := os.MkdirAll(filepath.Join(targetRoot, ".dagrail"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(targetRoot, ".dagrail", "project.yaml"), legacyLocator, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		args := []string{"recovery", "relocate-authority", "--root", targetRoot, "--backup", backupPath, "--expected-project-id", legacyProject.ProjectID, "--expected-current-head", backup.Report.HeadHash, "--reason", "relocate released replacement", "--idempotency-key", "relocation/from-v022"}
+		firstReceipt := runHistorical(t, currentBinary, destinationData, args...)
+		runHistoricalFailure(t, v022.path, sourceData, "role", "bind", "--root", sourceRoot, "--role", "worker", "--harness", "codex", "--session", "stale-v022", "--idempotency-key", "relocation/stale-v022")
+		runHistorical(t, currentBinary, destinationData, "graph", "import", "--root", targetRoot, "--file", graphPath, "--idempotency-key", "relocation/target-graph")
+		if retried := runHistorical(t, currentBinary, destinationData, args...); retried != firstReceipt {
+			t.Fatalf("exact relocation retry changed released receipt: first=%s retry=%s", firstReceipt, retried)
+		}
+	})
 
 	emptyLegacyRoot := filepath.Join(t.TempDir(), "empty-v021")
 	emptyLegacyData := filepath.Join(t.TempDir(), "empty-v021-data")

@@ -38,7 +38,7 @@ proved by the portable binary.
 
 ## Entry points and abuse cases
 
-- Graph, GraphPatch, project locator, lifecycle migration, authority establishment/retirement/rotation,
+- Graph, GraphPatch, project locator, lifecycle migration, authority establishment/retirement/rotation/relocation,
   backup, journal segment, signature envelope,
   install receipt, observation locator, hook input, MCP message, MCP tool input,
   provider input/output, Explorer query, and API response are bounded before durable
@@ -95,6 +95,11 @@ proved by the portable binary.
   the fresh UUID receives a schema-4 establishment fence before locator publication.
   A copied v0.22 locator, deleted claim, second legacy copy, or already-admitted v0.21
   writer therefore fails closed without making the old identity writable.
+- Relocation accepts only an already-claimed source found through that same fixed
+  per-user anchor, requires its lineage to descend from the target locator identity,
+  and binds the canonical target and destination-runtime roots into the retirement and
+  deterministic new UUID.
+  It cannot rebind/revive the source UUID or use an unrelated replacement as authority.
 - Release qualification accepts only fixed, bounded, regular source files under the
   selected root, verifies workflow action commit pins, emits no paths, and keeps
   structural automation declarations separate from external adoption evidence.

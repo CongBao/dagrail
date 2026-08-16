@@ -67,6 +67,7 @@ type Report struct {
 	Recovery                   DocumentedSurface        `json:"recovery"`
 	AuthorityAdoption          DocumentedSurface        `json:"authorityAdoption"`
 	AuthorityRotation          DocumentedSurface        `json:"authorityRotation"`
+	AuthorityRelocation        DocumentedSurface        `json:"authorityRelocation"`
 	ReleaseQualification       DocumentedSurface        `json:"releaseQualification"`
 	ReleaseManifest            DocumentedSurface        `json:"releaseManifest"`
 	ReleaseVerification        DocumentedSurface        `json:"releaseVerification"`
@@ -124,13 +125,13 @@ func Current() Report {
 			APIVersion:   compatibility.APIVersion,
 			Stability:    "closed-beta-window",
 			SchemaPath:   "schemas/historical-binary-matrix-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:cfd486451a7f94e2dfddda078aafb24d502b20975763ce3733425db04b1614d2",
+			SchemaSHA256: "sha256:c82047b787262c82170a3e3578228b0fd81ca45a04a3b456a608ae3a2f7dfccd",
 		},
 		Readiness: DocumentedSurface{
 			APIVersion:   "dagrail.io/readiness-decision/v1alpha1",
 			Stability:    "additive-structural-decision",
 			SchemaPath:   "schemas/readiness-decision-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:cc3fa5dd656101d80bab33bdb2a288846e5aa9daec6b7577cca707577730e637",
+			SchemaSHA256: "sha256:4a6eb6f3a07f3db7e0b52325c40a6dc44ae1971d59dffb6aa6390acf1e6c9be4",
 		},
 		UI: DocumentedSurface{
 			APIVersion:   "dagrail.io/ui/v1beta1",
@@ -179,6 +180,12 @@ func Current() Report {
 			Stability:    "alpha-non-destructive-recovery",
 			SchemaPath:   "schemas/authority-rotation-v1alpha1.schema.json",
 			SchemaSHA256: "sha256:a8785ac0e39ccbf99cf4eec8921f122fda7e9839312a4783b563676f2dfbe41f",
+		},
+		AuthorityRelocation: DocumentedSurface{
+			APIVersion:   service.AuthorityRelocationAPIVersion,
+			Stability:    "alpha-path-bound-recovery",
+			SchemaPath:   "schemas/authority-relocation-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:1f3b05a67b3b71c5c042a7e8f35e77e44befb5b542bc66505bb94fc58dedb969",
 		},
 		ReleaseQualification: DocumentedSurface{
 			APIVersion:   "dagrail.io/release-qualification/v1alpha1",

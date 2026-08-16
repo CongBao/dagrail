@@ -19,7 +19,7 @@ validity, published schema digests, plugin metadata versions, the linked closed 
 CI/release gate declarations, and commit-pinned workflow actions. `--project PATH` adds
 inspection-only security and recovery evidence from a real DAGrail project.
 
-The tag workflow also rebuilds the pinned v0.10–v0.21 beta binaries and the tag
+The tag workflow also rebuilds the pinned v0.10–v0.22 beta binaries and the tag
 candidate. Publication depends on adjacent runtime upgrade/rollback/re-forward tests
 and candidate recovery of a v0.10-created journal. `dagrail readiness --source .` must
 still report `ready_for_external_validation`; it is not accepted as production adoption

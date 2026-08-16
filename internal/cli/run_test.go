@@ -123,6 +123,124 @@ func TestRecoveryRotateAuthorityCLIUsesAuthenticatedPrefix(t *testing.T) {
 	}
 }
 
+func TestRecoveryRelocateAuthorityRehomesEstablishedReplacement(t *testing.T) {
+	rootA := t.TempDir()
+	targetRoot := t.TempDir()
+	homeA := filepath.Join(t.TempDir(), "runtime-a")
+	homeB := filepath.Join(t.TempDir(), "runtime-b")
+	t.Setenv("DAGRAIL_HOME", homeA)
+	run := func(args ...string) (string, error) {
+		var stdout, stderr bytes.Buffer
+		err := cli.Run(args, strings.NewReader(""), &stdout, &stderr)
+		return stdout.String(), err
+	}
+	if _, err := run("init", "--root", rootA, "--name", "relocation-cli"); err != nil {
+		t.Fatal(err)
+	}
+	graphPath := filepath.Join(rootA, "graph.json")
+	if err := os.WriteFile(graphPath, []byte(`{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"relocation-cli"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"work","kind":"task","role":"worker","title":"work","outcomes":[{"id":"complete","class":"success"}]}],"edges":[]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("graph", "import", "--root", rootA, "--file", graphPath, "--idempotency-key", "graph"); err != nil {
+		t.Fatal(err)
+	}
+	legacyService, err := service.OpenForRecovery(rootA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyProjectID := legacyService.Project.Config.ProjectID
+	legacyHead := rewriteCurrentFixtureAsLegacyAuthority(t, legacyService)
+	if err := os.MkdirAll(filepath.Join(targetRoot, ".dagrail"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	locator, err := os.ReadFile(filepath.Join(rootA, ".dagrail", "project.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(targetRoot, ".dagrail", "project.yaml"), locator, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adoptedRaw, err := run("recovery", "adopt-legacy-authority", "--root", rootA, "--expected-project-id", legacyProjectID, "--expected-current-head", legacyHead, "--reason", "establish in temporary runtime", "--idempotency-key", "adopt/temporary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var adopted service.AuthorityAdoptionReceipt
+	if err := json.Unmarshal([]byte(adoptedRaw), &adopted); err != nil {
+		t.Fatal(err)
+	}
+	backupPath := filepath.Join(rootA, "replacement-backup.json")
+	if _, err := run("backup", "create", "--root", rootA, "--output", backupPath); err != nil {
+		t.Fatal(err)
+	}
+	source, err := service.OpenForRecovery(rootA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceState, err := source.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sourceState.ProjectID != adopted.ReplacementProjectID || sourceState.HeadHash == "" {
+		t.Fatalf("unexpected established source authority: %+v", sourceState)
+	}
+	unrelatedRoot := t.TempDir()
+	if _, err := run("init", "--root", unrelatedRoot, "--name", "unrelated-relocation-target"); err != nil {
+		t.Fatal(err)
+	}
+	unrelated, err := service.OpenForRecovery(unrelatedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Setenv("DAGRAIL_HOME", homeB); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("recovery", "relocate-authority", "--root", unrelatedRoot, "--backup", backupPath, "--expected-project-id", unrelated.Project.Config.ProjectID, "--expected-current-head", sourceState.HeadHash, "--reason", "must not cross authority lineage", "--idempotency-key", "relocate/unrelated"); err == nil || !strings.Contains(err.Error(), "not descended") {
+		t.Fatalf("unrelated locator accepted relocation source: source=%s adopted=%s unrelated=%s err=%v", sourceState.ProjectID, adopted.ReplacementProjectID, unrelated.Project.Config.ProjectID, err)
+	}
+	if _, retired, err := source.Journal.AuthorityRetirement(); err != nil || retired {
+		t.Fatalf("rejected relocation changed source retirement: retired=%t err=%v", retired, err)
+	}
+	relocatedRaw, err := run("recovery", "relocate-authority", "--root", targetRoot, "--backup", backupPath, "--expected-project-id", legacyProjectID, "--expected-current-head", sourceState.HeadHash, "--reason", "move established authority to durable runtime", "--idempotency-key", "relocate/durable")
+	if err != nil {
+		t.Fatalf("public relocation failed: %v", err)
+	}
+	var relocated service.AuthorityRelocationReceipt
+	if err := json.Unmarshal([]byte(relocatedRaw), &relocated); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.VerifyAuthorityRelocationReceipt(relocated); err != nil {
+		t.Fatal(err)
+	}
+	if relocated.SourceProjectID != adopted.ReplacementProjectID || relocated.PreviousLocatorProjectID != legacyProjectID || relocated.ReplacementProjectID == relocated.SourceProjectID {
+		t.Fatalf("unexpected relocation receipt: %+v", relocated)
+	}
+	relocatedService, err := service.Open(targetRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relocatedService.Project.Config.ProjectID != relocated.ReplacementProjectID || !strings.HasPrefix(relocatedService.Project.DataDir, homeB+string(filepath.Separator)) {
+		t.Fatalf("replacement did not move to selected runtime: %+v", relocatedService.Project)
+	}
+	retriedRaw, err := run("recovery", "relocate-authority", "--root", targetRoot, "--backup", backupPath, "--expected-project-id", legacyProjectID, "--expected-current-head", sourceState.HeadHash, "--reason", "move established authority to durable runtime", "--idempotency-key", "relocate/durable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retried service.AuthorityRelocationReceipt
+	if err := json.Unmarshal([]byte(retriedRaw), &retried); err != nil || retried.ReceiptDigest != relocated.ReceiptDigest {
+		t.Fatalf("exact relocation retry changed receipt: %+v %v", retried, err)
+	}
+	if err := os.Setenv("DAGRAIL_HOME", homeA); err != nil {
+		t.Fatal(err)
+	}
+	retiredSource, err := service.Open(rootA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := retiredSource.ImportGraph(graphPath, "relocate/must-not-write", "governor"); err == nil || !strings.Contains(err.Error(), "retired") {
+		t.Fatalf("source authority accepted a write after relocation: %v", err)
+	}
+}
+
 func TestUserCanInitializeImportGraphAndReadFrontier(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".test-data"))

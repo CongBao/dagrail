@@ -189,21 +189,24 @@ func validateCurrentAuthority(authority project.Project, segments []journal.Segm
 	switch establishment.Operation {
 	case "initialization":
 		expectedProvenance, provenanceErr = authorityDigest("dagrail-initial-authority-v1\x00", authority.Config)
-	case "rotation", "legacy-adoption":
+	case "rotation", "legacy-adoption", "relocation":
 		lineage, lineageErr := project.ReadAuthorityLineage(authority.DataDir)
 		if lineageErr != nil || lineage.Operation != establishment.Operation || lineage.PreviousProjectID != establishment.PreviousProjectID {
 			return fmt.Errorf("replacement authority establishment is not claim-bound to its lineage")
 		}
 		retirement := authorityRetirement{
 			PreviousProjectID: lineage.PreviousProjectID, PreviousHead: lineage.PreviousHead,
+			PreviousLocatorID: lineage.PreviousLocatorID, TargetRootDigest: lineage.TargetRootDigest, DestinationRootDigest: lineage.DestinationRootDigest,
 			RecoveryHead: lineage.RecoveryHead, RecoveryBackupDigest: lineage.RecoveryBackupDigest,
 			ReplacementProjectID: projectID, RotatedAt: lineage.RotatedAt,
 			Reason: lineage.Reason, IdempotencyKey: lineage.IdempotencyKey,
 		}
 		if establishment.Operation == "rotation" {
 			retirement.APIVersion, retirement.Kind = authorityRetirementAPIVersion, rotationRetirementKind
-		} else {
+		} else if establishment.Operation == "legacy-adoption" {
 			retirement.APIVersion, retirement.Kind = AuthorityAdoptionAPIVersion, legacyRetirementKind
+		} else {
+			retirement.APIVersion, retirement.Kind = AuthorityRelocationAPIVersion, relocationRetirementKind
 		}
 		raw, marshalErr := json.Marshal(retirement)
 		if marshalErr != nil {

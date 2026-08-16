@@ -41,3 +41,11 @@ system ancestors. Same-intent legacy adoption validates
 an already committed retirement from the fence's own authenticated backup digest, so a
 concurrent loser cannot manufacture a changed intent by snapshotting after the winner's
 commit.
+
+An already-established replacement can itself be retired and reattached through the
+explicit relocation continuation. The source is discovered from its fixed per-user
+anchor and must have claim-bound lineage to the target locator's ancestor. Relocation
+binds the canonical target and destination-runtime roots into both retirement provenance
+and the deterministic new UUID, establishes a fence-only authority in the selected runtime, and only then
+publishes the target locator. It never changes the old anchor or revives a retired UUID;
+graph and lifecycle state remain an explicit subsequent authenticated bootstrap.

@@ -55,14 +55,57 @@ type authorityClaim struct {
 // It lives beside runtime state rather than in Project v1alpha1, so v0.21 can
 // still open the repository locator during rollback.
 type AuthorityLineage struct {
-	Operation            string `json:"operation"`
-	PreviousProjectID    string `json:"previousProjectId"`
-	PreviousHead         string `json:"previousHead"`
-	RecoveryHead         string `json:"recoveryHead"`
-	RecoveryBackupDigest string `json:"recoveryBackupDigest"`
-	RotatedAt            string `json:"rotatedAt"`
-	Reason               string `json:"reason"`
-	IdempotencyKey       string `json:"idempotencyKey"`
+	Operation             string `json:"operation"`
+	PreviousProjectID     string `json:"previousProjectId"`
+	PreviousLocatorID     string `json:"previousLocatorProjectId,omitempty"`
+	TargetRootDigest      string `json:"targetRootDigest,omitempty"`
+	DestinationRootDigest string `json:"destinationRuntimeDigest,omitempty"`
+	PreviousHead          string `json:"previousHead"`
+	RecoveryHead          string `json:"recoveryHead"`
+	RecoveryBackupDigest  string `json:"recoveryBackupDigest"`
+	RotatedAt             string `json:"rotatedAt"`
+	Reason                string `json:"reason"`
+	IdempotencyKey        string `json:"idempotencyKey"`
+}
+
+// ResolveClaimedAuthority returns the canonical runtime directory authenticated by
+// the fixed per-user anchor for projectID. Recovery relocation uses this path instead
+// of resolving the source through the destination repository locator or DAGRAIL_HOME.
+func ResolveClaimedAuthority(projectID string) (string, error) {
+	parsed, err := uuid.Parse(projectID)
+	if err != nil || parsed.String() != projectID {
+		return "", fmt.Errorf("authority Project UUID is invalid")
+	}
+	path, err := authorityAnchorPath(projectID)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() <= 0 || info.Size() > 16*1024 {
+		return "", fmt.Errorf("per-user authority anchor is missing or invalid")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var anchor authorityAnchor
+	if err := decoder.Decode(&anchor); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return "", fmt.Errorf("per-user authority anchor is malformed")
+	}
+	if anchor.APIVersion != "dagrail.io/authority-anchor/v1alpha1" || anchor.Kind != "AuthorityAnchor" || anchor.ProjectID != projectID || (anchor.Origin != "initialized" && anchor.Origin != "rotated") {
+		return "", fmt.Errorf("per-user authority anchor does not identify a claimed authority")
+	}
+	canonical, canonicalErr := canonicalDataDir(anchor.DataDir)
+	dataDirHash, hashErr := authorityDataDirHash(anchor.DataDir)
+	if canonicalErr != nil || hashErr != nil || canonical != anchor.DataDir || dataDirHash != anchor.DataDirHash {
+		return "", fmt.Errorf("per-user authority anchor is bound to unavailable or changed runtime state")
+	}
+	if err := ValidateAuthorityClaim(anchor.DataDir, projectID); err != nil {
+		return "", err
+	}
+	return anchor.DataDir, nil
 }
 
 type Config struct {
@@ -811,6 +854,11 @@ func validateAuthorityLineage(lineage AuthorityLineage, projectID string) error 
 	case "legacy-adoption":
 		if !validJournalHead(lineage.PreviousHead) || lineage.RecoveryHead != lineage.PreviousHead {
 			return fmt.Errorf("replacement legacy-adoption lineage is invalid")
+		}
+	case "relocation":
+		locator, locatorErr := uuid.Parse(lineage.PreviousLocatorID)
+		if !validJournalHead(lineage.PreviousHead) || lineage.PreviousHead == "" || !validJournalHead(lineage.RecoveryHead) || lineage.RecoveryHead == "" || locatorErr != nil || locator.String() != lineage.PreviousLocatorID || lineage.PreviousLocatorID == projectID || !validAuthorityProvenanceDigest(lineage.TargetRootDigest) || !validAuthorityProvenanceDigest(lineage.DestinationRootDigest) {
+			return fmt.Errorf("replacement authority relocation lineage is invalid")
 		}
 	default:
 		return fmt.Errorf("replacement authority lineage operation is invalid")

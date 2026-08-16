@@ -407,7 +407,7 @@ func (s *Store) EstablishAuthority(establishment []byte, now time.Time) (Segment
 			return err
 		}
 		if len(segments) != 0 {
-			if len(segments) == 1 && segments[0].SchemaVersion == AuthorityFenceSchemaVersion && len(segments[0].Events) == 1 && segments[0].Events[0].Type == "authority.established" && bytes.Equal(segments[0].Events[0].Payload, establishment) {
+			if segments[0].SchemaVersion == AuthorityFenceSchemaVersion && len(segments[0].Events) == 1 && segments[0].Events[0].Type == "authority.established" && bytes.Equal(segments[0].Events[0].Payload, establishment) {
 				result = segments[0]
 				return syncDirectory(s.dir)
 			}
@@ -698,7 +698,7 @@ func validateEstablishedAuthorityPrefix(projectID string, segments []Segment) er
 		if establishment.PreviousProjectID != "" {
 			return fmt.Errorf("initial authority establishment has a predecessor")
 		}
-	case "rotation", "legacy-adoption":
+	case "rotation", "legacy-adoption", "relocation":
 		if establishment.PreviousProjectID == "" || establishment.PreviousProjectID == projectID {
 			return fmt.Errorf("replacement authority establishment predecessor is invalid")
 		}

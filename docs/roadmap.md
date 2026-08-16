@@ -179,3 +179,12 @@ vocabulary, repository paths, and cutover policy are not shipped as DAGrail cont
 - extend the exact historical-binary window through v0.21;
 - fence every new v0.22 authority before locator publication and rotate legacy adoption
   to a fresh Project UUID rather than promoting the historical identity.
+
+## v0.22.1 — Established-authority relocation
+
+- provide one public, crash-resumable continuation when a fresh replacement authority
+  was durably established before the intended repository locator/runtime was selected;
+- bind source anchor/lineage, exact head/backup, target root, destination runtime, and
+  deterministic fresh UUID without reviving or copying an existing authority;
+- keep relocation fence-only so Graph/history bootstrap and cutover parity remain
+  explicit later steps.

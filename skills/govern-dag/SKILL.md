@@ -48,5 +48,15 @@ the CLI only for a pristine graph-only project, require a separately trusted sou
 authority digest, and validate the complete mapped source prefix before one atomic
 import. Keep source-specific conversion code and vocabulary outside DAGrail.
 
+Authority adoption, rotation, and relocation are operator recovery transactions, not
+orchestrator actions. Freeze lifecycle writes and require an approved exact source head,
+backup, locator identity, reason, and idempotency key. Allocate a new key only for the
+first call of a genuinely new intent; after a crash, timeout, or unknown result, reuse
+the original key and every bound field exactly. If a replacement authority
+was already established under the wrong local runtime, use only the documented
+`recovery relocate-authority` continuation; never repeat adoption or edit/copy anchors,
+claims, journals, locators, or SQLite to simulate reattachment. After relocation, keep
+cutover false until Graph/history bootstrap and parity checks pass.
+
 Never edit the journal, SQLite, action secret, or generated projections. Hooks may add
 bounded guidance but cannot assign, accept, merge, complete, or infer a lifecycle result.

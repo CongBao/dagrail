@@ -1125,7 +1125,7 @@ func runSupport(args []string, stdout, stderr io.Writer) error {
 
 func runRecovery(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: dagrail recovery <rehearse|rotate-authority|adopt-legacy-authority>")
+		return fmt.Errorf("usage: dagrail recovery <rehearse|rotate-authority|adopt-legacy-authority|relocate-authority>")
 	}
 	flags := flag.NewFlagSet("recovery "+args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -1133,13 +1133,31 @@ func runRecovery(args []string, stdout, stderr io.Writer) error {
 	backupPath := flags.String("backup", "", "authenticated recovery backup")
 	expectedHead := flags.String("expected-current-head", "", "exact current journal head")
 	reason := flags.String("reason", "", "bounded authority replacement reason")
-	idempotencyKey := flags.String("idempotency-key", "", "stable authority rotation key")
-	expectedProjectID := flags.String("expected-project-id", "", "exact Project UUID for explicit legacy adoption")
+	idempotencyKey := flags.String("idempotency-key", "", "stable authority recovery key")
+	expectedProjectID := flags.String("expected-project-id", "", "exact legacy or target-locator Project UUID")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected recovery arguments")
+	}
+	if args[0] == "relocate-authority" {
+		if *backupPath == "" || *expectedProjectID == "" || *expectedHead == "" || *reason == "" || *idempotencyKey == "" {
+			return fmt.Errorf("--backup, --expected-project-id, --expected-current-head, --reason, and --idempotency-key are required")
+		}
+		info, err := os.Lstat(*backupPath)
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > 256*1024*1024 {
+			return fmt.Errorf("recovery backup must be a regular non-symlink file no larger than 256 MiB")
+		}
+		data, err := os.ReadFile(*backupPath)
+		if err != nil {
+			return err
+		}
+		receipt, err := service.RelocateAuthority(*root, data, *expectedProjectID, *expectedHead, *reason, *idempotencyKey)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, receipt)
 	}
 	s, err := service.OpenForRecovery(*root)
 	if err != nil {

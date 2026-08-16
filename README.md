@@ -53,7 +53,7 @@ and whether an ambiguous Git or harness effect is safe to reconcile.
 
 ## Status
 
-`v0.22.0` is a pre-1.0 release candidate: local-first and single-user, with one native Go
+`v0.22.1` is a pre-1.0 release candidate: local-first and single-user, with one native Go
 executable, an immutable journal as authority, rebuildable SQLite projections, and
 stdio MCP. Its operational surface adds explainable dependency blockers, incident
 circuit breakers, digest-bound backup/restore, bounded history, and a loopback-only
@@ -271,6 +271,11 @@ dagrail recovery adopt-legacy-authority --expected-project-id PROJECT_UUID \
 # high-risk recovery only; see docs/recovery.md:
 dagrail recovery rotate-authority --backup lkg.json --expected-current-head HEAD \
   --reason "incident recovery" --idempotency-key rotation/incident
+# reattach an already-established replacement from its authenticated source backup:
+dagrail recovery relocate-authority --root INTENDED_PROJECT_ROOT \
+  --backup replacement.json --expected-project-id LOCATOR_ANCESTOR_UUID \
+  --expected-current-head REPLACEMENT_HEAD --reason "durable reattachment" \
+  --idempotency-key relocation/incident
 dagrail qualify release --source .
 dagrail release verify --directory dist
 ```
@@ -284,6 +289,10 @@ Normal v0.22 initialization uses the same establishment-before-locator order.
 The one-per-user authority anchor uses a fixed OS-account location rather than
 process-selected home/config environment, and fresh retries revalidate and synchronize
 already-visible locator and claim evidence before reporting success.
+If a replacement was already established under a temporary local runtime, the separate
+`relocate-authority` continuation retires that claimed source and publishes a new
+path-bound identity at the intended root. It does not repeat legacy adoption or copy the
+source journal; the new authority remains fence-only until Graph/history re-bootstrap.
 
 Create and verify a portable journal backup with `dagrail backup create` and
 `dagrail backup verify`. Restore is exact-prefix-only, requires the destination's local

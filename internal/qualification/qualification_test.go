@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/CongBao/dagrail/internal/contract"
 	"github.com/CongBao/dagrail/internal/service"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -49,6 +50,20 @@ func TestWorkflowPinCheckRejectsMutableActionTags(t *testing.T) {
 	}
 	if !actionsPinned("- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7\n") {
 		t.Fatal("commit-pinned action was rejected")
+	}
+}
+
+func TestPublishedSchemaDigestGateIncludesAuthorityRelocation(t *testing.T) {
+	report := contract.Current()
+	reader := func(relative string) ([]byte, error) {
+		raw, err := os.ReadFile(filepath.Join("..", "..", relative))
+		if relative == report.AuthorityRelocation.SchemaPath {
+			raw = append(raw, ' ')
+		}
+		return raw, err
+	}
+	if publishedSchemaDigestsMatchReader(report, reader) {
+		t.Fatal("relocation schema mutation bypassed published digest qualification")
 	}
 }
 

@@ -53,6 +53,12 @@ publishes or downloads an artifact. Process cancellation is propagated into MCP,
 provider, projection, and host-plugin work; harness-management subprocesses also have a
 two-minute ceiling and a 64-KiB combined-output cap.
 
+`recovery adopt-legacy-authority`, `rotate-authority`, and `relocate-authority` are
+explicit operator mutations rather than normal orchestration actions. Relocation accepts
+an authenticated backup of an already-established replacement plus the expected source
+head and target locator ancestor, and returns AuthorityRelocationReceipt v1alpha1. Its
+new authority is fence-only; Graph/history bootstrap remains a separate operation.
+
 `dagrail doctor install` is a local, path-free diagnostic for the linked runtime,
 plugin bundle, selected harness registrations, and MCP launchers. It reports closed
 status codes without including executable paths or raw host output. It cannot attest
@@ -107,7 +113,7 @@ generic provider invocation output alone never advances a Node.
 Published schemas live in `schemas/`. Current governed reports include lifecycle
 migration/projection, the Explorer UI
 API, security audit, journal verification, plugin conformance, support report, recovery
-rehearsal, explicit legacy-authority adoption, authority rotation, release qualification,
+rehearsal, explicit legacy-authority adoption, authority rotation/relocation, release qualification,
 and the compatibility contract itself. Reports use
 closed objects so misspelled or silently added fields fail validation. ReleaseManifest
 v1beta1 and ReleaseVerification v1alpha1 bind the complete distribution set separately

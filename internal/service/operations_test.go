@@ -367,6 +367,125 @@ func TestFreshRotationRetryReconfirmsLocatorDurability(t *testing.T) {
 	}
 }
 
+func TestAuthorityRelocationResumesAfterLocatorConfirmationFailure(t *testing.T) {
+	sourceRoot := t.TempDir()
+	targetRoot := t.TempDir()
+	sourceHome := filepath.Join(t.TempDir(), "source-data")
+	destinationHome := filepath.Join(t.TempDir(), "destination-data")
+	t.Setenv("DAGRAIL_HOME", sourceHome)
+	seed, err := Init(sourceRoot, "relocation-resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graphPath := filepath.Join(sourceRoot, "graph.json")
+	if err := os.WriteFile(graphPath, []byte(`{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"relocation-resume"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"work","kind":"task","role":"worker","title":"work","outcomes":[{"id":"complete","class":"success"}]}],"edges":[]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.ImportGraph(graphPath, "graph", "governor"); err != nil {
+		t.Fatal(err)
+	}
+	legacyProjectID := seed.Project.Config.ProjectID
+	legacyHead := simulatePreV022Authority(t, seed, testAuthorityHome(t))
+	if err := os.MkdirAll(filepath.Join(targetRoot, ".dagrail"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	locator, err := os.ReadFile(filepath.Join(sourceRoot, ".dagrail", "project.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(targetRoot, ".dagrail", "project.yaml"), locator, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := OpenForRecovery(sourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.AdoptLegacyAuthority(legacyProjectID, legacyHead, "temporary establishment", "adopt/temporary"); err != nil {
+		t.Fatal(err)
+	}
+	source, err := Open(sourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.ImportGraph(graphPath, "replacement-graph", "governor"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.BindRole("worker", "manual", "relocation-session", time.Hour, false, "relocation/bind"); err != nil {
+		t.Fatal(err)
+	}
+	activeBackup, activeReport, err := source.CreateBackup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Setenv("DAGRAIL_HOME", destinationHome); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RelocateAuthority(targetRoot, activeBackup, legacyProjectID, activeReport.HeadHash, "must reject active lease", "relocate/active"); err == nil || !strings.Contains(err.Error(), "Role leases") {
+		t.Fatalf("relocation accepted an active Role lease: %v", err)
+	}
+	if _, retired, err := source.Journal.AuthorityRetirement(); err != nil || retired {
+		t.Fatalf("rejected active relocation changed source retirement: retired=%t err=%v", retired, err)
+	}
+	if err := source.ReleaseRole("worker", "relocation-session", "relocation/release"); err != nil {
+		t.Fatal(err)
+	}
+	backup, report, err := source.CreateBackup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const reason = "resume relocation after locator confirmation"
+	const key = "relocate/resume"
+	if _, err := relocateAuthority(targetRoot, backup, legacyProjectID, report.HeadHash, reason, key, func(string) error { return os.ErrPermission }); err == nil {
+		t.Fatal("relocation reported success after locator confirmation failure")
+	}
+	visible, err := project.Open(targetRoot)
+	if err != nil || visible.Config.ProjectID == legacyProjectID {
+		t.Fatalf("relocation did not reach the durable visible-locator prefix: %+v %v", visible, err)
+	}
+	advanced, err := Open(targetRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := advanced.ImportGraph(graphPath, "relocation/advanced-graph", "governor"); err != nil {
+		t.Fatalf("replacement could not legally advance after locator publication: %v", err)
+	}
+	receipt, err := RelocateAuthority(targetRoot, backup, legacyProjectID, report.HeadHash, reason, key)
+	if err != nil || receipt.ReplacementProjectID != visible.Config.ProjectID || VerifyAuthorityRelocationReceipt(receipt) != nil {
+		t.Fatalf("exact retry did not finish relocation: %+v %v", receipt, err)
+	}
+	validateLifecycleSchema(t, filepath.Join("..", "..", "schemas", "authority-relocation-v1alpha1.schema.json"), "urn:dagrail:authority-relocation", receipt)
+	otherTarget := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(otherTarget, ".dagrail"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(otherTarget, ".dagrail", "project.yaml"), locator, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RelocateAuthority(otherTarget, backup, legacyProjectID, report.HeadHash, reason, key); err == nil || !strings.Contains(err.Error(), "different intent") {
+		t.Fatalf("same relocation intent was reusable at another target root: %v", err)
+	}
+	other, err := project.Open(otherTarget)
+	if err != nil || other.Config.ProjectID != legacyProjectID {
+		t.Fatalf("rejected second target changed its locator: %+v %v", other, err)
+	}
+	if err := os.Setenv("DAGRAIL_HOME", filepath.Join(t.TempDir(), "different-destination-data")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RelocateAuthority(targetRoot, backup, legacyProjectID, report.HeadHash, reason, key); err == nil {
+		t.Fatal("completed relocation was reusable from a different destination runtime")
+	}
+	if err := os.Setenv("DAGRAIL_HOME", destinationHome); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(destinationHome, "projects", receipt.ReplacementProjectID, "authority-lineage.json")); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := RelocateAuthority(targetRoot, backup, legacyProjectID, report.HeadHash, reason, key)
+	if err != nil || retried.ReceiptDigest != receipt.ReceiptDigest {
+		t.Fatalf("completed relocation retry did not reconstruct exact lineage: %+v %v", retried, err)
+	}
+}
+
 func TestAuthorityRotationRejectsNonPrefixBackup(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))

@@ -42,11 +42,13 @@ type BackupReport struct {
 
 const AuthorityRotationAPIVersion = "dagrail.io/authority-rotation/v1alpha1"
 const AuthorityAdoptionAPIVersion = "dagrail.io/authority-adoption/v1alpha1"
+const AuthorityRelocationAPIVersion = "dagrail.io/authority-relocation/v1alpha1"
 
 const (
 	authorityRetirementAPIVersion = "dagrail.io/authority-retirement/v1alpha1"
 	legacyRetirementKind          = "LegacyAuthorityRetirement"
 	rotationRetirementKind        = "AuthorityRetirement"
+	relocationRetirementKind      = "AuthorityRelocationRetirement"
 )
 
 type AuthorityRotationReceipt struct {
@@ -76,17 +78,37 @@ type AuthorityAdoptionReceipt struct {
 	ReceiptDigest        string `json:"receiptDigest"`
 }
 
+type AuthorityRelocationReceipt struct {
+	APIVersion               string `json:"apiVersion"`
+	Kind                     string `json:"kind"`
+	SourceProjectID          string `json:"sourceProjectId"`
+	PreviousLocatorProjectID string `json:"previousLocatorProjectId"`
+	SourceHead               string `json:"sourceHead"`
+	RecoveryHead             string `json:"recoveryHead"`
+	RecoveryBackupDigest     string `json:"recoveryBackupDigest"`
+	TargetRootDigest         string `json:"targetRootDigest"`
+	DestinationRootDigest    string `json:"destinationRuntimeDigest"`
+	ReplacementProjectID     string `json:"replacementProjectId"`
+	RelocatedAt              string `json:"relocatedAt"`
+	Reason                   string `json:"reason"`
+	IdempotencyKey           string `json:"idempotencyKey"`
+	ReceiptDigest            string `json:"receiptDigest"`
+}
+
 type authorityRetirement struct {
-	APIVersion           string `json:"apiVersion"`
-	Kind                 string `json:"kind"`
-	PreviousProjectID    string `json:"previousProjectId"`
-	PreviousHead         string `json:"previousHead"`
-	RecoveryHead         string `json:"recoveryHead"`
-	RecoveryBackupDigest string `json:"recoveryBackupDigest"`
-	ReplacementProjectID string `json:"replacementProjectId"`
-	RotatedAt            string `json:"rotatedAt"`
-	Reason               string `json:"reason"`
-	IdempotencyKey       string `json:"idempotencyKey"`
+	APIVersion            string `json:"apiVersion"`
+	Kind                  string `json:"kind"`
+	PreviousProjectID     string `json:"previousProjectId"`
+	PreviousLocatorID     string `json:"previousLocatorProjectId,omitempty"`
+	TargetRootDigest      string `json:"targetRootDigest,omitempty"`
+	DestinationRootDigest string `json:"destinationRuntimeDigest,omitempty"`
+	PreviousHead          string `json:"previousHead"`
+	RecoveryHead          string `json:"recoveryHead"`
+	RecoveryBackupDigest  string `json:"recoveryBackupDigest"`
+	ReplacementProjectID  string `json:"replacementProjectId"`
+	RotatedAt             string `json:"rotatedAt"`
+	Reason                string `json:"reason"`
+	IdempotencyKey        string `json:"idempotencyKey"`
 }
 
 type authorityEstablishment struct {
@@ -427,6 +449,207 @@ func (s *Service) RotateAuthority(data []byte, expectedCurrentHead, reason, idem
 	return authorityRotationReceipt(retirement)
 }
 
+// RelocateAuthority retires an already-established, claim-authenticated source
+// authority discovered through its per-user anchor, establishes a fresh UUID in the
+// currently selected DAGRAIL_HOME, and publishes that UUID into targetRoot. It exists
+// for a recovery saga whose replacement was durably established before the intended
+// repository locator was published; it never rebinds the old UUID or its anchor.
+func RelocateAuthority(targetRoot string, data []byte, expectedLocatorProjectID, expectedCurrentHead, reason, idempotencyKey string) (AuthorityRelocationReceipt, error) {
+	return relocateAuthority(targetRoot, data, expectedLocatorProjectID, expectedCurrentHead, reason, idempotencyKey, project.SyncProjectLocator)
+}
+
+func relocateAuthority(targetRoot string, data []byte, expectedLocatorProjectID, expectedCurrentHead, reason, idempotencyKey string, confirmLocator func(string) error) (AuthorityRelocationReceipt, error) {
+	if strings.TrimSpace(expectedLocatorProjectID) == "" || expectedCurrentHead == "" || strings.TrimSpace(reason) == "" || len([]byte(reason)) > 1024 || strings.TrimSpace(idempotencyKey) == "" || len([]byte(idempotencyKey)) > 256 {
+		return AuthorityRelocationReceipt{}, fmt.Errorf("expected locator project ID, current head, reason, and idempotency key are required")
+	}
+	envelope, err := decodeBackup(data)
+	if err != nil {
+		return AuthorityRelocationReceipt{}, err
+	}
+	backup := backupReport(envelope)
+	if backup.HeadHash == "" {
+		return AuthorityRelocationReceipt{}, fmt.Errorf("authority relocation requires a non-empty authenticated recovery prefix")
+	}
+	sourceProjectID := envelope.Project.ProjectID
+	sourceDataDir, err := project.ResolveClaimedAuthority(sourceProjectID)
+	if err != nil {
+		return AuthorityRelocationReceipt{}, fmt.Errorf("resolve relocation source authority: %w", err)
+	}
+	if err := authorityDescendsFrom(sourceProjectID, expectedLocatorProjectID); err != nil {
+		return AuthorityRelocationReceipt{}, err
+	}
+	target, err := project.Open(targetRoot)
+	if err != nil {
+		return AuthorityRelocationReceipt{}, err
+	}
+	canonicalRoot, err := filepath.EvalSymlinks(target.Root)
+	if err != nil {
+		return AuthorityRelocationReceipt{}, fmt.Errorf("resolve relocation target root: %w", err)
+	}
+	targetRootDigest, err := authorityDigest("dagrail-authority-relocation-target-v1\x00", struct {
+		Root string `json:"root"`
+	}{Root: filepath.Clean(canonicalRoot)})
+	if err != nil {
+		return AuthorityRelocationReceipt{}, err
+	}
+	destinationProbe, err := project.DataDirForProjectID(sourceProjectID)
+	if err != nil {
+		return AuthorityRelocationReceipt{}, err
+	}
+	destinationRoot, err := filepath.Abs(filepath.Dir(destinationProbe))
+	if err != nil {
+		return AuthorityRelocationReceipt{}, err
+	}
+	if err := project.EnsureDurableDirectory(destinationRoot); err != nil {
+		return AuthorityRelocationReceipt{}, fmt.Errorf("prepare relocation destination runtime: %w", err)
+	}
+	destinationRoot, err = filepath.EvalSymlinks(destinationRoot)
+	if err != nil {
+		return AuthorityRelocationReceipt{}, fmt.Errorf("resolve relocation destination runtime: %w", err)
+	}
+	destinationRootDigest, err := authorityDigest("dagrail-authority-relocation-runtime-v1\x00", struct {
+		Root string `json:"root"`
+	}{Root: filepath.Clean(destinationRoot)})
+	if err != nil {
+		return AuthorityRelocationReceipt{}, err
+	}
+	sourceUUID, err := uuid.Parse(sourceProjectID)
+	if err != nil {
+		return AuthorityRelocationReceipt{}, err
+	}
+	replacementProjectID := uuid.NewSHA1(sourceUUID, []byte("dagrail-authority-relocation-v1\x00"+idempotencyKey+"\x00"+targetRootDigest+"\x00"+destinationRootDigest)).String()
+	if target.Config.ProjectID != expectedLocatorProjectID && target.Config.ProjectID != replacementProjectID {
+		return AuthorityRelocationReceipt{}, fmt.Errorf("target project locator changed before authority relocation")
+	}
+	sourceJournal, err := journal.Open(sourceDataDir, sourceProjectID)
+	if err != nil {
+		return AuthorityRelocationReceipt{}, err
+	}
+	operationTime := time.Now().UTC()
+	retirement := authorityRetirement{
+		APIVersion: AuthorityRelocationAPIVersion, Kind: relocationRetirementKind,
+		PreviousProjectID: sourceProjectID, PreviousLocatorID: expectedLocatorProjectID,
+		PreviousHead: expectedCurrentHead, RecoveryHead: backup.HeadHash,
+		RecoveryBackupDigest: backup.Digest, TargetRootDigest: targetRootDigest, DestinationRootDigest: destinationRootDigest,
+		ReplacementProjectID: replacementProjectID, RotatedAt: operationTime.Format(time.RFC3339Nano),
+		Reason: reason, IdempotencyKey: idempotencyKey,
+	}
+	retirementRaw, err := json.Marshal(retirement)
+	if err != nil {
+		return AuthorityRelocationReceipt{}, err
+	}
+	retirementRaw, err = jcs.Transform(retirementRaw)
+	if err != nil {
+		return AuthorityRelocationReceipt{}, err
+	}
+	committedRaw, err := sourceJournal.RetireAuthority(expectedCurrentHead, retirementRaw, operationTime, func(current []journal.Segment) error {
+		state, err := reduceSegments(sourceProjectID, current)
+		if err != nil {
+			return err
+		}
+		if err := validateAuthorityQuiescent(state, operationTime, "authority relocation"); err != nil {
+			return err
+		}
+		if len(envelope.Segments) > len(current) {
+			return fmt.Errorf("recovery backup is not a prefix of relocation source authority")
+		}
+		for index := range envelope.Segments {
+			if envelope.Segments[index].SegmentHash != current[index].SegmentHash {
+				return fmt.Errorf("recovery backup is not a prefix of relocation source authority")
+			}
+		}
+		return nil
+	}, func(existing []byte) error {
+		var committed authorityRetirement
+		if err := decodeStrictAuthorityJSON(existing, &committed); err != nil {
+			return fmt.Errorf("decode authority relocation marker: %w", err)
+		}
+		return validateRelocationIntent(committed, sourceProjectID, expectedLocatorProjectID, expectedCurrentHead, backup.HeadHash, backup.Digest, targetRootDigest, destinationRootDigest, replacementProjectID, reason, idempotencyKey)
+	}, func(committed []byte) error {
+		var actual authorityRetirement
+		if err := decodeStrictAuthorityJSON(committed, &actual); err != nil {
+			return err
+		}
+		return prepareAndPublishRelocation(target.Root, actual, committed, confirmLocator)
+	})
+	if err != nil {
+		return AuthorityRelocationReceipt{}, err
+	}
+	if err := decodeStrictAuthorityJSON(committedRaw, &retirement); err != nil {
+		return AuthorityRelocationReceipt{}, err
+	}
+	return authorityRelocationReceipt(retirement)
+}
+
+func authorityDescendsFrom(sourceProjectID, expectedAncestorID string) error {
+	currentID := sourceProjectID
+	visited := map[string]bool{}
+	for len(visited) < maxLocalAuthorityStores && !visited[currentID] {
+		visited[currentID] = true
+		dataDir, err := project.ResolveClaimedAuthority(currentID)
+		if err != nil {
+			return fmt.Errorf("resolve authority lineage for %s: %w", currentID, err)
+		}
+		lineage, err := project.ReadAuthorityLineage(dataDir)
+		if err != nil {
+			return fmt.Errorf("relocation source has no claim-bound predecessor lineage")
+		}
+		if lineage.PreviousProjectID == expectedAncestorID {
+			return nil
+		}
+		if lineage.Operation == "legacy-adoption" {
+			break
+		}
+		currentID = lineage.PreviousProjectID
+	}
+	return fmt.Errorf("relocation source authority is not descended from the target locator identity")
+}
+
+func prepareAndPublishRelocation(targetRoot string, retirement authorityRetirement, retirementRaw []byte, confirmLocator func(string) error) error {
+	lineage := authorityLineage(retirement, "relocation")
+	dataDir, err := project.PrepareReplacementAuthority(retirement.ReplacementProjectID, lineage)
+	if err != nil {
+		candidateDir, pathErr := project.DataDirForProjectID(retirement.ReplacementProjectID)
+		if pathErr != nil || project.RestoreAuthorityLineage(candidateDir, retirement.ReplacementProjectID, lineage) != nil {
+			return err
+		}
+		dataDir = candidateDir
+	}
+	retirementSum := sha256.Sum256(retirementRaw)
+	establishment := authorityEstablishment{
+		APIVersion: "dagrail.io/authority-establishment/v1alpha1", Kind: "AuthorityEstablishment",
+		ProjectID: retirement.ReplacementProjectID, PreviousProjectID: retirement.PreviousProjectID,
+		Operation: "relocation", EstablishedAt: retirement.RotatedAt,
+		ProvenanceDigest: "sha256:" + fmt.Sprintf("%x", retirementSum[:]),
+	}
+	raw, err := json.Marshal(establishment)
+	if err != nil {
+		return err
+	}
+	raw, err = jcs.Transform(raw)
+	if err != nil {
+		return err
+	}
+	establishedAt, err := time.Parse(time.RFC3339Nano, establishment.EstablishedAt)
+	if err != nil {
+		return err
+	}
+	replacementJournal, err := journal.OpenForAuthorityEstablishment(dataDir, retirement.ReplacementProjectID)
+	if err != nil {
+		return err
+	}
+	if _, err := replacementJournal.EstablishAuthority(raw, establishedAt); err != nil {
+		return err
+	}
+	if _, err := project.RotateAuthority(targetRoot, retirement.PreviousLocatorID, retirement.ReplacementProjectID, lineage); err != nil {
+		return err
+	}
+	if confirmLocator == nil {
+		return project.SyncProjectLocator(targetRoot)
+	}
+	return confirmLocator(targetRoot)
+}
+
 func (s *Service) repairCurrentAuthorityLineage() error {
 	currentID := s.Project.Config.ProjectID
 	projectsRoot := filepath.Dir(s.Project.DataDir)
@@ -467,6 +690,8 @@ func (s *Service) repairCurrentAuthorityLineage() error {
 		operation := "rotation"
 		if retirement.APIVersion == AuthorityAdoptionAPIVersion && retirement.Kind == legacyRetirementKind {
 			operation = "legacy-adoption"
+		} else if retirement.APIVersion == AuthorityRelocationAPIVersion && retirement.Kind == relocationRetirementKind {
+			operation = "relocation"
 		}
 		lineage := authorityLineage(retirement, operation)
 		if recovered != nil && *recovered != lineage {
@@ -612,7 +837,7 @@ func validateAuthorityQuiescent(state domain.State, at time.Time, operation stri
 }
 
 func authorityLineage(retirement authorityRetirement, operation string) project.AuthorityLineage {
-	return project.AuthorityLineage{Operation: operation, PreviousProjectID: retirement.PreviousProjectID, PreviousHead: retirement.PreviousHead, RecoveryHead: retirement.RecoveryHead, RecoveryBackupDigest: retirement.RecoveryBackupDigest, RotatedAt: retirement.RotatedAt, Reason: retirement.Reason, IdempotencyKey: retirement.IdempotencyKey}
+	return project.AuthorityLineage{Operation: operation, PreviousProjectID: retirement.PreviousProjectID, PreviousLocatorID: retirement.PreviousLocatorID, TargetRootDigest: retirement.TargetRootDigest, DestinationRootDigest: retirement.DestinationRootDigest, PreviousHead: retirement.PreviousHead, RecoveryHead: retirement.RecoveryHead, RecoveryBackupDigest: retirement.RecoveryBackupDigest, RotatedAt: retirement.RotatedAt, Reason: retirement.Reason, IdempotencyKey: retirement.IdempotencyKey}
 }
 
 func legacyRetirementReservationDigest(retirement authorityRetirement) (string, error) {
@@ -661,12 +886,30 @@ func validateLegacyRetirementIntent(retirement authorityRetirement, previousProj
 	return nil
 }
 
+func validateRelocationIntent(retirement authorityRetirement, sourceProjectID, previousLocatorProjectID, sourceHead, recoveryHead, backupDigest, targetRootDigest, destinationRootDigest, replacementProjectID, reason, idempotencyKey string) error {
+	if retirement.APIVersion != AuthorityRelocationAPIVersion || retirement.Kind != relocationRetirementKind || retirement.PreviousProjectID != sourceProjectID || retirement.PreviousLocatorID != previousLocatorProjectID || retirement.PreviousHead != sourceHead || retirement.RecoveryHead != recoveryHead || retirement.RecoveryBackupDigest != backupDigest || retirement.TargetRootDigest != targetRootDigest || retirement.DestinationRootDigest != destinationRootDigest || retirement.ReplacementProjectID != replacementProjectID || retirement.Reason != reason || retirement.IdempotencyKey != idempotencyKey {
+		return fmt.Errorf("authority relocation idempotency key is already bound to different intent")
+	}
+	source, sourceErr := uuid.Parse(retirement.PreviousProjectID)
+	locator, locatorErr := uuid.Parse(retirement.PreviousLocatorID)
+	replacement, replacementErr := uuid.Parse(retirement.ReplacementProjectID)
+	if sourceErr != nil || source.String() != retirement.PreviousProjectID || locatorErr != nil || locator.String() != retirement.PreviousLocatorID || replacementErr != nil || replacement.String() != retirement.ReplacementProjectID || retirement.PreviousProjectID == retirement.PreviousLocatorID || retirement.PreviousProjectID == retirement.ReplacementProjectID || retirement.PreviousLocatorID == retirement.ReplacementProjectID || !validAuthorityHash(retirement.PreviousHead) || !validAuthorityHash(retirement.RecoveryHead) || !validAuthorityDigest(retirement.RecoveryBackupDigest) || !validAuthorityDigest(retirement.TargetRootDigest) || !validAuthorityDigest(retirement.DestinationRootDigest) {
+		return fmt.Errorf("authority relocation evidence is invalid")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, retirement.RotatedAt); err != nil {
+		return fmt.Errorf("authority relocation timestamp is invalid")
+	}
+	return nil
+}
+
 func validateAnyRetirement(retirement authorityRetirement) error {
 	switch {
 	case retirement.APIVersion == authorityRetirementAPIVersion && retirement.Kind == rotationRetirementKind:
 		return validateRetirementIntent(retirement, retirement.PreviousProjectID, retirement.PreviousHead, retirement.RecoveryHead, retirement.RecoveryBackupDigest, retirement.ReplacementProjectID, retirement.Reason, retirement.IdempotencyKey)
 	case retirement.APIVersion == AuthorityAdoptionAPIVersion && retirement.Kind == legacyRetirementKind:
 		return validateLegacyRetirementIntent(retirement, retirement.PreviousProjectID, retirement.PreviousHead, retirement.RecoveryBackupDigest, retirement.ReplacementProjectID, retirement.Reason, retirement.IdempotencyKey)
+	case retirement.APIVersion == AuthorityRelocationAPIVersion && retirement.Kind == relocationRetirementKind:
+		return validateRelocationIntent(retirement, retirement.PreviousProjectID, retirement.PreviousLocatorID, retirement.PreviousHead, retirement.RecoveryHead, retirement.RecoveryBackupDigest, retirement.TargetRootDigest, retirement.DestinationRootDigest, retirement.ReplacementProjectID, retirement.Reason, retirement.IdempotencyKey)
 	default:
 		return fmt.Errorf("authority retirement kind is unsupported")
 	}
@@ -682,7 +925,7 @@ func validateAuthorityEstablishment(establishment authorityEstablishment, projec
 		if establishment.PreviousProjectID != "" {
 			return fmt.Errorf("initial authority establishment has a predecessor")
 		}
-	case "rotation", "legacy-adoption":
+	case "rotation", "legacy-adoption", "relocation":
 		previous, err := uuid.Parse(establishment.PreviousProjectID)
 		if err != nil || previous.String() != establishment.PreviousProjectID || establishment.PreviousProjectID == establishment.ProjectID {
 			return fmt.Errorf("replacement authority establishment predecessor is invalid")
@@ -692,6 +935,36 @@ func validateAuthorityEstablishment(establishment authorityEstablishment, projec
 	}
 	if _, err := time.Parse(time.RFC3339Nano, establishment.EstablishedAt); err != nil {
 		return fmt.Errorf("authority establishment timestamp is invalid")
+	}
+	return nil
+}
+
+func authorityRelocationReceipt(retirement authorityRetirement) (AuthorityRelocationReceipt, error) {
+	receipt := AuthorityRelocationReceipt{APIVersion: AuthorityRelocationAPIVersion, Kind: "AuthorityRelocationReceipt", SourceProjectID: retirement.PreviousProjectID, PreviousLocatorProjectID: retirement.PreviousLocatorID, SourceHead: retirement.PreviousHead, RecoveryHead: retirement.RecoveryHead, RecoveryBackupDigest: retirement.RecoveryBackupDigest, TargetRootDigest: retirement.TargetRootDigest, DestinationRootDigest: retirement.DestinationRootDigest, ReplacementProjectID: retirement.ReplacementProjectID, RelocatedAt: retirement.RotatedAt, Reason: retirement.Reason, IdempotencyKey: retirement.IdempotencyKey}
+	digest, err := authorityDigest("dagrail-authority-relocation-receipt-v1\x00", receipt)
+	if err != nil {
+		return AuthorityRelocationReceipt{}, err
+	}
+	receipt.ReceiptDigest = digest
+	return receipt, nil
+}
+
+func VerifyAuthorityRelocationReceipt(receipt AuthorityRelocationReceipt) error {
+	source, sourceErr := uuid.Parse(receipt.SourceProjectID)
+	locator, locatorErr := uuid.Parse(receipt.PreviousLocatorProjectID)
+	replacement, replacementErr := uuid.Parse(receipt.ReplacementProjectID)
+	_, timeErr := time.Parse(time.RFC3339Nano, receipt.RelocatedAt)
+	if receipt.APIVersion != AuthorityRelocationAPIVersion || receipt.Kind != "AuthorityRelocationReceipt" || sourceErr != nil || source.String() != receipt.SourceProjectID || locatorErr != nil || locator.String() != receipt.PreviousLocatorProjectID || replacementErr != nil || replacement.String() != receipt.ReplacementProjectID || receipt.SourceProjectID == receipt.PreviousLocatorProjectID || receipt.SourceProjectID == receipt.ReplacementProjectID || receipt.PreviousLocatorProjectID == receipt.ReplacementProjectID || !validAuthorityHash(receipt.SourceHead) || !validAuthorityHash(receipt.RecoveryHead) || !validAuthorityDigest(receipt.RecoveryBackupDigest) || !validAuthorityDigest(receipt.TargetRootDigest) || !validAuthorityDigest(receipt.DestinationRootDigest) || timeErr != nil || strings.TrimSpace(receipt.Reason) == "" || len([]byte(receipt.Reason)) > 1024 || strings.TrimSpace(receipt.IdempotencyKey) == "" || len([]byte(receipt.IdempotencyKey)) > 256 || !validAuthorityDigest(receipt.ReceiptDigest) {
+		return fmt.Errorf("authority relocation receipt is structurally invalid")
+	}
+	claimed := receipt.ReceiptDigest
+	receipt.ReceiptDigest = ""
+	expected, err := authorityDigest("dagrail-authority-relocation-receipt-v1\x00", receipt)
+	if err != nil {
+		return err
+	}
+	if claimed != expected {
+		return fmt.Errorf("authority relocation receipt digest mismatch")
 	}
 	return nil
 }

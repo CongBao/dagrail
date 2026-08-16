@@ -229,6 +229,12 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
     commits before locator publication. Newly initialized v0.22 authorities use the
     same fence-before-locator order. Copies, missing provenance, stale pre-v0.22 writers,
     and terminal retirement fences fail closed.
+41. A replacement authority established under an unsuitable local runtime is moved only
+    by the explicit relocation continuation. Its fixed per-user anchor authenticates the
+    source; claim-bound lineage must descend from the target locator identity; source
+    head, backup, canonical target and destination-runtime roots, reason, and key bind
+    one deterministic fresh UUID. The source is retired before the new fence and locator publish. Relocation
+    never rebinds a UUID or carries Graph/lifecycle state implicitly.
 
 ## Bounded contexts
 
@@ -249,8 +255,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
   complete-prefix validation, per-command proof closure, atomic import receipt, and
   redacted rebuildable projection.
 - **Authority recovery**: authenticated backup-prefix selection, non-destructive Project
-  identity rotation, local writer claims, durable per-generation provenance, and
-  explicit later graph/history re-bootstrap.
+  identity rotation/relocation, local writer claims, durable per-generation provenance,
+  and explicit later graph/history re-bootstrap.
 - **Release readiness**: closed historical binary inputs, source qualification,
   optional project/install evidence, and explicitly outstanding adoption evidence.
 

@@ -86,6 +86,9 @@ Claims are bound to the canonical data path, so copying the complete project run
 directory to another `DAGRAIL_HOME` also remains read-only. Pre-v0.22 stores use the
 explicit exact-head `recovery adopt-legacy-authority` command documented in the recovery
 runbook; inspection never performs adoption.
+An already-established replacement at an unsuitable runtime uses the separate
+exact-head/backup `recovery relocate-authority` continuation; backup restore cannot
+rebind that UUID at another path.
 
 Backups may contain operational metadata and external artifact URIs. Treat them as
 sensitive project records even though DAGrail rejects secrets and artifact bodies from
@@ -169,6 +172,10 @@ whose prefix does not diverge. See `docs/recovery.md` for the bounded runbook.
 If a valid authority must be replaced rather than restored, use the separately
 documented `recovery rotate-authority` flow. It creates a new UUID and fence-only journal
 from an authenticated LKG lineage; it never truncates the current journal.
+If a replacement authority was already established at an unsuitable local runtime path,
+use the separately documented `recovery relocate-authority` continuation with its exact
+source backup/head and intended locator ancestor. Never re-run adoption or edit identity
+files to move it.
 
 Verify authority before repair. Projection rebuild never edits journal segments.
 

@@ -124,6 +124,42 @@ Snapshot derivation is rechecked under the retirement transaction: a loser that 
 its initial sidecar check before another process committed validates the winner's exact
 fence and returns that receipt instead of folding the new fence into a different backup.
 
+## Relocate an already-established replacement authority
+
+If adoption or rotation durably established its fresh replacement under a temporary or
+otherwise unsuitable runtime path before the intended repository locator was published,
+do not adopt the retired ancestor again and do not edit its anchor, claim, journal, or
+locator. Preserve the source store, quiesce lifecycle work, create and separately verify
+an exact backup of the established replacement, and run from the intended durable
+`DAGRAIL_HOME`:
+
+```sh
+dagrail recovery relocate-authority --root INTENDED_PROJECT_ROOT \
+  --backup ESTABLISHED_REPLACEMENT_BACKUP.json \
+  --expected-project-id CURRENT_LOCATOR_ANCESTOR_UUID \
+  --expected-current-head ESTABLISHED_REPLACEMENT_HEAD \
+  --reason "reattach established replacement to durable runtime" \
+  --idempotency-key relocation/incident-id
+```
+
+Relocation resolves the source UUID only through its fixed per-user, path-bound authority
+anchor. The source must be a claimed replacement whose authenticated lineage descends
+from the UUID currently named by the target locator. Under the source writer lock,
+DAGrail checks the exact head, backup prefix, expired leases, closed Effects/Resources,
+and resolved Incidents; then it appends a terminal relocation retirement fence. A new,
+deterministic UUID is established in the currently selected runtime before the target
+locator is atomically published. The receipt binds the source UUID/head, former locator
+UUID, backup, canonical target-root digest, selected destination-runtime digest,
+replacement UUID, reason, and idempotency key. Identical concurrent calls and crash
+retries from that runtime return the same receipt; another repository root, runtime,
+lineage, key intent, or changed locator fails closed.
+
+The relocated journal is intentionally fence-only. Relocation moves writer authority,
+not graph or lifecycle state: import the Graph and authenticated history again and prove
+parity before any cutover. This command is only the public continuation of an already
+established replacement saga; it cannot revive a legacy UUID, rebind an existing UUID,
+or recover an unavailable source authority.
+
 Journal, claim, lineage, anchor, and locator publication flush their containing
 directories. Directory creation proceeds one component at a time and flushes each new
 directory plus its containing parent. A fresh retry rechecks the deepest visible
@@ -138,7 +174,8 @@ bytes and namespace entries.
 - The recovery command uses an inspection-only store: it does not settle automatic
   nodes, synchronize SQLite, migrate its schema, or repair corruption before evidence
   is captured, and the journal layer rejects generic append/restore calls through that
-  handle. Only the dedicated legacy-retirement and rotation transactions may commit.
+  handle. Only the dedicated legacy-retirement, rotation, and relocation transactions
+  may commit.
 - The v1alpha1 JSON backup remains bounded to 256 MiB. Large deployments should retain
   the original segment directory through filesystem or object-store backup tooling;
   streaming portable archives remain a post-beta capability.
@@ -150,4 +187,6 @@ bytes and namespace entries.
 - Copying a project locator is not state isolation: Project UUID and `DAGRAIL_HOME`
   resolve the runtime data directory. Use `observe create-shadow` for qualification or
   `rotate-authority` for an approved identity replacement; never qualify a copied root
-  against the authoritative UUID/data tuple.
+  against the authoritative UUID/data tuple. If the approved replacement was already
+  established at the wrong local runtime path, use `relocate-authority`; do not repeat
+  adoption or hand-edit identity files.

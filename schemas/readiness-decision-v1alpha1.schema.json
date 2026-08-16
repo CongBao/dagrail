@@ -20,8 +20,8 @@
       "required": ["fromVersion", "currentVersion", "historical", "digest"],
       "properties": {
         "fromVersion": {"const": "0.10.0"},
-        "currentVersion": {"const": "0.22.0"},
-        "historical": {"const": 12},
+        "currentVersion": {"const": "0.22.1"},
+        "historical": {"const": 13},
         "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}
       }
     },

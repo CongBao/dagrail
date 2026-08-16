@@ -159,6 +159,79 @@ func TestIdenticalCrossProcessLegacyAdoptionsReturnOneReceipt(t *testing.T) {
 	}
 }
 
+func TestIdenticalCrossProcessAuthorityRelocationsReturnOneReceipt(t *testing.T) {
+	if testing.Short() {
+		t.Skip("10 cross-process authority relocation races")
+	}
+	previousHome := os.Getenv("DAGRAIL_HOME")
+	defer func() { _ = os.Setenv("DAGRAIL_HOME", previousHome) }()
+	for iteration := 0; iteration < 10; iteration++ {
+		root := t.TempDir()
+		targetRoot := t.TempDir()
+		sourceHome := filepath.Join(t.TempDir(), "source-data")
+		destinationHome := filepath.Join(t.TempDir(), "destination-data")
+		if err := os.Setenv("DAGRAIL_HOME", sourceHome); err != nil {
+			t.Fatal(err)
+		}
+		svc, err := service.Init(root, "relocation-concurrency")
+		if err != nil {
+			t.Fatal(err)
+		}
+		graphPath := filepath.Join(root, "graph.json")
+		if err := os.WriteFile(graphPath, []byte(`{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"relocation-concurrency"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"work","kind":"task","role":"worker","title":"work","outcomes":[{"id":"complete","class":"success"}]}],"edges":[]}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.ImportGraph(graphPath, "graph", "governor"); err != nil {
+			t.Fatal(err)
+		}
+		legacyProjectID := svc.Project.Config.ProjectID
+		legacyHead := rewriteCurrentFixtureAsLegacyAuthority(t, svc)
+		if err := os.MkdirAll(filepath.Join(targetRoot, ".dagrail"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		locator, err := os.ReadFile(filepath.Join(root, ".dagrail", "project.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(targetRoot, ".dagrail", "project.yaml"), locator, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		legacy, err := service.OpenForRecovery(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := legacy.AdoptLegacyAuthority(legacyProjectID, legacyHead, "establish temporary authority", "adopt/temporary"); err != nil {
+			t.Fatal(err)
+		}
+		source, err := service.OpenForRecovery(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		backup, report, err := source.CreateBackup()
+		if err != nil {
+			t.Fatal(err)
+		}
+		backupPath := filepath.Join(root, "replacement-backup.json")
+		if err := os.WriteFile(backupPath, backup, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		args := []string{"recovery", "relocate-authority", "--root", targetRoot, "--backup", backupPath, "--expected-project-id", legacyProjectID, "--expected-current-head", report.HeadHash, "--reason", "concurrent authority relocation", "--idempotency-key", "relocate/concurrent"}
+		children := runConcurrentRotationCommands(t, destinationHome, filepath.Join(root, "relocation-release"), args, args)
+		receipts := make([]service.AuthorityRelocationReceipt, len(children))
+		for index, current := range children {
+			if current.err != nil {
+				t.Fatalf("iteration %d process %d failed: %v stderr=%s", iteration, index, current.err, current.stderr.String())
+			}
+			if err := json.Unmarshal(current.stdout.Bytes(), &receipts[index]); err != nil || service.VerifyAuthorityRelocationReceipt(receipts[index]) != nil {
+				t.Fatalf("iteration %d process %d returned invalid relocation receipt: %v stdout=%s", iteration, index, err, current.stdout.String())
+			}
+		}
+		if receipts[0].ReceiptDigest != receipts[1].ReceiptDigest || receipts[0].ReplacementProjectID != receipts[1].ReplacementProjectID {
+			t.Fatalf("iteration %d returned different relocation receipts: first=%+v second=%+v", iteration, receipts[0], receipts[1])
+		}
+	}
+}
+
 func TestDifferentConcurrentAuthorityRotationIntentsFailClosed(t *testing.T) {
 	root := t.TempDir()
 	dataRoot := filepath.Join(root, "data")

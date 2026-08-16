@@ -2,6 +2,29 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.22.1 — 2026-08-16
+
+### Added
+
+- public `recovery relocate-authority` for the bounded case where an adoption/rotation
+  replacement was already established under an unsuitable local runtime before the
+  intended repository locator was published;
+- a digest-pinned v1alpha1 relocation receipt binding the claimed source UUID/head,
+  authenticated backup, locator ancestor, canonical target and destination-runtime
+  roots, deterministic fresh UUID, reason, and idempotency key.
+
+### Fixed
+
+- an already-established replacement now has a crash-resumable public continuation:
+  DAGrail retires the anchored source under its writer lock, establishes the fresh
+  destination fence before locator publication, rejects unrelated lineage and changed
+  roots, and returns one receipt for identical cross-process retries.
+
+### Boundaries
+
+- relocation never revives/rebinds an existing UUID and does not copy Graph or lifecycle
+  state; explicit authenticated bootstrap and parity remain required before cutover.
+
 ## 0.22.0 — 2026-08-16
 
 ### Added

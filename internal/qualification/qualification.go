@@ -93,7 +93,7 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 		"CODE_OF_CONDUCT.md", "CONTRIBUTING.md", "COMPATIBILITY.md", "CONTEXT.md",
 		"CHANGELOG.md", "docs/api.md", "docs/tutorial.md", "docs/release.md", "docs/readiness.md", "docs/migration.md",
 		"docs/qualification.md", "docs/recovery.md", "schemas/compatibility-contract-v1beta1.schema.json",
-		"schemas/lifecycle-migration-v1alpha1.schema.json", "schemas/lifecycle-migration-v1beta1.schema.json", "schemas/authority-adoption-v1alpha1.schema.json", "schemas/authority-rotation-v1alpha1.schema.json", "schemas/lifecycle-projection-v1alpha1.schema.json",
+		"schemas/lifecycle-migration-v1alpha1.schema.json", "schemas/lifecycle-migration-v1beta1.schema.json", "schemas/authority-adoption-v1alpha1.schema.json", "schemas/authority-rotation-v1alpha1.schema.json", "schemas/authority-relocation-v1alpha1.schema.json", "schemas/lifecycle-projection-v1alpha1.schema.json",
 		"internal/compatibility/beta-window.json",
 	}
 	layoutOK := true
@@ -108,30 +108,7 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 	contractOK := validateContractSchema(root, contractReport) == nil
 	add("compatibility-contract", contractOK, chooseCode(contractOK, "contract_schema_valid", "contract_schema_invalid"))
 
-	surfaces := []contract.DocumentedSurface{
-		contractReport.CommandCatalog, contractReport.CLIError, contractReport.DecisionRecord, contractReport.Installation, contractReport.HistoricalMatrix, contractReport.Readiness,
-		contractReport.UI, contractReport.Security, contractReport.JournalVerification,
-		contractReport.PluginConformance, contractReport.Support, contractReport.Recovery, contractReport.AuthorityAdoption, contractReport.AuthorityRotation,
-		contractReport.ReleaseQualification, contractReport.ReleaseManifest, contractReport.ReleaseVerification,
-		contractReport.LifecycleMigrationV1Alpha1, contractReport.LifecycleMigration, contractReport.LifecycleProjection,
-	}
-	digestsOK := true
-	for _, surface := range surfaces {
-		raw, readErr := readSourceFile(root, surface.SchemaPath)
-		if readErr != nil || !json.Valid(raw) {
-			digestsOK = false
-			continue
-		}
-		digest := sha256.Sum256(raw)
-		if "sha256:"+hex.EncodeToString(digest[:]) != surface.SchemaSHA256 {
-			digestsOK = false
-		}
-	}
-	graphRaw, graphErr := readSourceFile(root, contractReport.Graph.SchemaPath)
-	graphDigest := sha256.Sum256(graphRaw)
-	if graphErr != nil || !json.Valid(graphRaw) || "sha256:"+hex.EncodeToString(graphDigest[:]) != contractReport.Graph.SchemaSHA256 {
-		digestsOK = false
-	}
+	digestsOK := publishedSchemaDigestsMatch(root, contractReport)
 	add("published-schema-digests", digestsOK, chooseCode(digestsOK, "all_schema_digests_match", "schema_digest_mismatch"))
 	neutral := validationSubjectBoundary(root)
 	add("validation-subject-boundary", neutral, chooseCode(neutral, "generic_boundary_contracts_closed", "generic_boundary_contract_invalid"))
@@ -185,6 +162,40 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 		}
 	}
 	return report, nil
+}
+
+func publishedSchemaSurfaces(report contract.Report) []contract.DocumentedSurface {
+	return []contract.DocumentedSurface{
+		report.CommandCatalog, report.CLIError, report.DecisionRecord, report.Installation, report.HistoricalMatrix, report.Readiness,
+		report.UI, report.Security, report.JournalVerification,
+		report.PluginConformance, report.Support, report.Recovery, report.AuthorityAdoption, report.AuthorityRotation, report.AuthorityRelocation,
+		report.ReleaseQualification, report.ReleaseManifest, report.ReleaseVerification,
+		report.LifecycleMigrationV1Alpha1, report.LifecycleMigration, report.LifecycleProjection,
+	}
+}
+
+func publishedSchemaDigestsMatch(root string, report contract.Report) bool {
+	return publishedSchemaDigestsMatchReader(report, func(relative string) ([]byte, error) {
+		return readSourceFile(root, relative)
+	})
+}
+
+func publishedSchemaDigestsMatchReader(report contract.Report, read func(string) ([]byte, error)) bool {
+	valid := true
+	for _, surface := range publishedSchemaSurfaces(report) {
+		raw, err := read(surface.SchemaPath)
+		if err != nil || !json.Valid(raw) {
+			valid = false
+			continue
+		}
+		digest := sha256.Sum256(raw)
+		if "sha256:"+hex.EncodeToString(digest[:]) != surface.SchemaSHA256 {
+			valid = false
+		}
+	}
+	graphRaw, graphErr := read(report.Graph.SchemaPath)
+	graphDigest := sha256.Sum256(graphRaw)
+	return valid && graphErr == nil && json.Valid(graphRaw) && "sha256:"+hex.EncodeToString(graphDigest[:]) == report.Graph.SchemaSHA256
 }
 
 func validationSubjectBoundary(root string) bool {

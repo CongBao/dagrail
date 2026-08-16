@@ -28,7 +28,7 @@ candidate still reports production adoption gaps explicitly.
 | Disaster recovery | exact-prefix restore, legacy upcast, stale/deleted projection, independent rebuild | identical state and logical projection fingerprints without live mutation |
 | Release artifacts | missing/extra/mutated files, duplicate/unsorted checksums, unsafe archives, invalid SPDX, identity drift | one closed 12-payload manifest and schema-valid offline verification |
 | Operator automation | unknown commands, cancellation, oversized errors, catalog/completion drift, missing harnesses | schema-valid bounded errors/catalogs, stable exit classes, cancellation, and path-free installation checks |
-| Historical binaries | pinned v0.10–v0.21 source commits plus current candidate | every binary builds; adjacent runtime upgrade/rollback/re-forward works; current recovers a v0.10 journal |
+| Historical binaries | pinned v0.10–v0.22 source commits plus current candidate | every binary builds; adjacent runtime upgrade/rollback/re-forward works; current recovers a v0.10 journal and the v0.22 replacement-relocation path |
 | Validation-subject boundary | ADR, migration contract, reducer allowlist, and self-contained public schema | repository-neutral conversion remains external and native lifecycle event surfaces stay closed; independent cold review checks semantic coupling that structural qualification cannot prove |
 | Localhost browser boundary | DNS-rebinding Host and cross-port localhost Origin | 421/403 rejection, no CORS, same-origin resource/opener policy, read-only routes unchanged |
 
@@ -58,7 +58,9 @@ Run individual fuzz targets for longer investigations:
 ```sh
 go test ./internal/domain -run '^$' -fuzz '^FuzzValidateGraphJSON$' -fuzztime=30s
 go test ./internal/journal -run '^$' -fuzz '^FuzzValidateSegments$' -fuzztime=30s
+go test ./internal/service -run '^$' -fuzz '^FuzzDecodeGraphDefinition$' -fuzztime=30s
 go test ./internal/service -run '^$' -fuzz '^FuzzDecodeGraphPatch$' -fuzztime=30s
+go test ./internal/service -run '^$' -fuzz '^FuzzDecodeLifecycleMigrationAuthority$' -fuzztime=30s
 go test ./internal/harness -run '^$' -fuzz '^FuzzNativeReceiptConformance$' -fuzztime=30s
 go test ./internal/release -run '^$' -fuzz '^FuzzReleaseMetadataInputs$' -fuzztime=30s
 ```
