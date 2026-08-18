@@ -615,7 +615,7 @@ func validateLifecycleEffectDeclaration(effect domain.EffectAction, node domain.
 	if err := json.Unmarshal(node.Inputs, &declaration); err != nil || declaration.Adapter == "" || len(declaration.Request) == 0 || isNullAuthorityJSON(declaration.Request) {
 		return fmt.Errorf("effect node declaration is invalid")
 	}
-	if effect.AdapterID != declaration.Adapter || !canonicalAuthorityJSONEqual(effect.Request, declaration.Request) {
+	if effect.AdapterID != declaration.Adapter || !validEffectAdapterMetadataPair(effect) || !canonicalAuthorityJSONEqual(effect.Request, declaration.Request) {
 		return fmt.Errorf("effect preparation does not match its graph declaration")
 	}
 	var prepared sdk.PreparedEffect
@@ -623,6 +623,10 @@ func validateLifecycleEffectDeclaration(effect domain.EffectAction, node domain.
 		return fmt.Errorf("effect preparation binding is invalid")
 	}
 	return nil
+}
+
+func validEffectAdapterMetadataPair(effect domain.EffectAction) bool {
+	return (effect.AdapterVersion == "") == (effect.AdapterSchemaHash == "")
 }
 
 func canonicalAuthorityJSONEqual(first, second json.RawMessage) bool {
@@ -639,6 +643,9 @@ func validateLifecycleAction(action domain.ActionRecord, state domain.State, con
 	node, nodeOK := state.NodeDefinition(action.NodeID)
 	if !ok || !nodeOK || attempt.NodeID != action.NodeID {
 		return fmt.Errorf("action target is inconsistent")
+	}
+	if err := validateAllowedActionInput(persistedActionInputSchema(action.Kind, node), action.Input); err != nil {
+		return fmt.Errorf("action input is outside its writer schema: %w", err)
 	}
 	confirmed := lifecycleConfirmedActionKinds()
 	completionKinds := map[string]bool{"task.complete": true, "review.resolve": true, "decision.record": true, "effect.complete": true, "attempt.finish": true, "gate.evaluate": true}
@@ -780,6 +787,9 @@ func validateLifecycleAction(action domain.ActionRecord, state domain.State, con
 				}
 			} else {
 				input, inputErr := decodeCompletionInput(action.Input)
+				if inputErr == nil {
+					input.Outcome, inputErr = resolveCompletionOutcome(node, input.Outcome, input.OutcomeRef)
+				}
 				if inputErr != nil || input.Outcome != finish.Outcome || !reflect.DeepEqual(input.Facts, finish.Facts) {
 					return fmt.Errorf("completion action input contradicts its terminal event")
 				}
@@ -795,6 +805,36 @@ func validateLifecycleAction(action domain.ActionRecord, state domain.State, con
 		}
 	}
 	return nil
+}
+
+func persistedActionInputSchema(kind string, node domain.NodeDefinition) map[string]any {
+	closedRef := func(name string) map[string]any {
+		return map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"required":             []string{name},
+			"properties": map[string]any{
+				name: map[string]any{"type": "string", "minLength": 1, "maxLength": 256},
+			},
+		}
+	}
+	switch kind {
+	case "node.start", "attempt.checkpoint", "attempt.wait", "attempt.resume", "attempt.submit", "task.complete", "effect.prepare", "effect.complete", "attempt.finish":
+		// Released pre-v0.23 writers kept these caller inputs verbatim and either
+		// ignored them or decoded only their known semantic fields. Migration
+		// validates those fields against the companion native events below; it
+		// must not retroactively apply the newer closed caller schema to immutable
+		// history (including previously ignored fields or scalar no-op inputs).
+		return map[string]any{}
+	case "evidence.publish":
+		return closedRef("packageId")
+	case "evidence.assess-reuse", "review.resolve", "decision.record", "gate.evaluate":
+		return closedRef("decisionId")
+	case "resource.close", "resource.reconcile":
+		return closedRef("resourceId")
+	default:
+		return actionInputSchema(kind, node)
+	}
 }
 
 func validateLifecycleRecordClosed(state *domain.State, context *lifecycleRecordContext) error {
@@ -1158,6 +1198,14 @@ func validateLifecycleIncident(incident domain.Incident, state domain.State, eve
 	if incident.DispositionAt != "" && (!timestampAtOrAfter(incident.DispositionAt, incident.OpenedAt) || !timestampAtOrBefore(incident.DispositionAt, incident.UpdatedAt)) {
 		return fmt.Errorf("incident disposition time is invalid")
 	}
+	hasRepairBinding := incident.RemedyNodeID != "" || incident.SupersededAt != ""
+	if incident.Resolution == incidentResolutionSupersededByRepair && hasRepairBinding {
+		if incident.SourceType != "attempt" || incident.Status != "resolved" || incident.RemedyNodeID == "" || incident.SupersededAt != incident.UpdatedAt || !validIncidentSuccessor(state, incident, incident.RemedyNodeID) {
+			return fmt.Errorf("incident repair successor is invalid")
+		}
+	} else if hasRepairBinding {
+		return fmt.Errorf("incident repair binding requires the reserved successor resolution")
+	}
 	if incident.NodeID != "" {
 		if _, ok := state.NodeDefinition(incident.NodeID); !ok {
 			return fmt.Errorf("incident references an unknown node")
@@ -1215,9 +1263,20 @@ func validExplicitIncidentUpdate(prior, next domain.Incident) bool {
 	base.UpdatedAt = next.UpdatedAt
 	candidates := []domain.Incident{}
 
-	if prior.Status != "resolved" && prior.SourceType == "attempt" && next.Resolution != "" {
+	hasRepairBinding := next.RemedyNodeID != "" || next.SupersededAt != ""
+	if prior.Status != "resolved" && prior.SourceType == "attempt" && next.Resolution != "" && (next.Resolution != incidentResolutionSupersededByRepair || !hasRepairBinding) {
 		candidate := base
 		candidate.Status, candidate.Resolution = "resolved", next.Resolution
+		candidates = append(candidates, candidate)
+	}
+	if prior.Status != "resolved" && prior.SourceType == "attempt" && next.Resolution == incidentResolutionSupersededByRepair && next.RemedyNodeID != "" && next.SupersededAt == next.UpdatedAt && next.LastProgress != "" && next.LastProgressAt == next.UpdatedAt {
+		candidate := base
+		candidate.Status = "resolved"
+		candidate.Resolution = incidentResolutionSupersededByRepair
+		candidate.RemedyNodeID = next.RemedyNodeID
+		candidate.SupersededAt = next.SupersededAt
+		candidate.LastProgress = next.LastProgress
+		candidate.LastProgressAt = next.LastProgressAt
 		candidates = append(candidates, candidate)
 	}
 	if prior.Status != "resolved" && next.CircuitReason != "" {

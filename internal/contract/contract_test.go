@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/CongBao/dagrail/internal/compatibility"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -27,7 +29,7 @@ func TestBetaContractIsDeterministicAndNamesExactlySixMCPTools(t *testing.T) {
 	if first.APIVersion != "dagrail.io/v1beta1" || first.Kind != "CompatibilityContract" || first.UI.APIVersion != "dagrail.io/ui/v1beta1" || len(first.MCP) != 6 {
 		t.Fatalf("unexpected beta contract: %#v", first)
 	}
-	for name, surface := range map[string]DocumentedSurface{"command catalog": first.CommandCatalog, "CLI error": first.CLIError, "decision record": first.DecisionRecord, "installation diagnostic": first.Installation, "historical binary matrix": first.HistoricalMatrix, "readiness decision": first.Readiness, "ui": first.UI, "security": first.Security, "journal verification": first.JournalVerification, "plugin conformance": first.PluginConformance, "support": first.Support, "recovery": first.Recovery, "authority adoption": first.AuthorityAdoption, "authority rotation": first.AuthorityRotation, "authority relocation": first.AuthorityRelocation, "release qualification": first.ReleaseQualification, "release manifest": first.ReleaseManifest, "release verification": first.ReleaseVerification, "lifecycle migration v1alpha1": first.LifecycleMigrationV1Alpha1, "lifecycle migration v1beta1": first.LifecycleMigration, "lifecycle projection": first.LifecycleProjection} {
+	for name, surface := range map[string]DocumentedSurface{"command catalog": first.CommandCatalog, "CLI error": first.CLIError, "decision record": first.DecisionRecord, "installation diagnostic": first.Installation, "historical binary matrix": first.HistoricalMatrix, "readiness decision": first.Readiness, "ui": first.UI, "security": first.Security, "journal verification": first.JournalVerification, "plugin conformance": first.PluginConformance, "support": first.Support, "recovery": first.Recovery, "authority adoption": first.AuthorityAdoption, "authority rotation": first.AuthorityRotation, "authority relocation": first.AuthorityRelocation, "git artifact closure": first.GitArtifactClosure, "git integration scope": first.GitIntegrationScope, "release qualification": first.ReleaseQualification, "release manifest": first.ReleaseManifest, "release verification": first.ReleaseVerification, "lifecycle migration v1alpha1": first.LifecycleMigrationV1Alpha1, "lifecycle migration v1beta1": first.LifecycleMigration, "lifecycle projection": first.LifecycleProjection} {
 		schemaRaw, err := os.ReadFile("../../" + surface.SchemaPath)
 		if err != nil {
 			t.Fatal(err)
@@ -85,5 +87,20 @@ func TestBetaContractMatchesItsPublishedSchema(t *testing.T) {
 	}
 	if err := schema.Validate(instance); err != nil {
 		t.Fatalf("contract does not match published schema: %v", err)
+	}
+}
+
+func TestBetaContractPromiseNamesTheClosedHistoricalWindow(t *testing.T) {
+	window, _, err := compatibility.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("v%s through v%s", window.FromVersion, window.Entries[len(window.Entries)-1].Version)
+	found := false
+	for _, promise := range Current().Promises {
+		found = found || strings.Contains(promise, want)
+	}
+	if !found {
+		t.Fatalf("compatibility promises do not name the executable historical window %s: %v", want, Current().Promises)
 	}
 }

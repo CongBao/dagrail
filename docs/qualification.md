@@ -21,7 +21,7 @@ candidate still reports production adoption gaps explicitly.
 | Projection corruption | invalid SQLite bytes after a valid journal commit | corrupt file is quarantined and the projection is rebuilt from the journal |
 | Longevity | 256 sequential segments and a repeated final command | sequence/hash chain verifies and retry remains idempotent |
 | Scale/context | 2,048 simultaneously ready nodes | full frontier is inspectable; orchestrator, worker, and reviewer contexts stay in budget |
-| Structured inputs | graph, patch, segment, and receipt fuzz corpora | no panic, unsafe receipt promotion, or unbounded accepted input |
+| Structured inputs | graph, patch, segment, receipt, and Git-closure fuzz corpora | no panic, unsafe receipt promotion, or unbounded accepted input |
 | Trust boundary | duplicate/unknown/deep inputs, oversized MCP/hook/journal frames, permission drift | closed rejection and path-redacted audit evidence |
 | Plugin projection | linked bytes, relative marketplace sources, local materialization mutation, missing hosts | exact bundle verification and closed conformance reasons with manual fallback |
 | Support evidence | private roots, project/graph/Node/actor identities, repeat export | schema-valid aggregate report, no private values, and exclusive file creation |
@@ -63,6 +63,7 @@ go test ./internal/service -run '^$' -fuzz '^FuzzDecodeGraphPatch$' -fuzztime=30
 go test ./internal/service -run '^$' -fuzz '^FuzzDecodeLifecycleMigrationAuthority$' -fuzztime=30s
 go test ./internal/harness -run '^$' -fuzz '^FuzzNativeReceiptConformance$' -fuzztime=30s
 go test ./internal/release -run '^$' -fuzz '^FuzzReleaseMetadataInputs$' -fuzztime=30s
+go test ./internal/gitartifact -run '^$' -fuzz '^FuzzDecodeClosureManifest$' -fuzztime=30s
 ```
 
 CLI contract tests validate the published CommandCatalog, CLIError, and
@@ -107,7 +108,7 @@ reports drift if that independently active source advances later.
 
 The `historical-binary-compatibility` CI and tag-release job uses a full Git history and
 the closed manifest in `internal/compatibility/beta-window.json`. Unlike reducer-only
-fixtures, it compiles and executes each real v0.10–v0.22.1 source snapshot. The test is
+fixtures, it compiles and executes each real v0.10.0–v0.22.2 source snapshot. The test is
 behind the `historical` build tag so normal unit loops remain fast:
 
 ```sh

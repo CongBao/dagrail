@@ -94,6 +94,7 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 		"CHANGELOG.md", "docs/api.md", "docs/tutorial.md", "docs/release.md", "docs/readiness.md", "docs/migration.md",
 		"docs/qualification.md", "docs/recovery.md", "schemas/compatibility-contract-v1beta1.schema.json",
 		"schemas/lifecycle-migration-v1alpha1.schema.json", "schemas/lifecycle-migration-v1beta1.schema.json", "schemas/authority-adoption-v1alpha1.schema.json", "schemas/authority-rotation-v1alpha1.schema.json", "schemas/authority-relocation-v1alpha1.schema.json", "schemas/lifecycle-projection-v1alpha1.schema.json",
+		"schemas/git-artifact-closure-v1alpha1.schema.json", "schemas/git-integration-scope-v1alpha1.schema.json",
 		"internal/compatibility/beta-window.json",
 	}
 	layoutOK := true
@@ -169,6 +170,7 @@ func publishedSchemaSurfaces(report contract.Report) []contract.DocumentedSurfac
 		report.CommandCatalog, report.CLIError, report.DecisionRecord, report.Installation, report.HistoricalMatrix, report.Readiness,
 		report.UI, report.Security, report.JournalVerification,
 		report.PluginConformance, report.Support, report.Recovery, report.AuthorityAdoption, report.AuthorityRotation, report.AuthorityRelocation,
+		report.GitArtifactClosure, report.GitIntegrationScope,
 		report.ReleaseQualification, report.ReleaseManifest, report.ReleaseVerification,
 		report.LifecycleMigrationV1Alpha1, report.LifecycleMigration, report.LifecycleProjection,
 	}

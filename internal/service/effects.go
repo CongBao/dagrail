@@ -51,6 +51,10 @@ func (s *Service) applyEffectAction(ctx context.Context, state domain.State, pay
 	if !ok {
 		return ActionResult{}, fmt.Errorf("effect adapter %s is not registered", declaration.Adapter)
 	}
+	adapterMetadata := adapter.Metadata()
+	if adapterMetadata.ID != declaration.Adapter || adapterMetadata.Version == "" || adapterMetadata.SchemaHash == "" {
+		return ActionResult{}, fmt.Errorf("effect adapter %s has invalid metadata", declaration.Adapter)
+	}
 	request := sdk.EffectRequest{ActionID: payload.ActionID, ProjectRoot: s.Project.Root, NodeID: node.ID, AttemptID: attempt.ID, IdempotencyKey: idempotencyKey, Request: declaration.Request}
 	prepared, err := adapter.Prepare(ctx, request)
 	if err != nil {
@@ -97,7 +101,7 @@ func (s *Service) applyEffectAction(ctx context.Context, state domain.State, pay
 	}
 	preparedRaw, _ := json.Marshal(prepared)
 	now := preparedAt.Format(time.RFC3339Nano)
-	effect := domain.EffectAction{ID: payload.ActionID, NodeID: node.ID, AttemptID: attempt.ID, AdapterID: declaration.Adapter, OwnerRole: payload.RoleID, Status: "prepared", Request: declaration.Request, Prepared: preparedRaw, IdempotencyKey: idempotencyKey, PreparedAt: now, UpdatedAt: now}
+	effect := domain.EffectAction{ID: payload.ActionID, NodeID: node.ID, AttemptID: attempt.ID, AdapterID: declaration.Adapter, AdapterVersion: adapterMetadata.Version, AdapterSchemaHash: adapterMetadata.SchemaHash, OwnerRole: payload.RoleID, Status: "prepared", Request: declaration.Request, Prepared: preparedRaw, IdempotencyKey: idempotencyKey, PreparedAt: now, UpdatedAt: now}
 	effectRaw, _ := json.Marshal(effect)
 	action := domain.ActionRecord{ID: payload.ActionID, Kind: payload.Kind, NodeID: node.ID, AttemptID: attempt.ID, Status: "prepared", Input: input}
 	actionRaw, _ := json.Marshal(action)
@@ -220,6 +224,9 @@ func (s *Service) ReconcileEffectContext(ctx context.Context, actionID string, e
 	if !ok {
 		return domain.EffectAction{}, fmt.Errorf("effect adapter %s is not registered", effect.AdapterID)
 	}
+	if err := validateEffectAdapterBinding(effect, adapter.Metadata()); err != nil {
+		return domain.EffectAction{}, err
+	}
 	var prepared sdk.PreparedEffect
 	if err := json.Unmarshal(effect.Prepared, &prepared); err != nil {
 		return domain.EffectAction{}, err
@@ -240,6 +247,16 @@ func (s *Service) ReconcileEffectContext(ctx context.Context, actionID string, e
 		return domain.EffectAction{}, err
 	}
 	return s.observeEffect(actionID, effect.OwnerRole, receipt, idempotencyKey, requestDigest)
+}
+
+func validateEffectAdapterBinding(effect domain.EffectAction, metadata sdk.Metadata) error {
+	if effect.AdapterVersion == "" || effect.AdapterSchemaHash == "" {
+		return fmt.Errorf("effect %s predates adapter metadata binding and cannot be reconciled automatically", effect.ID)
+	}
+	if metadata.ID != effect.AdapterID || metadata.Version != effect.AdapterVersion || metadata.SchemaHash != effect.AdapterSchemaHash {
+		return fmt.Errorf("effect adapter metadata changed since preparation")
+	}
+	return nil
 }
 
 // acquireEffectReconcileLock serializes dispatch and reconcile observations for

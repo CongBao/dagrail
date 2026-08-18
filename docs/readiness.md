@@ -26,8 +26,8 @@ be mistaken for production evidence.
 
 ## Historical compatibility evidence
 
-The closed beta window starts at v0.10. The manifest in
-`internal/compatibility/beta-window.json` pins the exact v0.10–v0.21 source commits. A
+The closed beta window starts at v0.10.0. The manifest in
+`internal/compatibility/beta-window.json` pins the exact v0.10.0–v0.22.2 source commits. A
 dedicated CI and tag-release job builds every pinned binary plus the candidate, verifies
 every adjacent runtime install/upgrade/rollback/re-forward pair, then asks the candidate
 to verify and recover a journal created by v0.10. The manifest is immutable input: a

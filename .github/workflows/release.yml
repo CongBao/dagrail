@@ -33,6 +33,7 @@ jobs:
           go test ./internal/service -run '^$' -fuzz '^FuzzDecodeLifecycleMigrationAuthority$' -fuzztime=5s
           go test ./internal/harness -run '^$' -fuzz '^FuzzNativeReceiptConformance$' -fuzztime=5s
           go test ./internal/release -run '^$' -fuzz '^FuzzReleaseMetadataInputs$' -fuzztime=5s
+          go test ./internal/gitartifact -run '^$' -fuzz '^FuzzDecodeClosureManifest$' -fuzztime=5s
       - name: Verify structural release qualification
         run: go run ./cmd/dagrail qualify release --source .
 

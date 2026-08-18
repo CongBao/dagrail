@@ -2,12 +2,15 @@ package cli_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -106,6 +109,162 @@ func TestRelocationPreflightReadSurfacesDoNotMutateProtectedProjectBytes(t *test
 			t.Fatalf("read surface mutated protected bytes: %v", changedSnapshotPaths(before, after))
 		}
 	})
+}
+
+func TestCLIUsesOpaqueSelectorsForSchemaLegalLargeRoleAndNode(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(t.TempDir(), "runtime"))
+	roleID := "role-" + strings.Repeat("r", 30_000)
+	nodeID := "node-" + strings.Repeat("n", 30_000)
+	graphPath := filepath.Join(root, "graph.json")
+	graph, _ := json.Marshal(map[string]any{"apiVersion": "dagrail.io/v1alpha1", "kind": "Graph", "metadata": map[string]any{"name": "opaque-cli"}, "spec": map[string]any{"roles": []map[string]any{{"id": roleID, "capabilities": []string{"node.run"}}}, "nodes": []map[string]any{{"id": nodeID, "kind": "task", "role": roleID, "title": "task", "outcomes": []map[string]any{{"id": "done", "class": "success"}}}}, "edges": []any{}}})
+	if err := os.WriteFile(graphPath, graph, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) (string, error) {
+		var stdout, stderr bytes.Buffer
+		err := cli.Run(args, strings.NewReader(""), &stdout, &stderr)
+		return stdout.String(), err
+	}
+	if _, err := run("init", "--root", root, "--name", "opaque-cli"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("graph", "import", "--root", root, "--file", graphPath, "--idempotency-key", "import"); err != nil {
+		t.Fatal(err)
+	}
+	frontier, err := run("frontier", "--root", root)
+	if err != nil || len(frontier) > 24*1024 || strings.Contains(frontier, nodeID) || !strings.Contains(frontier, "inspect:") {
+		t.Fatalf("default frontier was not bounded and recoverable: bytes=%d err=%v", len(frontier), err)
+	}
+	frontierJSON, err := run("frontier", "--root", root, "--format", "json")
+	if err != nil || len(frontierJSON) > 24*1024 || strings.Contains(frontierJSON, nodeID) || !strings.Contains(frontierJSON, `"detailRef"`) {
+		t.Fatalf("JSON frontier was not bounded and recoverable: bytes=%d err=%v", len(frontierJSON), err)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	var cancelledOutput, cancelledErrors bytes.Buffer
+	err = cli.RunContext(cancelled, []string{"frontier", "--root", root}, strings.NewReader(""), &cancelledOutput, &cancelledErrors)
+	if !errors.Is(err, context.Canceled) || cancelledOutput.Len() != 0 {
+		t.Fatalf("frontier ignored caller cancellation: output=%q err=%v", cancelledOutput.String(), err)
+	}
+	svc, err := service.OpenForInspection(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roleRef, err := svc.EntityRef("role", roleID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeRef, err := svc.EntityRef("node", nodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := run("role", "bind", "--root", root, "--role-ref", roleRef, "--harness", "codex", "--session", strings.Repeat("s", 30_000), "--ttl", "1h", "--idempotency-key", "bind")
+	if err != nil || len(bound) > 24*1024 || strings.Contains(bound, roleID) {
+		t.Fatalf("opaque Role bind was not bounded: bytes=%d err=%v", len(bound), err)
+	}
+	actions, err := run("action", "list", "--root", root, "--role-ref", roleRef, "--node-ref", nodeRef)
+	if err != nil || len(actions) > 24*1024 || strings.Contains(actions, nodeID) {
+		t.Fatalf("opaque action list was not bounded: bytes=%d err=%v", len(actions), err)
+	}
+	contextOutput, err := run("context", "--root", root, "--view", "worker", "--role-ref", roleRef, "--node-ref", nodeRef, "--budget-bytes", "512")
+	if err != nil || len(contextOutput) > 513 || strings.Contains(contextOutput, roleID) || strings.Contains(contextOutput, nodeID) {
+		t.Fatalf("opaque context was not bounded: bytes=%d err=%v", len(contextOutput), err)
+	}
+}
+
+func TestMissingActionSecretReadSurfacesFailClosedWithoutMutation(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(t.TempDir(), "runtime"))
+	graphPath := filepath.Join(root, "graph.json")
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"missing-action-secret"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"task","kind":"task","role":"worker","title":"task","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
+	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) error {
+		var stdout, stderr bytes.Buffer
+		return cli.Run(args, strings.NewReader(""), &stdout, &stderr)
+	}
+	if err := run("init", "--root", root, "--name", "missing-action-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run("graph", "import", "--root", root, "--file", graphPath, "--idempotency-key", "graph/import"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run("role", "bind", "--root", root, "--role", "worker", "--harness", "codex", "--session", "session", "--ttl", "1h", "--idempotency-key", "role/bind"); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := service.OpenForRecovery(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextRaw, err := svc.Context("worker", "worker", "task", 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contextEnvelope struct {
+		Data struct {
+			OperationsRef string `json:"operationsRef"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(contextRaw, &contextEnvelope); err != nil || contextEnvelope.Data.OperationsRef == "" {
+		t.Fatalf("decode operations ref before damage: %v %s", err, contextRaw)
+	}
+	secretPath := filepath.Join(svc.Project.DataDir, "action-secret")
+	if err := os.Remove(secretPath); err != nil {
+		t.Fatal(err)
+	}
+	before := protectedProjectSnapshot(t, root, svc.Project.DataDir)
+	for _, args := range [][]string{
+		{"action", "list", "--root", root, "--role", "worker", "--node", "task"},
+		{"context", "--root", root, "--view", "worker", "--role", "worker", "--node", "task", "--budget-bytes", "512"},
+		{"inspect", "--root", root, contextEnvelope.Data.OperationsRef},
+	} {
+		if err := run(args...); err == nil || !strings.Contains(err.Error(), "action secret is not initialized") {
+			t.Fatalf("read surface did not fail closed for missing action secret: args=%v err=%v", args, err)
+		}
+		after := protectedProjectSnapshot(t, root, svc.Project.DataDir)
+		if !reflect.DeepEqual(before, after) {
+			t.Fatalf("read surface repaired action secret implicitly: args=%v changed=%v", args, changedSnapshotPaths(before, after))
+		}
+	}
+	if _, err := os.Stat(secretPath); !os.IsNotExist(err) {
+		t.Fatalf("read surface recreated missing action secret: %v", err)
+	}
+
+	for _, test := range []struct {
+		name    string
+		secret  []byte
+		mode    os.FileMode
+		message string
+		skip    bool
+	}{
+		{name: "truncated", secret: make([]byte, 31), mode: 0o600, message: "32-byte"},
+		{name: "excess-permissions", secret: make([]byte, 32), mode: 0o644, message: "permissions", skip: runtime.GOOS == "windows"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.skip {
+				t.Skip("POSIX permission check is not available on Windows")
+			}
+			if err := os.WriteFile(secretPath, test.secret, test.mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(secretPath, test.mode); err != nil {
+				t.Fatal(err)
+			}
+			before := protectedProjectSnapshot(t, root, svc.Project.DataDir)
+			if err := run("inspect", "--root", root, contextEnvelope.Data.OperationsRef); err == nil || !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("operations inspection hid %s action secret: %v", test.name, err)
+			}
+			after := protectedProjectSnapshot(t, root, svc.Project.DataDir)
+			if !reflect.DeepEqual(before, after) {
+				t.Fatalf("operations inspection mutated damaged secret state: %v", changedSnapshotPaths(before, after))
+			}
+		})
+		if err := os.Remove(secretPath); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func TestReadSurfaceCLIHelper(t *testing.T) {

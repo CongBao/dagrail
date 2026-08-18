@@ -200,3 +200,104 @@ vocabulary, repository paths, and cutover policy are not shipped as DAGrail cont
   cursor regression;
 - add a real subprocess preflight matrix that hashes the complete project locator and
   runtime before and after every supported read surface, including a stale cache.
+
+## v0.23.0 — Field operations and handoff evidence
+
+- turn `pre-wait` blockers into deterministic, owner-bound remediation proposals and
+  expose project-wide signed actions plus a compact Role authorization envelope;
+- close Attempt incidents through a typed repair-successor handoff without rewriting
+  the failed Attempt or relying on chat to remember the new owner;
+- distinguish unrelated journal progress from a prepared Effect's causal adapter ID,
+  version, schema, and canonical request contract;
+- publish read-only Git integration-scope and artifact-closure reports that separate
+  producer changes from target history and verify consumer reachability before cleanup;
+- keep all new evidence schemas digest-bound by the public compatibility contract and
+  release qualification, while retaining the six-tool MCP boundary.
+
+## Post-v0.23 field-validation backlog
+
+These are repository-neutral observations from the first live writer cutover. They are
+candidate priorities, not a committed release scope. Re-evaluate them after the first
+three post-cutover lifecycle closures or 50 additional journal segments, whichever
+happens first, and assign versions only after new evidence confirms priority.
+
+The accepted v0.24 hierarchical-subgraph milestone is specified in
+[`docs/v0.24-hierarchical-subgraphs.md`](v0.24-hierarchical-subgraphs.md). Product-side
+evidence remains an external validation input; no product vocabulary or adapter becomes
+part of the DAGrail kernel.
+
+### Recovery and imported-state hygiene
+
+- retain a verified current-authority backup in a durable, operator-selected location;
+  a historical verification receipt or digest is not a recoverable backup artifact;
+- add a closed import disposition for historical attempts that were running at the
+  source cutoff, so they can remain auditable without permanently appearing live to
+  frontier, capacity, and pre-wait calculations;
+- provide an evidence-bound retirement/quarantine operation for stale execution
+  ledgers and packages before a new attempt enters an expensive execution phase.
+
+### Projection and historical evidence
+
+- define a generic projection-publication provider contract for arbitrary current
+  journal heads, stable external targets, exactly-once intent, zero-write identical
+  retry, reconcile, and independent rebuild equivalence; project-specific views remain
+  outside the kernel;
+- expose byte-read-only point-in-time projection and pre-wait inspection by authenticated
+  sequence or head, plus a content-addressed evidence bundle, without requiring callers
+  to invoke internal reducers or reconstruct old query output from chat transcripts;
+- bind continuity proofs to action, attempt, Effect, and causal identities instead of
+  inferring saga position from the current head or fixed migration sequence numbers;
+- separate stable semantic result fields from environment-specific telemetry in evidence
+  schemas and comparator contracts, authenticating both while declaring which fields
+  participate in cross-run or cross-environment equality;
+- distinguish migration debt from later operational or adapter debt in closure reports,
+  so a zero-debt cutover boundary does not hide known post-cutover work.
+- bind v0.23 Git scope reports into execution/admission evidence when a workflow needs
+  the three delta classes to become durable policy input rather than a read-only check.
+
+### Controller and graph ergonomics
+
+- generate previewable retry/supersede Graph patches for terminal or permanently skipped
+  execution chains instead of requiring an orchestrator to clone a subgraph manually;
+- issue an opaque, revision-bound assignment reference for cross-session work packages;
+  the receiver must re-resolve or reject it when the Graph or journal head has advanced;
+- move governance handoff, admission, and evidence transfer toward typed package refs so
+  sessions do not carry large JSON envelopes, exact hashes, and full evidence indexes;
+- require every Git candidate or prospective integration named by a package ref to remain
+  consumer-reachable through a durable ref, annotated tag, or verified bundle; a commit
+  digest alone is not a transferable artifact, and submit/complete must fail before
+  journal mutation when the receiving repository cannot resolve the object;
+- make disposable-root cleanup consume the v0.23 artifact-closure report as a
+  lifecycle-bound receipt, so verification is acknowledged and durable before cleanup;
+- support a typed metadata-only artifact rehydration successor when an already accepted
+  review binds an exact tree digest but its transport object was lost; reconstruction
+  must prove byte/tree identity and preserve the original semantic evidence without
+  reopening semantic review;
+- add a deterministic producer/consumer reachability preflight that verifies candidate,
+  parents, prospective commit and tree in the receiving object store before expensive
+  review or admission, while keeping conflict repair outside deterministic admission;
+- generate a previewable repair successor and admission edge directly from closed return
+  fields, carrying forward still-valid candidate and review evidence; the orchestrator
+  should approve the proposed topology, not manually reproduce the returned failure in a
+  fresh Graph patch;
+- make the v0.23 Incident successor action and an approved repair Graph patch one
+  crash-recoverable transition when both are created together;
+- keep delivery acknowledgement, recipient acceptance and controller resource closure as
+  distinct receipts, but surface the remaining owner slot and its fresh close action in
+  the same bounded context so a delivered node cannot silently retain global capacity;
+- consider authenticated checkpoint indexes or segment packs that accelerate large
+  journal replay and export without rewriting append-only authority.
+
+### Harness and bounded-context UX
+
+- add a fresh-process MCP activation probe that proves the six high-level tools are
+  callable, while continuing to emit exact CLI fallback commands when activation cannot
+  be proven;
+- encode context budget maxima and other closed limits directly in MCP input schemas,
+  and return controller-generated inspect refs or bounded lookup results so callers do
+  not guess stale or nonexistent object references;
+- make worker/reviewer context and inspection expose the same fresh allowed-action set as
+  the CLI, and provide an atomic select-and-apply path that forwards an opaque ref without
+  manual transcription while still revalidating head, Role, session and input schema;
+- surface lease-expiry warnings and a controller-generated renewal action before long
+  reviews or external Effects cross their Role lease boundary.

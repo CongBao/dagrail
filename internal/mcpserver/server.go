@@ -26,7 +26,9 @@ const (
 type ContextInput struct {
 	View        string `json:"view" jsonschema:"orchestrator, worker, or reviewer"`
 	RoleID      string `json:"role_id,omitempty"`
+	RoleRef     string `json:"role_ref,omitempty"`
 	NodeID      string `json:"node_id,omitempty"`
+	NodeRef     string `json:"node_ref,omitempty"`
 	Cursor      uint64 `json:"cursor,omitempty"`
 	BudgetBytes int    `json:"budget_bytes,omitempty"`
 }
@@ -48,9 +50,11 @@ type GraphChangeInput struct {
 	Token          string         `json:"token,omitempty"`
 	IdempotencyKey string         `json:"idempotency_key,omitempty"`
 	ActorRole      string         `json:"actor_role,omitempty"`
+	ActorRoleRef   string         `json:"actor_role_ref,omitempty"`
 }
 type ReconcileInput struct {
-	ActionID       string         `json:"action_id"`
+	ActionID       string         `json:"action_id,omitempty"`
+	EffectRef      string         `json:"effect_ref,omitempty"`
 	Receipt        map[string]any `json:"receipt,omitempty"`
 	IdempotencyKey string         `json:"idempotency_key"`
 }
@@ -82,14 +86,35 @@ func Run(ctx context.Context, svc *service.Service) error {
 }
 
 func New(svc *service.Service) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "dagrail", Title: "DAGrail", Description: "LLM-led local DAG governance control plane.", Version: version.Version, WebsiteURL: "https://github.com/CongBao/dagrail"}, &mcp.ServerOptions{Instructions: "Treat DAGrail as runtime authority. Read bounded context, apply only a current returned action ref with one stable idempotency key, use NodeKind-specific outcomes, close or reconcile resources, reconcile unknown effects, and call dag_pre_wait before yielding.", Capabilities: &mcp.ServerCapabilities{}})
+	server := mcp.NewServer(&mcp.Implementation{Name: "dagrail", Title: "DAGrail", Description: "LLM-led local DAG governance control plane.", Version: version.Version, WebsiteURL: "https://github.com/CongBao/dagrail"}, &mcp.ServerOptions{Instructions: "Treat DAGrail as runtime authority. Read bounded context, use returned opaque refs instead of copying oversized identifiers, follow its authorization and remediation plan, apply only a current returned action ref with one stable idempotency key, use NodeKind-specific outcomes, close or reconcile resources, inspect Effect continuity before confusing an unrelated head advance with a causal change, and call dag_pre_wait before yielding.", Capabilities: &mcp.ServerCapabilities{}})
 	closed, openWorld := false, false
 	readOnly := true
-	mcp.AddTool(server, &mcp.Tool{Name: "dag_context", Title: "Get DAG context", Description: "Return a byte-bounded role or node context and allowed actions.", InputSchema: contextSchema(), Annotations: &mcp.ToolAnnotations{Title: "Get DAG context", ReadOnlyHint: true, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(_ context.Context, _ *mcp.CallToolRequest, input ContextInput) (*mcp.CallToolResult, service.ContextEnvelope, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_context", Title: "Get DAG context", Description: "Return byte-bounded role or node context with authorization, typed remediations, and signed allowed actions; use role_ref/node_ref for returned opaque identities.", InputSchema: contextSchema(), Annotations: &mcp.ToolAnnotations{Title: "Get DAG context", ReadOnlyHint: true, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input ContextInput) (*mcp.CallToolResult, service.ContextEnvelope, error) {
 		if err := validateToolInput(input); err != nil {
 			return nil, service.ContextEnvelope{}, err
 		}
-		raw, err := svc.ContextSince(input.View, input.RoleID, input.NodeID, input.BudgetBytes, input.Cursor)
+		roleID, nodeID := input.RoleID, input.NodeID
+		if input.RoleRef != "" {
+			if roleID != "" {
+				return nil, service.ContextEnvelope{}, fmt.Errorf("provide role_id or role_ref, not both")
+			}
+			resolved, resolveErr := svc.ResolveEntityRef("role", input.RoleRef)
+			if resolveErr != nil {
+				return nil, service.ContextEnvelope{}, resolveErr
+			}
+			roleID = resolved
+		}
+		if input.NodeRef != "" {
+			if nodeID != "" {
+				return nil, service.ContextEnvelope{}, fmt.Errorf("provide node_id or node_ref, not both")
+			}
+			resolved, resolveErr := svc.ResolveEntityRef("node", input.NodeRef)
+			if resolveErr != nil {
+				return nil, service.ContextEnvelope{}, resolveErr
+			}
+			nodeID = resolved
+		}
+		raw, err := svc.ContextSinceContext(ctx, input.View, roleID, nodeID, input.BudgetBytes, input.Cursor)
 		if err != nil {
 			return nil, service.ContextEnvelope{}, err
 		}
@@ -97,11 +122,11 @@ func New(svc *service.Service) *mcp.Server {
 		err = json.Unmarshal(raw, &output)
 		return nil, output, err
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "dag_inspect", Title: "Inspect DAG object", Description: "Resolve one opaque node, attempt, decision, execution package, reuse decision, artifact, effect, incident, resource, or bounded history ref.", InputSchema: inspectSchema(), Annotations: &mcp.ToolAnnotations{Title: "Inspect DAG object", ReadOnlyHint: true, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(_ context.Context, _ *mcp.CallToolRequest, input InspectInput) (*mcp.CallToolResult, InspectOutput, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_inspect", Title: "Inspect DAG object", Description: "Resolve one opaque object or snapshot-bound page; oversized identifiers and action detail are returned as digest-bound chunks.", InputSchema: inspectSchema(), Annotations: &mcp.ToolAnnotations{Title: "Inspect DAG object", ReadOnlyHint: true, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input InspectInput) (*mcp.CallToolResult, InspectOutput, error) {
 		if err := validateToolInput(input); err != nil {
 			return nil, InspectOutput{}, err
 		}
-		value, err := svc.Inspect(input.Ref)
+		value, err := svc.InspectContext(ctx, input.Ref)
 		return nil, InspectOutput{Value: value}, err
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "dag_apply", Title: "Apply allowed DAG action", Description: "Apply exactly one controller-issued action ref; its Role, Node, Attempt, resource, provider set, revision, head, and expiry are already bound.", InputSchema: applySchema(), Annotations: &mcp.ToolAnnotations{Title: "Apply allowed DAG action", ReadOnlyHint: false, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input ApplyInput) (*mcp.CallToolResult, service.ActionResult, error) {
@@ -132,24 +157,52 @@ func New(svc *service.Service) *mcp.Server {
 		}
 		if input.Mode == "preview" {
 			output, err := svc.PreviewGraphChange(path)
-			return nil, output, err
+			return nil, service.BoundedGraphImpact(output), err
 		}
 		if input.Mode != "apply" {
 			return nil, service.GraphImpact{}, fmt.Errorf("graph change mode must be preview or apply")
 		}
-		output, err := svc.ApplyGraphChange(path, input.Token, input.IdempotencyKey, input.ActorRole)
-		return nil, output, err
+		actorRole := input.ActorRole
+		if input.ActorRoleRef != "" {
+			if actorRole != "" {
+				return nil, service.GraphImpact{}, fmt.Errorf("provide actor_role or actor_role_ref, not both")
+			}
+			actorRole, err = svc.ResolveEntityRef("role", input.ActorRoleRef)
+			if err != nil {
+				return nil, service.GraphImpact{}, err
+			}
+		}
+		output, err := svc.ApplyGraphChange(path, input.Token, input.IdempotencyKey, actorRole)
+		return nil, service.BoundedGraphImpact(output), err
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "dag_reconcile", Title: "Reconcile effect", Description: "Reconcile one prepared or unknown effect through native observation or typed adapter evidence.", InputSchema: reconcileSchema(), Annotations: &mcp.ToolAnnotations{Title: "Reconcile effect", ReadOnlyHint: false, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input ReconcileInput) (*mcp.CallToolResult, domain.EffectAction, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_reconcile", Title: "Reconcile effect", Description: "Reconcile one prepared or unknown effect through native observation or typed adapter evidence; use effect_ref for an opaque identity.", InputSchema: reconcileSchema(), Annotations: &mcp.ToolAnnotations{Title: "Reconcile effect", ReadOnlyHint: false, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input ReconcileInput) (*mcp.CallToolResult, service.EffectActionResult, error) {
 		if err := validateToolInput(input); err != nil {
-			return nil, domain.EffectAction{}, err
+			return nil, service.EffectActionResult{}, err
+		}
+		actionID := input.ActionID
+		if input.EffectRef != "" {
+			if actionID != "" {
+				return nil, service.EffectActionResult{}, fmt.Errorf("provide action_id or effect_ref, not both")
+			}
+			resolved, resolveErr := svc.ResolveEntityRef("effect", input.EffectRef)
+			if resolveErr != nil {
+				return nil, service.EffectActionResult{}, resolveErr
+			}
+			actionID = resolved
+		}
+		if actionID == "" {
+			return nil, service.EffectActionResult{}, fmt.Errorf("action_id or effect_ref is required")
 		}
 		raw, _ := json.Marshal(input.Receipt)
-		output, err := svc.ReconcileEffectContext(ctx, input.ActionID, raw, input.IdempotencyKey)
-		return nil, output, err
+		output, err := svc.ReconcileEffectContext(ctx, actionID, raw, input.IdempotencyKey)
+		if err != nil {
+			return nil, service.EffectActionResult{}, err
+		}
+		bounded, err := svc.BoundedEffectAction(output)
+		return nil, bounded, err
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "dag_pre_wait", Title: "Audit DAG liveness", Description: "Reject passive waiting while ready, submitted, expired, or unreconciled work exists.", InputSchema: schemaFor[PreWaitInput](), Annotations: &mcp.ToolAnnotations{Title: "Audit DAG liveness", ReadOnlyHint: readOnly, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(_ context.Context, _ *mcp.CallToolRequest, _ PreWaitInput) (*mcp.CallToolResult, service.PreWaitAudit, error) {
-		output, err := svc.PreWait()
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_pre_wait", Title: "Audit DAG liveness", Description: "Reject passive waiting while work remains and return a bounded count/preview plus paginated inspect refs for deterministic remediation.", InputSchema: schemaFor[PreWaitInput](), Annotations: &mcp.ToolAnnotations{Title: "Audit DAG liveness", ReadOnlyHint: readOnly, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, _ PreWaitInput) (*mcp.CallToolResult, service.PreWaitAudit, error) {
+		output, err := svc.PreWaitContext(ctx)
 		return nil, output, err
 	})
 	return server
@@ -170,6 +223,7 @@ func graphChangeSchema() *jsonschema.Schema {
 	setMaxLength(schema, "token", 16*1024)
 	setMaxLength(schema, "idempotency_key", 256)
 	setMaxLength(schema, "actor_role", 256)
+	setMaxLength(schema, "actor_role_ref", 128)
 	return schema
 }
 
@@ -178,7 +232,9 @@ func contextSchema() *jsonschema.Schema {
 	setMaxLength(schema, "view", 32)
 	schema.Properties["view"].Enum = []any{"orchestrator", "worker", "reviewer"}
 	setMaxLength(schema, "role_id", 256)
+	setMaxLength(schema, "role_ref", 128)
 	setMaxLength(schema, "node_id", 256)
+	setMaxLength(schema, "node_ref", 128)
 	minimum, maximum := float64(512), float64(12288)
 	schema.Properties["budget_bytes"].Minimum = &minimum
 	schema.Properties["budget_bytes"].Maximum = &maximum
@@ -201,6 +257,7 @@ func applySchema() *jsonschema.Schema {
 func reconcileSchema() *jsonschema.Schema {
 	schema := schemaFor[ReconcileInput]()
 	setMaxLength(schema, "action_id", 256)
+	setMaxLength(schema, "effect_ref", 128)
 	setMaxLength(schema, "idempotency_key", 256)
 	return schema
 }

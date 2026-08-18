@@ -16,11 +16,17 @@ as appropriate. Never replace a missing tool with a hand-authored lifecycle enve
 
 1. Bind that Role to this harness session. Never reuse a session bound to another
    formal Role. Use takeover only after the former lease expires.
-2. Call `dag_context` with `view: worker`, `role_id`, and `node_id`. Treat its cursor,
-   checkpoint, resource refs, and `allowedActions` as authority. Follow an opaque ref
+2. Call `dag_context` with `view: worker` and the assigned Role/Node selectors. Use
+   `role_ref` or `node_ref` when DAGrail returned an opaque selector instead of a small
+   ID. Treat its cursor, checkpoint, resource refs, `authorization`, and
+   `allowedActions` as authority. Follow an opaque ref
    with `dag_inspect` only when the bounded package is insufficient.
 3. Apply only the current `allowedActions[].ref` with a stable idempotency key. Never
-   construct a transition, outcome envelope, hash, or resource ID yourself.
+   construct a transition, outcome envelope, hash, or resource ID yourself. If an apply
+   call crashes, times out, or returns no definitive result, preserve its original ref,
+   same RFC 8785 canonical JSON input value, and idempotency key as one pending-action record. A replacement session
+   may replay only that canonical-equivalent triple to retrieve the idempotent result; it must not use
+   the old ref for changed input, a new key, or new work.
 4. Start with `node.start` or continue the current Attempt. After material progress and
    before yielding, apply `attempt.checkpoint` with a replacement-ready summary and
    digest-only evidence refs. Exclude prompts, secrets, transcripts, and artifact bodies.
@@ -35,10 +41,14 @@ as appropriate. Never replace a missing tool with a hand-authored lifecycle enve
    - decision: `decision.record` with one declared outcome and bounded evidence;
    - gate: `gate.evaluate` with the declared provider input—never invent its outcome;
    - effect: `effect.prepare`, reconcile `unknown`, then `effect.complete` only when the
-     receipt state supports the chosen outcome;
+     receipt state supports the chosen outcome. If unrelated work advanced the journal,
+     inspect `effect-continuity:<action-id>` before treating the Effect contract as
+     stale; continue only when its adapter ID, version, schema hash, and request binding
+     remain unchanged;
    - custom kind: the exact terminal action returned by DAGrail.
 8. Call `dag_pre_wait` before becoming passive. Address work owned by this Role; report
-   other ready, submitted, incident, lease, or effect items to the controller.
+   other ready, submitted, incident, lease, or effect counts to the controller. Follow
+   a paginated inspect ref only for an item this Role must act on.
 
 A native harness resume restores transport only. DAGrail's Role lease, Attempt,
 checkpoint, Decision records, and receipts remain the recoverable authority.

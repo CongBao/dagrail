@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/git-integration-scope-v1alpha1.schema.json",
+  "title": "DAGrail Git integration scope v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "base", "candidate", "target", "prospective", "closed", "counts", "entries"],
+  "properties": {
+    "apiVersion": {"const": "dagrail.io/git-integration-scope/v1alpha1"},
+    "kind": {"const": "GitIntegrationScope"},
+    "base": {"$ref": "#/$defs/oid"},
+    "candidate": {"$ref": "#/$defs/oid"},
+    "target": {"$ref": "#/$defs/oid"},
+    "prospective": {"$ref": "#/$defs/oid"},
+    "closed": {"type": "boolean"},
+    "counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+    "entries": {"type": "array", "maxItems": 100000, "items": {"$ref": "#/$defs/entry"}}
+  },
+  "$defs": {
+    "oid": {"type": "string", "pattern": "^([a-f0-9]{40}|[a-f0-9]{64})$"},
+    "entry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "class"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "class": {"enum": ["candidate_only", "candidate_result", "target_history_only", "target_result", "conflict_resolution", "unexplained_prospective_delta", "unchanged_or_equivalent"]},
+        "baseMode": {"$ref": "#/$defs/mode"}, "candidateMode": {"$ref": "#/$defs/mode"},
+        "targetMode": {"$ref": "#/$defs/mode"}, "prospectiveMode": {"$ref": "#/$defs/mode"},
+        "baseOid": {"$ref": "#/$defs/oid"}, "candidateOid": {"$ref": "#/$defs/oid"},
+        "targetOid": {"$ref": "#/$defs/oid"}, "prospectiveOid": {"$ref": "#/$defs/oid"}
+      }
+    },
+    "mode": {"type": "string", "pattern": "^[0-9]{6}$"}
+  }
+}

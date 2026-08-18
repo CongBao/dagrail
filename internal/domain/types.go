@@ -2,6 +2,7 @@ package domain
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -696,19 +697,21 @@ type ActionRecord struct {
 }
 
 type EffectAction struct {
-	ID             string          `json:"id"`
-	NodeID         string          `json:"nodeId"`
-	AttemptID      string          `json:"attemptId"`
-	AdapterID      string          `json:"adapterId"`
-	OwnerRole      string          `json:"ownerRole,omitempty"`
-	Status         string          `json:"status"`
-	Request        json.RawMessage `json:"request"`
-	Prepared       json.RawMessage `json:"prepared"`
-	Receipt        json.RawMessage `json:"receipt,omitempty"`
-	IdempotencyKey string          `json:"idempotencyKey"`
-	PreparedAt     string          `json:"preparedAt"`
-	UpdatedAt      string          `json:"updatedAt"`
-	Sequence       uint64          `json:"sequence"`
+	ID                string          `json:"id"`
+	NodeID            string          `json:"nodeId"`
+	AttemptID         string          `json:"attemptId"`
+	AdapterID         string          `json:"adapterId"`
+	AdapterVersion    string          `json:"adapterVersion,omitempty"`
+	AdapterSchemaHash string          `json:"adapterSchemaHash,omitempty"`
+	OwnerRole         string          `json:"ownerRole,omitempty"`
+	Status            string          `json:"status"`
+	Request           json.RawMessage `json:"request"`
+	Prepared          json.RawMessage `json:"prepared"`
+	Receipt           json.RawMessage `json:"receipt,omitempty"`
+	IdempotencyKey    string          `json:"idempotencyKey"`
+	PreparedAt        string          `json:"preparedAt"`
+	UpdatedAt         string          `json:"updatedAt"`
+	Sequence          uint64          `json:"sequence"`
 }
 
 type ResourceLease struct {
@@ -746,6 +749,8 @@ type Incident struct {
 	Disposition        string   `json:"disposition,omitempty"`
 	DispositionBy      string   `json:"dispositionBy,omitempty"`
 	DispositionAt      string   `json:"dispositionAt,omitempty"`
+	RemedyNodeID       string   `json:"remedyNodeId,omitempty"`
+	SupersededAt       string   `json:"supersededAt,omitempty"`
 	DependencyCut      []string `json:"dependencyCut,omitempty"`
 	OpenedAt           string   `json:"openedAt"`
 	UpdatedAt          string   `json:"updatedAt"`
@@ -896,15 +901,38 @@ type ReadinessReason struct {
 }
 
 func ComputeFrontier(state State) Frontier {
+	result, _ := computeFrontier(context.Background(), state, true)
+	return result
+}
+
+func ComputeFrontierContext(ctx context.Context, state State) (Frontier, error) {
+	return computeFrontier(ctx, state, true)
+}
+
+func ComputeFrontierSummaryContext(ctx context.Context, state State) (Frontier, error) {
+	return computeFrontier(ctx, state, false)
+}
+
+func computeFrontier(ctx context.Context, state State, includeDetails bool) (Frontier, error) {
 	result := Frontier{GraphRevision: state.GraphRevision, Ready: []string{}}
 	if state.Graph == nil {
-		return result
+		return result, nil
 	}
 	incoming := map[string][]EdgeDefinition{}
 	for _, edge := range state.Graph.Spec.Edges {
+		if err := ctx.Err(); err != nil {
+			return Frontier{}, err
+		}
 		incoming[edge.To] = append(incoming[edge.To], edge)
 	}
+	availableResources, err := availableResourceCapacity(ctx, state)
+	if err != nil {
+		return Frontier{}, err
+	}
 	for _, node := range state.Graph.Spec.Nodes {
+		if err := ctx.Err(); err != nil {
+			return Frontier{}, err
+		}
 		runtime := state.Nodes[node.ID]
 		if runtime.Status != "planned" {
 			continue
@@ -925,32 +953,50 @@ func ComputeFrontier(state State) Frontier {
 		}
 		if unreachable {
 			result.Unreachable = append(result.Unreachable, node.ID)
-			result.Explanations = append(result.Explanations, ReadinessExplanation{NodeID: node.ID, State: "unreachable", Reasons: reasons})
+			if includeDetails {
+				result.Explanations = append(result.Explanations, ReadinessExplanation{NodeID: node.ID, State: "unreachable", Reasons: reasons})
+			}
 		} else if len(reasons) == 0 {
-			resourceReasons := resourceReadinessReasons(state, node)
+			resourceReasons := resourceReadinessReasonsFromAvailability(availableResources, node)
 			if len(resourceReasons) == 0 {
 				result.Ready = append(result.Ready, node.ID)
-				result.Explanations = append(result.Explanations, ReadinessExplanation{NodeID: node.ID, State: "ready"})
+				if includeDetails {
+					result.Explanations = append(result.Explanations, ReadinessExplanation{NodeID: node.ID, State: "ready"})
+				}
 			} else {
 				result.Blocked = append(result.Blocked, node.ID)
 				result.ResourceBlocked = append(result.ResourceBlocked, node.ID)
-				result.Explanations = append(result.Explanations, ReadinessExplanation{NodeID: node.ID, State: "blocked", Reasons: resourceReasons})
+				if includeDetails {
+					result.Explanations = append(result.Explanations, ReadinessExplanation{NodeID: node.ID, State: "blocked", Reasons: resourceReasons})
+				}
 			}
 		} else {
 			result.Blocked = append(result.Blocked, node.ID)
-			result.Explanations = append(result.Explanations, ReadinessExplanation{NodeID: node.ID, State: "blocked", Reasons: reasons})
+			if includeDetails {
+				result.Explanations = append(result.Explanations, ReadinessExplanation{NodeID: node.ID, State: "blocked", Reasons: reasons})
+			}
 		}
 	}
 	sort.Strings(result.Ready)
 	sort.Strings(result.Blocked)
 	sort.Strings(result.Unreachable)
 	sort.Strings(result.ResourceBlocked)
+	if !includeDetails {
+		return result, ctx.Err()
+	}
 	sort.Slice(result.Explanations, func(i, j int) bool { return result.Explanations[i].NodeID < result.Explanations[j].NodeID })
+	cuts := NewDependencyCutIndex(state)
 	for nodeID, runtime := range state.Nodes {
+		if err := ctx.Err(); err != nil {
+			return Frontier{}, err
+		}
 		if runtime.Status != "terminal" || (runtime.OutcomeClass != "failure" && runtime.OutcomeClass != "cancelled") {
 			continue
 		}
-		cut := DependencyCut(state, nodeID)
+		cut, err := cuts.CutContext(ctx, nodeID)
+		if err != nil {
+			return Frontier{}, err
+		}
 		if len(cut) > 0 {
 			if result.DependencyCuts == nil {
 				result.DependencyCuts = map[string][]string{}
@@ -958,32 +1004,58 @@ func ComputeFrontier(state State) Frontier {
 			result.DependencyCuts[nodeID] = cut
 		}
 	}
-	return result
+	return result, nil
 }
 
 func DependencyCut(state State, rootNodeID string) []string {
-	if state.Graph == nil {
-		return nil
+	cut, _ := NewDependencyCutIndex(state).CutContext(context.Background(), rootNodeID)
+	return cut
+}
+
+type DependencyCutIndex struct {
+	state           State
+	outgoing        map[string][]EdgeDefinition
+	cache           map[string][]string
+	descendantCache map[string][]string
+}
+
+func NewDependencyCutIndex(state State) *DependencyCutIndex {
+	index := &DependencyCutIndex{state: state, outgoing: map[string][]EdgeDefinition{}, cache: map[string][]string{}, descendantCache: map[string][]string{}}
+	if state.Graph != nil {
+		for _, edge := range state.Graph.Spec.Edges {
+			index.outgoing[edge.From] = append(index.outgoing[edge.From], edge)
+		}
 	}
-	outgoing := map[string][]EdgeDefinition{}
-	for _, edge := range state.Graph.Spec.Edges {
-		outgoing[edge.From] = append(outgoing[edge.From], edge)
+	return index
+}
+
+func (index *DependencyCutIndex) CutContext(ctx context.Context, rootNodeID string) ([]string, error) {
+	if cached, ok := index.cache[rootNodeID]; ok {
+		return cached, nil
+	}
+	state := index.state
+	if state.Graph == nil {
+		return nil, nil
 	}
 	seen := map[string]bool{}
-	queue := []string{rootNodeID}
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-		for _, edge := range outgoing[current] {
-			if current == rootNodeID && predicateSatisfied(edge.When, state.Nodes[current]) {
-				continue
-			}
-			runtime := state.Nodes[edge.To]
-			if runtime.Status == "terminal" || runtime.Status == "superseded" || runtime.Status == "skipped" || seen[edge.To] {
-				continue
-			}
-			seen[edge.To] = true
-			queue = append(queue, edge.To)
+	for _, edge := range index.outgoing[rootNodeID] {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if predicateSatisfied(edge.When, state.Nodes[rootNodeID]) {
+			continue
+		}
+		runtime := state.Nodes[edge.To]
+		if runtime.Status == "terminal" || runtime.Status == "superseded" || runtime.Status == "skipped" {
+			continue
+		}
+		seen[edge.To] = true
+		descendants, err := index.descendantsContext(ctx, edge.To)
+		if err != nil {
+			return nil, err
+		}
+		for _, nodeID := range descendants {
+			seen[nodeID] = true
 		}
 	}
 	result := make([]string, 0, len(seen))
@@ -991,21 +1063,79 @@ func DependencyCut(state State, rootNodeID string) []string {
 		result = append(result, nodeID)
 	}
 	sort.Strings(result)
-	return result
+	index.cache[rootNodeID] = result
+	return result, nil
+}
+
+// descendantsContext memoizes the positive downstream closure shared by different
+// failure roots. CutContext applies the root edge predicate once, then reuses this
+// closure; a fan-in chain is therefore traversed once instead of once per Resource.
+func (index *DependencyCutIndex) descendantsContext(ctx context.Context, nodeID string) ([]string, error) {
+	if cached, ok := index.descendantCache[nodeID]; ok {
+		return cached, nil
+	}
+	seen := map[string]bool{}
+	stack := []string{nodeID}
+	for len(stack) > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		for _, edge := range index.outgoing[current] {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if seen[edge.To] {
+				continue
+			}
+			runtime := index.state.Nodes[edge.To]
+			if runtime.Status == "terminal" || runtime.Status == "superseded" || runtime.Status == "skipped" {
+				continue
+			}
+			seen[edge.To] = true
+			stack = append(stack, edge.To)
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for descendant := range seen {
+		result = append(result, descendant)
+	}
+	sort.Strings(result)
+	index.descendantCache[nodeID] = result
+	return result, nil
 }
 
 func resourceReadinessReasons(state State, node NodeDefinition) []ReadinessReason {
-	if len(node.Resources) == 0 {
-		return nil
-	}
+	available, _ := availableResourceCapacity(context.Background(), state)
+	return resourceReadinessReasonsFromAvailability(available, node)
+}
+
+func availableResourceCapacity(ctx context.Context, state State) (map[string]int, error) {
 	capacity := map[string]int{}
+	if state.Graph == nil {
+		return capacity, nil
+	}
 	for _, declaration := range state.Graph.Spec.ResourceCapacities {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		capacity[declaration.Kind] = declaration.Capacity
 	}
 	for _, lease := range state.Resources {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if lease.Status == "active" {
 			capacity[lease.Kind] -= lease.Quantity
 		}
+	}
+	return capacity, ctx.Err()
+}
+
+func resourceReadinessReasonsFromAvailability(capacity map[string]int, node NodeDefinition) []ReadinessReason {
+	if len(node.Resources) == 0 {
+		return nil
 	}
 	reasons := []ReadinessReason{}
 	for _, request := range node.Resources {
@@ -1019,6 +1149,13 @@ func resourceReadinessReasons(state State, node NodeDefinition) []ReadinessReaso
 func predicateSatisfied(p Predicate, source NodeRuntime) bool {
 	ok, _ := explainPredicate(p, source, "$")
 	return ok
+}
+
+// PredicateSatisfied exposes the same closed positive-predicate evaluation used
+// by frontier computation to controller planning surfaces. It does not mutate
+// state or interpret free-form readiness text.
+func PredicateSatisfied(p Predicate, source NodeRuntime) bool {
+	return predicateSatisfied(p, source)
 }
 
 func explainPredicate(p Predicate, source NodeRuntime, path string) (bool, ReadinessReason) {

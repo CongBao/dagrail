@@ -4,7 +4,7 @@
   "title": "DAGrail Compatibility Contract v1beta1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiVersion", "kind", "version", "stability", "graph", "cli", "commandCatalog", "cliError", "decisionRecord", "installationDiagnostic", "historicalBinaryMatrix", "readinessDecision", "ui", "security", "journalVerification", "pluginConformance", "support", "recovery", "authorityAdoption", "authorityRotation", "authorityRelocation", "releaseQualification", "releaseManifest", "releaseVerification", "lifecycleMigrationV1Alpha1", "lifecycleMigration", "lifecycleProjection", "providerSdk", "journal", "projectionSchema", "mcpTools", "contextBudgets", "topLevelCommands", "compatibilityPromises"],
+  "required": ["apiVersion", "kind", "version", "stability", "graph", "cli", "commandCatalog", "cliError", "decisionRecord", "installationDiagnostic", "historicalBinaryMatrix", "readinessDecision", "ui", "security", "journalVerification", "pluginConformance", "support", "recovery", "authorityAdoption", "authorityRotation", "authorityRelocation", "gitArtifactClosure", "gitIntegrationScope", "releaseQualification", "releaseManifest", "releaseVerification", "lifecycleMigrationV1Alpha1", "lifecycleMigration", "lifecycleProjection", "providerSdk", "journal", "projectionSchema", "mcpTools", "contextBudgets", "topLevelCommands", "compatibilityPromises"],
   "properties": {
     "apiVersion": {"const": "dagrail.io/v1beta1"},
     "kind": {"const": "CompatibilityContract"},
@@ -27,6 +27,8 @@
     "authorityAdoption": {"$ref": "#/$defs/documentedSurface"},
     "authorityRotation": {"$ref": "#/$defs/documentedSurface"},
     "authorityRelocation": {"$ref": "#/$defs/documentedSurface"},
+    "gitArtifactClosure": {"$ref": "#/$defs/documentedSurface"},
+    "gitIntegrationScope": {"$ref": "#/$defs/documentedSurface"},
     "releaseQualification": {"$ref": "#/$defs/documentedSurface"},
     "releaseManifest": {"$ref": "#/$defs/documentedSurface"},
     "releaseVerification": {"$ref": "#/$defs/documentedSurface"},

@@ -12,11 +12,24 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Node**: stable work identity. Its `NodeKind` defines inputs and closed outcomes.
 - **Node runtime**: `planned | active | terminal | superseded | skipped`. `ready` is derived, never assigned; `skipped` closes a permanently unreachable positive branch without inventing success.
 - **Edge predicate**: a positive, closed AST over outcome, decision, evidence, policy, `all`, and `any`.
+- **Group**: a revision-bound hierarchical view container for Nodes and nested Groups.
+  It improves project-level readability but is not a lifecycle identity, dependency
+  endpoint, scheduler, or writer.
+- **Group summary**: a deterministic projection of one Group's explicit summary Node,
+  readiness, membership, and operational health at one Graph Revision and journal
+  head. It never invents a lifecycle outcome from presentation state.
 - **Role**: stable responsibility independent of a process, agent, thread, or session.
 - **Executor binding**: the temporary harness/session audit identity stored in a Role lease.
 - **Attempt**: one execution of a Node: `leased | running | waiting | submitted | terminal`.
 - **Checkpoint**: a bounded recovery summary and digest-only evidence references owned by an Attempt.
 - **Allowed action**: a signed opaque ref binding project, journal head, graph revision, Role lease, Node, Attempt, provider schemas, and expiry.
+- **Authorization envelope**: bounded context stating the current Role/session lease,
+  capabilities, routine reversible action boundary, and operations that still require
+  escalation; it is descriptive and never replaces an allowed-action ref.
+- **Remediation proposal**: deterministic, head-bound mapping from one pre-wait blocker
+  to its owner, target, dependency-cut count/digest/ref, and next typed operation. Lists
+  are bounded previews with journal-head/inventory-bound paginated inspect refs; it is
+  not an autonomous scheduler action.
 - **Decision contract**: the closed key and `human | llm | provider` source declared by a Decision or Gate Node; provider contracts also bind provider and policy IDs.
 - **Decision record**: immutable journal authority binding one closed outcome and its facts/evidence to Project, Graph Revision, Node, Attempt, Role, input digest, and optional exact provider version/schema.
 - **Journal segment**: the atomic command commit containing one or more immutable events.
@@ -39,10 +52,18 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Effect**: an external side effect managed as a saga, never represented as an ACID transaction.
 - **Receipt**: typed observation of transport, session creation, visible delivery, acceptance, and completion. These states are not interchangeable.
 - **Incident**: a durable blocker with owner, deadline, attempt budget, progress metric, closed classification, recovery disposition, and dependency cut.
+- **Repair successor**: an active/planned Node connected by a satisfied typed edge or an
+  explicit `supersedes` declaration. A signed Incident action may close the old Attempt
+  alert by binding this successor without rewriting the failed Attempt.
 - **Recovery disposition**: a closed operator choice: `retry | rollback | lkg | quarantine | off-critical-path | escalate`.
 - **Circuit breaker**: an Incident state that stops repeated work after its deadline or no-progress budget is exhausted without blocking unrelated lanes.
 - **Resource lease**: ownership of bounded executor, browser, server, port, memory, disk, or another declared capacity. Capacity is released only by a confirmed closure receipt; unknown closure remains active and reconcilable.
 - **Dependency cut**: only the transitive graph region frozen by an unsatisfied failure path.
+- **Git integration scope**: read-only four-commit comparison that separates producer
+  candidate changes, accepted target history, conflict resolution, and unexplained
+  prospective deltas without assigning semantic approval.
+- **Git artifact closure**: read-only proof that named commits, ordered parents, trees,
+  tags, peeled targets, and durable refs remain resolvable in the consumer repository.
 - **Harness**: an agent host such as Codex, Claude Code, or GitHub Copilot CLI.
 - **Native harness receipt**: adapter observation binding a DAGrail action to a proved
   host session and either an exact visible message or the matching synchronous prompt
@@ -238,6 +259,40 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
     head, backup, canonical target and destination-runtime roots, reason, and key bind
     one deterministic fresh UUID. The source is retired before the new fence and locator publish. Relocation
     never rebinds a UUID or carries Graph/lifecycle state implicitly.
+42. An operations plan may prioritize and truncate proposals, but it never fabricates a
+    lifecycle transition. Every mutation still revalidates the signed ref, current head,
+    Role/session lease, capability, closed input, and stable idempotency key.
+43. Unrelated journal progress is not an Effect causal change. Continuity compares the
+    Graph-declared adapter ID and canonical request digest plus the persisted adapter
+    version and schema hash, then separately reports current lease, capability,
+    Incident, adapter, and Effect-status blockers. Missing or changed adapter metadata
+    fails reconciliation closed.
+44. Hierarchical grouping is a generic Graph/projection capability. Groups never replace
+    Node-to-Node dependency authority or lifecycle identity, and vocabulary or inference
+    rules from an External validation subject never enter the kernel, public schema, or
+    default grouping provider.
+45. Git scope and closure commands are read-only evidence tools. They never merge,
+    retain, delete, push, or promote artifact reachability into review or lifecycle
+    acceptance; an unexplained prospective delta fails its diagnostic gate. Exact
+    identity and retention use a closed repository environment plus raw object bytes
+    and ordered parents, never replacement refs, grafts, or ambient Git redirection.
+46. Pre-wait is a bounded query, not a graph dump. It returns exact category counts,
+    finite previews, truncation state, and paginated inspect refs. Dependency cuts are
+    count/digest-bound and share one cached adjacency index per audit. Page assembly is
+    based on encoded bytes, not item count; an individually oversized value is recovered
+    through digest-bound chunks, while signed action refs use compact opaque identity
+    bindings without weakening apply-time head/lease/capability validation.
+47. Bounded identity applies uniformly to Node, Role, session, Attempt, outcome, and
+    action detail. A controller-issued outcome ref is a closed selector for one declared
+    Node outcome, not a free-form alias. An unknown-result retry may cross session
+    replacement only as the original signed ref, the same RFC 8785 canonical JSON
+    input value, and idempotency key; every changed intent requires a current ref and
+    a new key. Insignificant whitespace and object-key order are not changed intent.
+48. Every control-plane query surface has the same bounded escape hatch. Status,
+    history, frontier, evidence, Incident, remediation, Effect continuity, and stored
+    authority objects either fit within 24 KiB or return exact counts plus a
+    journal/inventory-bound opaque detail stream. Schema-legal large identities are
+    selected by controller-issued refs rather than copied through a smaller API field.
 
 ## Bounded contexts
 

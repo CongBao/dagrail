@@ -3,6 +3,7 @@ package contract
 import (
 	"github.com/CongBao/dagrail/internal/commandcatalog"
 	"github.com/CongBao/dagrail/internal/compatibility"
+	"github.com/CongBao/dagrail/internal/gitartifact"
 	"github.com/CongBao/dagrail/internal/install"
 	"github.com/CongBao/dagrail/internal/journal"
 	"github.com/CongBao/dagrail/internal/mcpserver"
@@ -68,6 +69,8 @@ type Report struct {
 	AuthorityAdoption          DocumentedSurface        `json:"authorityAdoption"`
 	AuthorityRotation          DocumentedSurface        `json:"authorityRotation"`
 	AuthorityRelocation        DocumentedSurface        `json:"authorityRelocation"`
+	GitArtifactClosure         DocumentedSurface        `json:"gitArtifactClosure"`
+	GitIntegrationScope        DocumentedSurface        `json:"gitIntegrationScope"`
 	ReleaseQualification       DocumentedSurface        `json:"releaseQualification"`
 	ReleaseManifest            DocumentedSurface        `json:"releaseManifest"`
 	ReleaseVerification        DocumentedSurface        `json:"releaseVerification"`
@@ -125,19 +128,19 @@ func Current() Report {
 			APIVersion:   compatibility.APIVersion,
 			Stability:    "closed-beta-window",
 			SchemaPath:   "schemas/historical-binary-matrix-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:13eae8210721967589c493933317c19b48cd943dc6ae93dff1b05cd9d18b6d8b",
+			SchemaSHA256: "sha256:25521d668ca41c91dfd19edc991a67573dab4272c7d80ea0d469c4097cbec9e7",
 		},
 		Readiness: DocumentedSurface{
 			APIVersion:   "dagrail.io/readiness-decision/v1alpha1",
 			Stability:    "additive-structural-decision",
 			SchemaPath:   "schemas/readiness-decision-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:5216088afed0f980b5d09e036c3a61473ee956d95f84e8b242ef90bc424b1fe3",
+			SchemaSHA256: "sha256:3af9122429d1d4bb5bad82c9af47259f6f9d20e995274352d8efe2c60d1548e2",
 		},
 		UI: DocumentedSurface{
 			APIVersion:   "dagrail.io/ui/v1beta1",
 			Stability:    "additive-read-only",
 			SchemaPath:   "schemas/ui-api-v1beta1.schema.json",
-			SchemaSHA256: "sha256:4c2723b7600dcf95a05ce501ba110109df3aedfabe8c3d541d346d9e0a04dac0",
+			SchemaSHA256: "sha256:ecebe87fa127fb18cce7df743422c9349e92129bc53c222339e02feb93fbda49",
 		},
 		Security: DocumentedSurface{
 			APIVersion:   "dagrail.io/security/v1alpha1",
@@ -187,6 +190,18 @@ func Current() Report {
 			SchemaPath:   "schemas/authority-relocation-v1alpha1.schema.json",
 			SchemaSHA256: "sha256:1f3b05a67b3b71c5c042a7e8f35e77e44befb5b542bc66505bb94fc58dedb969",
 		},
+		GitArtifactClosure: DocumentedSurface{
+			APIVersion:   gitartifact.ClosureAPIVersion,
+			Stability:    "alpha-read-only-git-evidence",
+			SchemaPath:   "schemas/git-artifact-closure-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:b7adb1dad09ddf0cb255ad3b150b90e4f275a30348d69231557d668f31b0d06d",
+		},
+		GitIntegrationScope: DocumentedSurface{
+			APIVersion:   gitartifact.ScopeAPIVersion,
+			Stability:    "alpha-read-only-git-evidence",
+			SchemaPath:   "schemas/git-integration-scope-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:8f854e364fe33de5babdb20eb927faee209cedf5403347834d6ab0b5e0d2ec29",
+		},
 		ReleaseQualification: DocumentedSurface{
 			APIVersion:   "dagrail.io/release-qualification/v1alpha1",
 			Stability:    "additive-structural-candidate",
@@ -209,19 +224,19 @@ func Current() Report {
 			APIVersion:   service.LifecycleMigrationAPIVersion,
 			Stability:    "alpha-operator-import-compatible",
 			SchemaPath:   "schemas/lifecycle-migration-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:ba1ba1b15c72624a9ffe3d15e6397655016c73665a390b5881d80fa2e47a827e",
+			SchemaSHA256: "sha256:448a8f24810af5bb285881cceb24fecb6656a31cf61f0ae33a0ac08ecbcad093",
 		},
 		LifecycleMigration: DocumentedSurface{
 			APIVersion:   service.LifecycleMigrationBundleAPIVersion,
 			Stability:    "alpha-operator-import",
 			SchemaPath:   "schemas/lifecycle-migration-v1beta1.schema.json",
-			SchemaSHA256: "sha256:ae3bae94da0b464bb8e5aae7fc80781af18f7d9994f6d356d7fd0f89d68b9c05",
+			SchemaSHA256: "sha256:c25a88b91b7d99f8fbf23a0e00e027cc53d88710a2106f6dc0afdf6b0eb1f761",
 		},
 		LifecycleProjection: DocumentedSurface{
 			APIVersion:   service.LifecycleProjectionAPIVersion,
 			Stability:    "alpha-rebuildable-projection",
 			SchemaPath:   "schemas/lifecycle-projection-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:a4bcbeca02e9649c18e9ebad13e1cc8d0b1ed7f11de6f1c92a2a23c899615514",
+			SchemaSHA256: "sha256:b79c3eb4ba919baa57d27191cc2336e31644a66ec8c0533ff66e0acd3965a03c",
 		},
 		Provider: VersionedSurface{APIVersion: sdk.APIVersion, Stability: "source-compatible"},
 		Journal: JournalContract{
@@ -252,7 +267,7 @@ func Current() Report {
 			"command discovery and completion are generated from one bounded catalog",
 			"opt-in CLI error envelopes keep stable broad exit classes and preserve interruption",
 			"host plugin commands are output-bounded, time-bounded, and cancellation-aware",
-			"the v0.10 through v0.21 beta binaries are immutable inputs to the current upgrade and rollback matrix",
+			"the v0.10.0 through v0.22.2 beta binaries are immutable inputs to the current upgrade and rollback matrix",
 			"readiness can declare external-validation readiness but cannot infer production validation or 1.0 readiness",
 			"the loopback explorer rejects non-loopback Host values and cross-port Origin values without exposing CORS access",
 			"SQLite remains disposable and rebuildable from the verified journal",

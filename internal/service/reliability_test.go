@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -68,9 +69,31 @@ func TestLargeReadyFrontierAlwaysProducesBoundedInspectableContext(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	frontier, ok := inspected.(domain.Frontier)
-	if !ok || len(frontier.Ready) != 2048 {
-		t.Fatalf("frontier inspection returned %T with %d ready", inspected, len(frontier.Ready))
+	summary, ok := inspected.(map[string]any)
+	if !ok || summary["readyCount"] != 2048 || summary["truncated"] != true {
+		t.Fatalf("frontier inspection did not return a bounded exact summary: %#v", inspected)
+	}
+	detailRef, ok := summary["detailRef"].(string)
+	if !ok || detailRef == "" {
+		t.Fatalf("frontier inspection did not return a detail ref: %#v", inspected)
+	}
+	var recovered []byte
+	for detailRef != "" {
+		page, err := service.Inspect(detailRef)
+		if err != nil {
+			t.Fatal(err)
+		}
+		chunk := page.(BoundedDetailChunk)
+		decoded, err := base64.StdEncoding.DecodeString(chunk.Chunk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recovered = append(recovered, decoded...)
+		detailRef = chunk.NextRef
+	}
+	var frontier domain.Frontier
+	if err := json.Unmarshal(recovered, &frontier); err != nil || len(frontier.Ready) != 2048 {
+		t.Fatalf("frontier detail did not recover 2048 ready Nodes: %v (%d)", err, len(frontier.Ready))
 	}
 }
 

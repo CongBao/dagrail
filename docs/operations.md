@@ -15,11 +15,39 @@ dagrail ui --root .
 ```
 
 `status` includes journal head, lifecycle counts, expired leases, overdue incidents,
-and the explainable frontier. `history` returns payload-free command metadata in pages
+and the explainable frontier. Status, history, evidence, and frontier remain ordinary
+JSON while small; over 24 KiB they return exact counts and a digest-bound detail ref.
+`pre-wait` returns exact counts with finite previews;
+follow its snapshot-bound `pre-wait-page:<head>:<digest>:<offset>` and dependency-cut
+inspect refs only when detail is needed. Refresh `pre-wait` when a page reports stale;
+never apply an offset to a changed liveness inventory. The opaque `operations:<key>`
+index and its action pages are independently capped at 24 KiB and preserve exact counts.
+For an unusually large declared identifier or input schema, follow the returned detail
+ref and concatenate its base64-decoded chunks, checking the common SHA-256 digest and
+total byte count. The signed action ref itself remains compact and applies the exact
+same head/Role/Node binding; chunk refs are read-only detail, not lifecycle authority.
+Oversized Role/session authorization and imported Attempt IDs follow the same rule.
+For a declared terminal outcome that cannot fit in an action input, choose its short
+`outcomeRef` from `x-dagrailOutcomeOptions`; follow `idDetailRef` only when the full
+outcome identifier is actually needed.
+
+Schema-legal identifiers may be larger than a CLI or MCP selector. Use the opaque refs
+returned by context, pre-wait, operations, or inspect: `--role-ref`, `--node-ref`,
+`--attempt-ref`, `--incident-ref`, `--effect-ref`, and `--actor-role-ref`. Do not paste
+the recovered large identifier back through a bounded control surface.
+
+`history` returns payload-free command metadata in pages
 of at most 100 entries. `ui` starts a foreground, loopback-only, strictly read-only web
 Explorer and opens the default browser; use `--open=false` when automatic launch is not
 wanted. See [`ui.md`](ui.md) for bounded APIs, deep links, filtering, and large-graph
 behavior.
+
+If `action apply` returns no definitive result because of a crash, timeout, or lost
+response, preserve the original action ref, RFC 8785 canonical JSON input value, and
+idempotency key as one pending-action record. A successor session may replay that
+canonical-equivalent triple to recover the result; whitespace and object-key order may
+differ. Never combine the saved ref with a changed JSON value, a new key, or a new
+intent.
 
 ## Audit the local trust boundary
 
@@ -124,6 +152,12 @@ An upgrade preserves one immutable binary under a SHA-256-addressed data path an
 validates every candidate in a fresh process. Rollback is reversible: the displaced
 runtime becomes the next rollback candidate. This switches the stable DAGrail
 executable only; it does not restore older harness manifests or marketplace metadata.
+
+Before upgrading to v0.23 or later, reconcile every nonterminal Effect with the exact
+adapter version that prepared it, or retain the verified prior runtime until those
+Effects close. v0.23 persists adapter version and schema identity on new Effects; an
+older ambiguous Effect without that binding remains visible but automatic reconciliation
+fails closed rather than guessing which implementation created it.
 
 Before recruiting an external adopter, run `dagrail readiness --source .`. Add
 `--project` only for a project the operator intends to inspect, and add `--installation`

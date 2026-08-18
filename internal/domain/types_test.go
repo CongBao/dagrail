@@ -1,9 +1,12 @@
 package domain
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFrontierEvaluatesClosedTypedFacts(t *testing.T) {
@@ -198,5 +201,29 @@ func TestGraphRejectsSensitiveMaterialOutsideNodeInputs(t *testing.T) {
 	}
 	if err := ValidateGraph(graph); err == nil || !strings.Contains(err.Error(), "credential") {
 		t.Fatalf("sensitive graph metadata was accepted: %v", err)
+	}
+}
+
+func TestFrontierResourceCapacityIsIndexedOnceForLargeGraphs(t *testing.T) {
+	state := NewState("resource-scale")
+	graph := GraphDefinition{APIVersion: GraphAPIVersion, Kind: GraphKind, Metadata: GraphMetadata{Name: "resource scale"}, Spec: GraphSpec{Roles: []RoleDefinition{{ID: "worker", Capabilities: []string{CapabilityNodeRun}}}, ResourceCapacities: []ResourceCapacity{{Kind: "slot", Capacity: 12000}}}}
+	for index := 0; index < 6000; index++ {
+		nodeID := fmt.Sprintf("node-%05d", index)
+		graph.Spec.Nodes = append(graph.Spec.Nodes, NodeDefinition{ID: nodeID, Kind: "task", Role: "worker", Title: "work", Outcomes: []Outcome{{ID: "done", Class: "success"}}, Resources: []ResourceRequest{{Kind: "slot", Quantity: 1}}})
+		state.Nodes[nodeID] = NodeRuntime{Status: "planned"}
+		resourceID := fmt.Sprintf("resource-%05d", index)
+		state.Resources[resourceID] = ResourceLease{ID: resourceID, Kind: "slot", Quantity: 1, Status: "active"}
+	}
+	state.Graph = &graph
+	started := time.Now()
+	frontier, err := ComputeFrontierSummaryContext(context.Background(), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frontier.Ready) != 6000 {
+		t.Fatalf("resource capacity summary lost ready nodes: %d", len(frontier.Ready))
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("frontier rebuilt resource capacity per node: %s", elapsed)
 	}
 }

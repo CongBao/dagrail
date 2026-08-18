@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/git-artifact-closure-v1alpha1.schema.json",
+  "title": "DAGrail Git artifact closure v1alpha1",
+  "oneOf": [
+    {"$ref": "#/$defs/manifest"},
+    {"$ref": "#/$defs/report"}
+  ],
+  "$defs": {
+    "oid": {"type": "string", "pattern": "^([a-f0-9]{40}|[a-f0-9]{64})$"},
+    "ref": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "oid"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^refs/[^ ~^:?*\\[\\\\]+$",
+          "maxLength": 1024,
+          "not": {"pattern": "(\\.\\.|@\\{|//|(^|/)\\.|\\.lock(/|$)|\\.$|/$)"}
+        },
+        "oid": {"$ref": "#/$defs/oid"},
+        "peeled": {"$ref": "#/$defs/oid"}
+      }
+    },
+    "object": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "oid", "type", "retainedBy"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 128},
+        "oid": {"$ref": "#/$defs/oid"},
+        "type": {"enum": ["commit", "tree", "tag"]},
+        "tree": {"$ref": "#/$defs/oid"},
+        "parents": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/oid"}},
+        "retainedBy": {"type": "array", "minItems": 1, "maxItems": 256, "uniqueItems": true, "items": {"type": "string", "pattern": "^refs/"}}
+      },
+      "allOf": [
+        {"if": {"properties": {"type": {"const": "commit"}}}, "then": {"required": ["tree"]}},
+        {"if": {"properties": {"type": {"enum": ["tree", "tag"]}}}, "then": {"not": {"anyOf": [{"required": ["tree"]}, {"required": ["parents"]}]}}}
+      ]
+    },
+    "manifest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "kind", "objects", "refs"],
+      "properties": {
+        "apiVersion": {"const": "dagrail.io/git-artifact-closure/v1alpha1"},
+        "kind": {"const": "GitArtifactClosure"},
+        "objects": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"$ref": "#/$defs/object"}},
+        "refs": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"$ref": "#/$defs/ref"}}
+      }
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "valid"],
+      "properties": {
+        "name": {"type": "string"}, "oid": {"type": "string"}, "peeled": {"type": "string"},
+        "type": {"type": "string"}, "retainedBy": {"type": "array", "items": {"type": "string"}},
+        "valid": {"type": "boolean"}, "reasons": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "report": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "kind", "manifestDigest", "valid", "objects", "refs"],
+      "properties": {
+        "apiVersion": {"const": "dagrail.io/git-artifact-closure/v1alpha1"},
+        "kind": {"const": "GitArtifactClosureReport"},
+        "manifestDigest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "valid": {"type": "boolean"},
+        "objects": {"type": "array", "maxItems": 256, "items": {"$ref": "#/$defs/result"}},
+        "refs": {"type": "array", "maxItems": 256, "items": {"$ref": "#/$defs/result"}}
+      }
+    }
+  }
+}

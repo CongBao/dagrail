@@ -1,9 +1,11 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/CongBao/dagrail/internal/domain"
 )
@@ -28,10 +30,17 @@ func ContextBudgetForView(view string) (int, bool) {
 }
 
 func (s *Service) Context(view, roleID, nodeID string, budget int) ([]byte, error) {
-	return s.ContextSince(view, roleID, nodeID, budget, 0)
+	return s.ContextSinceContext(context.Background(), view, roleID, nodeID, budget, 0)
 }
 
 func (s *Service) ContextSince(view, roleID, nodeID string, budget int, cursor uint64) ([]byte, error) {
+	return s.ContextSinceContext(context.Background(), view, roleID, nodeID, budget, cursor)
+}
+
+func (s *Service) ContextSinceContext(ctx context.Context, view, roleID, nodeID string, budget int, cursor uint64) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	maximum, ok := ContextBudgetForView(view)
 	if !ok {
 		return nil, fmt.Errorf("context view must be orchestrator, worker, or reviewer")
@@ -49,7 +58,18 @@ func (s *Service) ContextSince(view, roleID, nodeID string, budget int, cursor u
 	if err != nil {
 		return nil, err
 	}
-	frontier := domain.ComputeFrontier(state)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if roleID != "" {
+		if _, err := s.actionSecret(); err != nil {
+			return nil, err
+		}
+	}
+	frontier, err := domain.ComputeFrontierContext(ctx, state)
+	if err != nil {
+		return nil, err
+	}
 	data := map[string]any{"project": map[string]any{"id": state.ProjectID, "name": s.Project.Config.Name}, "graphRevision": state.GraphRevision, "frontier": frontier}
 	refs := []string{"project", "frontier"}
 	if cursor > state.HeadSequence {
@@ -59,6 +79,9 @@ func (s *Service) ContextSince(view, roleID, nodeID string, budget int, cursor u
 		delta := make([]map[string]any, 0)
 		deltaTruncated := false
 		for _, segment := range segments[cursor:] {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			types := make([]string, 0, len(segment.Events))
 			for _, event := range segment.Events {
 				types = append(types, event.Type)
@@ -78,18 +101,24 @@ func (s *Service) ContextSince(view, roleID, nodeID string, budget int, cursor u
 		}
 	}
 	if view == "orchestrator" && len(state.Incidents) > 0 {
-		open := make([]domain.Incident, 0)
-		for _, incident := range state.Incidents {
-			if incident.Status != "resolved" {
-				open = append(open, incident)
-				refs = append(refs, "incident:"+incident.ID)
+		index := incidentIndex(state, 0, 8)
+		if index.Total > 0 {
+			indexRef := incidentIndexRef(state, strings.TrimPrefix(index.InventoryDigest, "sha256:"), 0)
+			data["incidentSummary"] = map[string]any{"openCount": index.Total, "items": index.Items, "truncated": index.NextRef != "", "indexRef": indexRef}
+			refs = append(refs, indexRef)
+			for _, incident := range index.Items {
+				if incident.IncidentRef != "" {
+					refs = append(refs, incident.IncidentRef)
+				} else {
+					refs = append(refs, "incident:"+incident.ID)
+				}
 			}
 		}
-		sort.Slice(open, func(i, j int) bool { return open[i].ID < open[j].ID })
-		sort.Strings(refs)
-		data["incidents"] = open
 	}
 	if roleID != "" {
+		data["authorization"] = authorizationForRole(state, roleID, s.Now().UTC())
+		data["operationsRef"] = operationsRefForRole(state, roleID)
+		refs = append(refs, operationsRefForRole(state, roleID))
 		if lease, ok := state.Leases[roleID]; ok {
 			data["roleLease"] = lease
 			refs = append(refs, "role:"+roleID)
@@ -148,6 +177,31 @@ func (s *Service) ContextSince(view, roleID, nodeID string, budget int, cursor u
 			data["allowedActions"] = actions.Actions
 		}
 	}
+	if view == "orchestrator" && roleID != "" {
+		actions, actionsErr := s.projectAllowedActionsContext(ctx, state, roleID, 7, s.Now().UTC())
+		if actionsErr != nil {
+			return nil, actionsErr
+		}
+		if len(actions) > 0 {
+			if len(actions) > 6 {
+				data["projectAllowedActionsTruncated"] = true
+				actions = actions[:6]
+			}
+			data["projectAllowedActions"] = actions
+		}
+		audit, auditErr := s.preWaitFromStateContext(ctx, state)
+		if auditErr == nil {
+			data["remediationCount"] = audit.RemediationCount
+			if len(audit.Remediations) > 8 {
+				data["remediationsTruncated"] = true
+				audit.Remediations = audit.Remediations[:8]
+			}
+			data["remediations"] = audit.Remediations
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	sort.Strings(refs)
 	envelope := ContextEnvelope{View: view, Cursor: state.HeadSequence, Data: data}
 	raw, err := json.Marshal(envelope)
@@ -158,8 +212,24 @@ func (s *Service) ContextSince(view, roleID, nodeID string, budget int, cursor u
 		return raw, nil
 	}
 	envelope.Truncated = true
-	envelope.InspectRefs = refs
-	delete(data, "allowedActions")
+	envelope.InspectRefs = boundedInspectRefs(refs, 32)
+	delete(data, "delta")
+	delete(data, "roleLease")
+	if actions, ok := data["allowedActions"].([]AllowedAction); ok && len(actions) > 1 {
+		data["allowedActions"] = actions[:1]
+		data["allowedActionsTruncated"] = true
+	}
+	if actions, ok := data["projectAllowedActions"].([]AllowedAction); ok && len(actions) > 1 {
+		data["projectAllowedActions"] = actions[:1]
+		data["projectAllowedActionsTruncated"] = true
+	}
+	if remediations, ok := data["remediations"].([]Remediation); ok && len(remediations) > 2 {
+		data["remediations"] = remediations[:2]
+		data["remediationsTruncated"] = true
+	}
+	if summary, ok := data["incidentSummary"].(map[string]any); ok {
+		delete(summary, "items")
+	}
 	if value, ok := data["frontier"].(domain.Frontier); ok {
 		value.Blocked = nil
 		data["frontier"] = value
@@ -171,16 +241,26 @@ func (s *Service) ContextSince(view, roleID, nodeID string, budget int, cursor u
 	if len(raw) <= budget {
 		return raw, nil
 	}
-	essentialRefs := []string{"frontier"}
-	minimal := map[string]any{"graphRevision": state.GraphRevision}
-	if nodeID != "" {
-		minimal["nodeRef"] = "node:" + nodeID
-		minimal["runtime"] = state.Nodes[nodeID]
-		essentialRefs = append(essentialRefs, "node:"+nodeID)
+	essentialRefs := []string{"project", "frontier"}
+	minimal := map[string]any{"projectRef": "project", "graphRevision": state.GraphRevision}
+	if roleID != "" {
+		authorization := authorizationForRole(state, roleID, s.Now().UTC())
+		minimal["authorization"] = map[string]any{"roleRef": roleRefForRole(state, authorization.RoleID), "leaseState": authorization.LeaseState}
+		minimal["operationsRef"] = operationsRefForRole(state, roleID)
+		essentialRefs = append(essentialRefs, operationsRefForRole(state, roleID))
 	}
-	sort.Strings(essentialRefs)
+	if index := incidentIndex(state, 0, 1); view == "orchestrator" && index.Total > 0 {
+		indexRef := incidentIndexRef(state, strings.TrimPrefix(index.InventoryDigest, "sha256:"), 0)
+		minimal["incidents"] = map[string]any{"openCount": index.Total, "indexRef": indexRef}
+		essentialRefs = append(essentialRefs, indexRef)
+	}
+	if nodeID != "" {
+		minimal["nodeRef"] = nodeRefForNode(state, nodeID)
+		minimal["runtime"] = state.Nodes[nodeID]
+		essentialRefs = append(essentialRefs, nodeRefForNode(state, nodeID))
+	}
 	envelope.Data = minimal
-	envelope.InspectRefs = essentialRefs
+	envelope.InspectRefs = boundedInspectRefs(essentialRefs, 8)
 	marshalWithReady := func(count int) ([]byte, error) {
 		minimal["frontier"] = map[string]any{
 			"ready":          frontier.Ready[:count],
@@ -192,6 +272,22 @@ func (s *Service) ContextSince(view, roleID, nodeID string, budget int, cursor u
 	empty, err := marshalWithReady(0)
 	if err != nil {
 		return nil, err
+	}
+	if len(empty) > budget {
+		delete(minimal, "runtime")
+		envelope.InspectRefs = nil
+		empty, err = marshalWithReady(0)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(empty) > budget {
+		delete(minimal, "incidents")
+		delete(minimal, "projectRef")
+		empty, err = marshalWithReady(0)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(empty) > budget {
 		return nil, fmt.Errorf("context invariant set exceeds byte budget")
@@ -212,4 +308,21 @@ func (s *Service) ContextSince(view, roleID, nodeID string, budget int, cursor u
 		}
 	}
 	return best, nil
+}
+
+func boundedInspectRefs(refs []string, limit int) []string {
+	seen := map[string]bool{}
+	result := make([]string, 0, limit)
+	for _, ref := range refs {
+		if ref == "" || seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		result = append(result, ref)
+	}
+	sort.Strings(result)
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result
 }

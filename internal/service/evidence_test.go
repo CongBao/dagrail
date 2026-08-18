@@ -69,6 +69,9 @@ func TestReuseDecisionExcludesPolicyVersionButDetectsCoreChange(t *testing.T) {
 
 func packageInputJSON(t *testing.T, protected []domain.ProtectedInput, artifacts []domain.ArtifactRef) json.RawMessage {
 	t.Helper()
+	if artifacts == nil {
+		artifacts = []domain.ArtifactRef{}
+	}
 	value := map[string]any{
 		"candidate":          testArtifact("1", "candidate"),
 		"prospectiveTree":    testArtifact("2", "git-tree"),

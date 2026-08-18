@@ -13,6 +13,8 @@ import (
 
 	"github.com/CongBao/dagrail/internal/commandcatalog"
 	"github.com/CongBao/dagrail/internal/contract"
+	"github.com/CongBao/dagrail/internal/domain"
+	"github.com/CongBao/dagrail/internal/gitartifact"
 	"github.com/CongBao/dagrail/internal/harness"
 	"github.com/CongBao/dagrail/internal/hook"
 	"github.com/CongBao/dagrail/internal/install"
@@ -52,16 +54,18 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 		return usagef("unknown command %q", args[0])
 	}
 	switch args[0] {
+	case "artifact":
+		return runArtifact(ctx, args[1:], stdout, stderr)
 	case "init":
 		return runInit(args[1:], stdout, stderr)
 	case "graph":
 		return runGraph(ctx, args[1:], stdout, stderr)
 	case "frontier":
-		return runFrontier(args[1:], stdout, stderr)
+		return runFrontier(ctx, args[1:], stdout, stderr)
 	case "status":
-		return runStatus(args[1:], stdout, stderr)
+		return runStatus(ctx, args[1:], stdout, stderr)
 	case "history":
-		return runHistory(args[1:], stdout, stderr)
+		return runHistory(ctx, args[1:], stdout, stderr)
 	case "backup":
 		return runBackup(args[1:], stdout, stderr)
 	case "role":
@@ -69,7 +73,7 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 	case "action":
 		return runAction(ctx, args[1:], stdout, stderr)
 	case "context":
-		return runContext(args[1:], stdout, stderr)
+		return runContext(ctx, args[1:], stdout, stderr)
 	case "commands":
 		if len(args) != 1 {
 			return usagef("usage: dagrail commands")
@@ -91,9 +95,9 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 		}
 		return writeJSON(stdout, contract.Current())
 	case "inspect":
-		return runInspect(args[1:], stdout, stderr)
+		return runInspect(ctx, args[1:], stdout, stderr)
 	case "pre-wait":
-		return runPreWait(args[1:], stdout, stderr)
+		return runPreWait(ctx, args[1:], stdout, stderr)
 	case "reconcile":
 		return runReconcile(ctx, args[1:], stdout, stderr)
 	case "recovery":
@@ -119,7 +123,7 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 	case "lifecycle":
 		return runLifecycle(args[1:], stdout, stderr)
 	case "evidence":
-		return runEvidence(args[1:], stdout, stderr)
+		return runEvidence(ctx, args[1:], stdout, stderr)
 	case "incident":
 		return runIncident(ctx, args[1:], stdout, stderr)
 	case "projection":
@@ -143,6 +147,64 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 		return writeJSON(stdout, map[string]string{"version": version.Version, "commit": version.Commit, "date": version.Date})
 	default:
 		return usagef("unknown command %q", args[0])
+	}
+}
+
+func runArtifact(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return usagef("usage: dagrail artifact <verify-git-closure|inspect-scope>")
+	}
+	flags := flag.NewFlagSet("artifact "+args[0], flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	repository := flags.String("repo", ".", "consumer Git repository")
+	manifestPath := flags.String("file", "", "Git artifact closure manifest")
+	base := flags.String("base", "", "exact producer base commit")
+	candidate := flags.String("candidate", "", "exact producer candidate commit")
+	target := flags.String("target", "", "exact accepted target commit")
+	prospective := flags.String("prospective", "", "exact prospective integration commit")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return usagef("usage: dagrail artifact %s [flags]", args[0])
+	}
+	switch args[0] {
+	case "verify-git-closure":
+		if *manifestPath == "" {
+			return usagef("--file is required")
+		}
+		manifest, err := gitartifact.DecodeManifestContext(ctx, *manifestPath)
+		if err != nil {
+			return err
+		}
+		report, err := gitartifact.VerifyContext(ctx, *repository, manifest)
+		if err != nil {
+			return err
+		}
+		if err := writeJSON(stdout, report); err != nil {
+			return err
+		}
+		if !report.Valid {
+			return diagnosticError(fmt.Errorf("git artifact closure is not valid"))
+		}
+		return nil
+	case "inspect-scope":
+		if *base == "" || *candidate == "" || *target == "" || *prospective == "" {
+			return usagef("--base, --candidate, --target and --prospective are required")
+		}
+		report, err := gitartifact.InspectScopeContext(ctx, *repository, *base, *candidate, *target, *prospective)
+		if err != nil {
+			return err
+		}
+		if err := writeJSON(stdout, report); err != nil {
+			return err
+		}
+		if !report.Closed {
+			return diagnosticError(fmt.Errorf("git integration scope contains unexplained prospective deltas"))
+		}
+		return nil
+	default:
+		return usagef("unknown artifact command %q", args[0])
 	}
 }
 
@@ -307,7 +369,7 @@ func runUI(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	return dagrailui.Serve(ctx, s, *listen, *open, stderr)
 }
 
-func runStatus(args []string, stdout, stderr io.Writer) error {
+func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("status", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
@@ -318,14 +380,14 @@ func runStatus(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	status, err := s.Status()
+	status, err := s.BoundedStatusContext(ctx)
 	if err != nil {
 		return err
 	}
 	return writeJSON(stdout, status)
 }
 
-func runHistory(args []string, stdout, stderr io.Writer) error {
+func runHistory(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("history", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
@@ -338,7 +400,7 @@ func runHistory(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	history, err := s.History(*after, *limit)
+	history, err := s.BoundedHistoryContext(ctx, *after, *limit)
 	if err != nil {
 		return err
 	}
@@ -424,25 +486,56 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 
 func runIncident(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: dagrail incident <progress|trip|disposition|resolve>")
+		return fmt.Errorf("usage: dagrail incident <progress|trip|disposition|resolve|supersede>")
 	}
 	flags := flag.NewFlagSet("incident "+args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
 	id := flags.String("incident", "", "incident ID")
+	incidentRef := flags.String("incident-ref", "", "opaque Incident ref")
 	role := flags.String("actor-role", "", "owner role")
+	roleRef := flags.String("actor-role-ref", "", "opaque owner Role ref")
 	key := flags.String("idempotency-key", "", "idempotency key")
 	note := flags.String("note", "", "bounded progress note")
 	madeProgress := flags.Bool("made-progress", false, "reset consecutive no-progress attempts")
 	reason := flags.String("reason", "", "circuit-breaker reason")
 	resolution := flags.String("resolution", "", "resolution summary")
 	disposition := flags.String("disposition", "", "retry, rollback, lkg, quarantine, off-critical-path, or escalate")
+	successorNode := flags.String("successor-node", "", "declared repair successor node")
+	successorNodeRef := flags.String("successor-node-ref", "", "opaque repair successor Node ref")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
 	s, err := service.Open(*root)
 	if err != nil {
 		return err
+	}
+	if *incidentRef != "" {
+		if *id != "" {
+			return fmt.Errorf("provide --incident or --incident-ref, not both")
+		}
+		*id, err = s.ResolveEntityRef("incident", *incidentRef)
+		if err != nil {
+			return err
+		}
+	}
+	if *roleRef != "" {
+		if *role != "" {
+			return fmt.Errorf("provide --actor-role or --actor-role-ref, not both")
+		}
+		*role, err = s.ResolveEntityRef("role", *roleRef)
+		if err != nil {
+			return err
+		}
+	}
+	if *successorNodeRef != "" {
+		if *successorNode != "" {
+			return fmt.Errorf("provide --successor-node or --successor-node-ref, not both")
+		}
+		*successorNode, err = s.ResolveEntityRef("node", *successorNodeRef)
+		if err != nil {
+			return err
+		}
 	}
 	var incident any
 	switch args[0] {
@@ -454,11 +547,24 @@ func runIncident(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		incident, err = s.ResolveIncidentContext(ctx, *id, *role, *resolution, *key)
 	case "disposition":
 		incident, err = s.SetIncidentDispositionContext(ctx, *id, *role, *disposition, *note, *key)
+	case "supersede":
+		incident, err = s.SupersedeIncidentContext(ctx, *id, *successorNode, *role, *note, *key)
 	default:
 		return fmt.Errorf("unknown incident command %q", args[0])
 	}
 	if err != nil {
 		return err
+	}
+	if raw, _ := json.Marshal(incident); len(raw) > 24*1024 {
+		ref, refErr := s.EntityRef("incident", *id)
+		if refErr != nil {
+			return refErr
+		}
+		value, inspectErr := s.Inspect(ref)
+		if inspectErr != nil {
+			return inspectErr
+		}
+		return writeJSON(stdout, value)
 	}
 	return writeJSON(stdout, incident)
 }
@@ -513,7 +619,7 @@ func runProvider(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 }
 
-func runEvidence(args []string, stdout, stderr io.Writer) error {
+func runEvidence(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 || args[0] != "list" {
 		return fmt.Errorf("usage: dagrail evidence list [--node ID] [--attempt ID]")
 	}
@@ -521,7 +627,9 @@ func runEvidence(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
 	nodeID := flags.String("node", "", "filter by node ID")
+	nodeRef := flags.String("node-ref", "", "opaque Node ref")
 	attemptID := flags.String("attempt", "", "filter by attempt ID")
+	attemptRef := flags.String("attempt-ref", "", "opaque Attempt ref")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -529,7 +637,25 @@ func runEvidence(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	result, err := s.ListEvidence(*nodeID, *attemptID)
+	if *nodeRef != "" {
+		if *nodeID != "" {
+			return fmt.Errorf("provide --node or --node-ref, not both")
+		}
+		*nodeID, err = s.ResolveEntityRef("node", *nodeRef)
+		if err != nil {
+			return err
+		}
+	}
+	if *attemptRef != "" {
+		if *attemptID != "" {
+			return fmt.Errorf("provide --attempt or --attempt-ref, not both")
+		}
+		*attemptID, err = s.ResolveEntityRef("attempt", *attemptRef)
+		if err != nil {
+			return err
+		}
+	}
+	result, err := s.BoundedEvidenceContext(ctx, *nodeID, *attemptID)
 	if err != nil {
 		return err
 	}
@@ -708,6 +834,7 @@ func runReconcile(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
 	action := flags.String("action", "", "effect action ID")
+	effectRef := flags.String("effect-ref", "", "opaque Effect ref")
 	receipt := flags.String("receipt", "{}", "optional adapter evidence JSON; omit for native observation")
 	key := flags.String("idempotency-key", "", "idempotency key")
 	if err := flags.Parse(args); err != nil {
@@ -720,14 +847,27 @@ func runReconcile(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if err != nil {
 		return err
 	}
+	if *effectRef != "" {
+		if *action != "" {
+			return fmt.Errorf("provide --action or --effect-ref, not both")
+		}
+		*action, err = s.ResolveEntityRef("effect", *effectRef)
+		if err != nil {
+			return err
+		}
+	}
 	value, err := s.ReconcileEffectContext(ctx, *action, json.RawMessage(*receipt), *key)
 	if err != nil {
 		return err
 	}
-	return writeJSON(stdout, value)
+	bounded, err := s.BoundedEffectAction(value)
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, bounded)
 }
 
-func runInspect(args []string, stdout, stderr io.Writer) error {
+func runInspect(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("inspect", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
@@ -741,14 +881,14 @@ func runInspect(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	value, err := s.Inspect(flags.Arg(0))
+	value, err := s.InspectContext(ctx, flags.Arg(0))
 	if err != nil {
 		return err
 	}
 	return writeJSON(stdout, value)
 }
 
-func runPreWait(args []string, stdout, stderr io.Writer) error {
+func runPreWait(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("pre-wait", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
@@ -759,7 +899,7 @@ func runPreWait(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	value, err := s.PreWait()
+	value, err := s.PreWaitContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -774,6 +914,7 @@ func runRole(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
 	role := flags.String("role", "", "stable role ID")
+	roleRef := flags.String("role-ref", "", "opaque Role ref")
 	harness := flags.String("harness", "", "harness ID")
 	session := flags.String("session", "", "session audit ID")
 	ttl := flags.Duration("ttl", 15*time.Minute, "lease TTL")
@@ -785,16 +926,46 @@ func runRole(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if *roleRef != "" {
+		if *role != "" {
+			return fmt.Errorf("provide --role or --role-ref, not both")
+		}
+		*role, err = s.ResolveEntityRef("role", *roleRef)
+		if err != nil {
+			return err
+		}
+	}
 	switch args[0] {
 	case "bind", "takeover":
 		lease, err := s.BindRole(*role, *harness, *session, *ttl, args[0] == "takeover", *key)
 		if err != nil {
 			return err
 		}
+		if raw, _ := json.Marshal(lease); len(raw) > 24*1024 {
+			ref, refErr := s.EntityRef("role", *role)
+			if refErr != nil {
+				return refErr
+			}
+			value, inspectErr := s.Inspect(ref)
+			if inspectErr != nil {
+				return inspectErr
+			}
+			return writeJSON(stdout, value)
+		}
 		return writeJSON(stdout, lease)
 	case "release":
 		if err := s.ReleaseRole(*role, *session, *key); err != nil {
 			return err
+		}
+		if len([]byte(*role)) > 2048 {
+			ref := *roleRef
+			if ref == "" {
+				ref, err = s.EntityRef("role", *role)
+				if err != nil {
+					return err
+				}
+			}
+			return writeJSON(stdout, map[string]any{"released": true, "roleRef": ref})
 		}
 		return writeJSON(stdout, map[string]any{"released": true, "roleId": *role})
 	default:
@@ -810,7 +981,9 @@ func runAction(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
 	role := flags.String("role", "", "stable role ID")
+	roleRef := flags.String("role-ref", "", "opaque Role ref")
 	node := flags.String("node", "", "node ID")
+	nodeRef := flags.String("node-ref", "", "opaque Node ref")
 	ref := flags.String("ref", "", "allowed action ref")
 	input := flags.String("input", "{}", "JSON action input")
 	key := flags.String("idempotency-key", "", "idempotency key")
@@ -825,9 +998,27 @@ func runAction(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err != nil {
 		return err
 	}
+	if *roleRef != "" {
+		if *role != "" {
+			return fmt.Errorf("provide --role or --role-ref, not both")
+		}
+		*role, err = s.ResolveEntityRef("role", *roleRef)
+		if err != nil {
+			return err
+		}
+	}
+	if *nodeRef != "" {
+		if *node != "" {
+			return fmt.Errorf("provide --node or --node-ref, not both")
+		}
+		*node, err = s.ResolveEntityRef("node", *nodeRef)
+		if err != nil {
+			return err
+		}
+	}
 	switch args[0] {
 	case "list":
-		value, err := s.ListActions(*role, *node)
+		value, err := s.BoundedActionListContext(ctx, *role, *node)
 		if err != nil {
 			return err
 		}
@@ -846,13 +1037,15 @@ func runAction(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	}
 }
 
-func runContext(args []string, stdout, stderr io.Writer) error {
+func runContext(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("context", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
 	view := flags.String("view", "orchestrator", "context view")
 	role := flags.String("role", "", "role ID")
+	roleRef := flags.String("role-ref", "", "opaque Role ref")
 	node := flags.String("node", "", "node ID")
+	nodeRef := flags.String("node-ref", "", "opaque Node ref")
 	budget := flags.Int("budget-bytes", 0, "maximum output bytes")
 	cursor := flags.Uint64("cursor", 0, "journal cursor for a bounded delta")
 	if err := flags.Parse(args); err != nil {
@@ -862,7 +1055,25 @@ func runContext(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	value, err := s.ContextSince(*view, *role, *node, *budget, *cursor)
+	if *roleRef != "" {
+		if *role != "" {
+			return fmt.Errorf("provide --role or --role-ref, not both")
+		}
+		*role, err = s.ResolveEntityRef("role", *roleRef)
+		if err != nil {
+			return err
+		}
+	}
+	if *nodeRef != "" {
+		if *node != "" {
+			return fmt.Errorf("provide --node or --node-ref, not both")
+		}
+		*node, err = s.ResolveEntityRef("node", *nodeRef)
+		if err != nil {
+			return err
+		}
+	}
+	value, err := s.ContextSinceContext(ctx, *view, *role, *node, *budget, *cursor)
 	if err != nil {
 		return err
 	}
@@ -974,7 +1185,7 @@ func runGraph(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		if err != nil {
 			return err
 		}
-		return writeJSON(stdout, impact)
+		return writeJSON(stdout, service.BoundedGraphImpact(impact))
 	case "apply-change":
 		flags := flag.NewFlagSet("graph apply-change", flag.ContinueOnError)
 		flags.SetOutput(stderr)
@@ -983,6 +1194,7 @@ func runGraph(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		token := flags.String("token", "", "impact token")
 		key := flags.String("idempotency-key", "", "idempotency key")
 		role := flags.String("actor-role", "", "actor role")
+		roleRef := flags.String("actor-role-ref", "", "opaque actor Role ref")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -993,17 +1205,26 @@ func runGraph(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 		if err != nil {
 			return err
 		}
+		if *roleRef != "" {
+			if *role != "" {
+				return fmt.Errorf("provide --actor-role or --actor-role-ref, not both")
+			}
+			*role, err = s.ResolveEntityRef("role", *roleRef)
+			if err != nil {
+				return err
+			}
+		}
 		impact, err := s.ApplyGraphChange(*file, *token, *key, *role)
 		if err != nil {
 			return err
 		}
-		return writeJSON(stdout, impact)
+		return writeJSON(stdout, service.BoundedGraphImpact(impact))
 	default:
 		return fmt.Errorf("unknown graph command %q", args[0])
 	}
 }
 
-func runFrontier(args []string, stdout, stderr io.Writer) error {
+func runFrontier(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("frontier", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
@@ -1015,14 +1236,37 @@ func runFrontier(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	frontier, err := s.Frontier()
+	if *format != "human" && *format != "json" {
+		return fmt.Errorf("--format must be human or json")
+	}
+	frontier, err := s.InspectContext(ctx, "frontier")
 	if err != nil {
 		return err
 	}
 	if *format == "json" {
 		return writeJSON(stdout, frontier)
 	}
-	_, err = fmt.Fprintf(stdout, "Ready: %s\n", strings.Join(frontier.Ready, ", "))
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var output string
+	switch value := frontier.(type) {
+	case domain.Frontier:
+		ready := value.Ready
+		if len(ready) > 8 {
+			ready = ready[:8]
+		}
+		output = fmt.Sprintf("Ready (%d): %s\n", len(value.Ready), strings.Join(ready, ", "))
+	case map[string]any:
+		output = fmt.Sprintf("Ready (%v); blocked: %v; unreachable: %v; resource-blocked: %v; inspect: %v\n",
+			value["readyCount"], value["blockedCount"], value["unreachableCount"], value["resourceBlockedCount"], value["detailRef"])
+	default:
+		return fmt.Errorf("unexpected frontier response %T", frontier)
+	}
+	if len([]byte(output)) > 24*1024 {
+		output = "Frontier exceeded the human output budget; use --format json and follow its detailRef.\n"
+	}
+	_, err = io.WriteString(stdout, output)
 	return err
 }
 

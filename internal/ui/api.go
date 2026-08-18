@@ -108,19 +108,21 @@ type DecisionView struct {
 }
 
 type EffectView struct {
-	ID               string `json:"id"`
-	NodeID           string `json:"nodeId"`
-	AttemptID        string `json:"attemptId"`
-	AdapterID        string `json:"adapterId"`
-	OwnerRole        string `json:"ownerRole,omitempty"`
-	Status           string `json:"status"`
-	TransportStatus  string `json:"transportStatus,omitempty"`
-	SessionStatus    string `json:"sessionStatus,omitempty"`
-	DeliveryStatus   string `json:"deliveryStatus,omitempty"`
-	AcceptanceStatus string `json:"acceptanceStatus,omitempty"`
-	CompletionStatus string `json:"completionStatus,omitempty"`
-	PreparedAt       string `json:"preparedAt"`
-	UpdatedAt        string `json:"updatedAt"`
+	ID                string `json:"id"`
+	NodeID            string `json:"nodeId"`
+	AttemptID         string `json:"attemptId"`
+	AdapterID         string `json:"adapterId"`
+	AdapterVersion    string `json:"adapterVersion,omitempty"`
+	AdapterSchemaHash string `json:"adapterSchemaHash,omitempty"`
+	OwnerRole         string `json:"ownerRole,omitempty"`
+	Status            string `json:"status"`
+	TransportStatus   string `json:"transportStatus,omitempty"`
+	SessionStatus     string `json:"sessionStatus,omitempty"`
+	DeliveryStatus    string `json:"deliveryStatus,omitempty"`
+	AcceptanceStatus  string `json:"acceptanceStatus,omitempty"`
+	CompletionStatus  string `json:"completionStatus,omitempty"`
+	PreparedAt        string `json:"preparedAt"`
+	UpdatedAt         string `json:"updatedAt"`
 }
 
 type ResourceView struct {
@@ -726,7 +728,7 @@ func focusedNodeIDs(state domain.State, focus string, depth int) []string {
 }
 
 func effectView(effect domain.EffectAction) EffectView {
-	view := EffectView{ID: effect.ID, NodeID: effect.NodeID, AttemptID: effect.AttemptID, AdapterID: effect.AdapterID, OwnerRole: effect.OwnerRole, Status: effect.Status, PreparedAt: effect.PreparedAt, UpdatedAt: effect.UpdatedAt}
+	view := EffectView{ID: effect.ID, NodeID: effect.NodeID, AttemptID: effect.AttemptID, AdapterID: effect.AdapterID, AdapterVersion: effect.AdapterVersion, AdapterSchemaHash: effect.AdapterSchemaHash, OwnerRole: effect.OwnerRole, Status: effect.Status, PreparedAt: effect.PreparedAt, UpdatedAt: effect.UpdatedAt}
 	var receipt struct {
 		TransportStatus  string `json:"transportStatus"`
 		SessionStatus    string `json:"sessionStatus"`

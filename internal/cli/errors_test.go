@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/CongBao/dagrail/internal/commandcatalog"
+	"github.com/CongBao/dagrail/internal/service"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -87,6 +88,44 @@ func TestRunContextClassifiesUsageAndCancellation(t *testing.T) {
 	err = RunContext(ctx, []string{"version"}, strings.NewReader(""), &stdout, &stderr)
 	if report := DescribeError(err); report.Code != "interrupted" || report.ExitCode != 130 {
 		t.Fatalf("cancellation was not preserved: %#v", report)
+	}
+}
+
+type delayedCancelContext struct {
+	context.Context
+	calls       int
+	cancelAfter int
+}
+
+func (ctx *delayedCancelContext) Err() error {
+	ctx.calls++
+	if ctx.calls >= ctx.cancelAfter {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestRunContextPropagatesCancellationIntoInspectAndContextQueries(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := service.Init(root, "query-cancellation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graphPath := filepath.Join(root, "graph.json")
+	if err := os.WriteFile(graphPath, []byte(`{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"query-cancellation"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"work","kind":"task","role":"worker","title":"work","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "graph", "bootstrap"); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"inspect", "--root", root, "frontier"}, {"context", "--root", root, "--view", "worker"}} {
+		ctx := &delayedCancelContext{Context: context.Background(), cancelAfter: 3}
+		var stdout, stderr bytes.Buffer
+		err := RunContext(ctx, args, strings.NewReader(""), &stdout, &stderr)
+		if report := DescribeError(err); report.Code != "interrupted" || report.ExitCode != commandcatalog.ExitInterrupted {
+			t.Fatalf("%v did not propagate deep query cancellation: err=%v report=%#v", args, err, report)
+		}
 	}
 }
 

@@ -210,7 +210,8 @@
         "lastProgress": {"type": "string"}, "lastProgressAt": {"type": "string"}, "circuitReason": {"type": "string"},
         "disposition": {"enum": ["retry", "rollback", "lkg", "quarantine", "off-critical-path", "escalate"]},
         "dispositionBy": {"type": "string"}, "dispositionAt": {"type": "string"},
-        "resolution": {"type": "string"}, "dependencyCut": {"type": "array", "items": {"type": "string"}},
+        "resolution": {"type": "string"}, "remedyNodeId": {"type": "string"}, "supersededAt": {"type": "string"},
+        "dependencyCut": {"type": "array", "items": {"type": "string"}},
         "openedAt": {"type": "string"}, "updatedAt": {"type": "string"}
       }
     },
@@ -229,7 +230,7 @@
       "required": ["id", "nodeId", "attemptId", "adapterId", "status", "preparedAt", "updatedAt"],
       "properties": {
         "id": {"type": "string"}, "nodeId": {"type": "string"}, "attemptId": {"type": "string"},
-        "adapterId": {"type": "string"}, "ownerRole": {"type": "string"}, "status": {"type": "string"},
+        "adapterId": {"type": "string"}, "adapterVersion": {"type": "string"}, "adapterSchemaHash": {"type": "string"}, "ownerRole": {"type": "string"}, "status": {"type": "string"},
         "transportStatus": {"type": "string"}, "sessionStatus": {"type": "string"}, "deliveryStatus": {"type": "string"},
         "acceptanceStatus": {"type": "string"}, "completionStatus": {"type": "string"},
         "preparedAt": {"type": "string"}, "updatedAt": {"type": "string"}

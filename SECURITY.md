@@ -28,6 +28,13 @@ Graph Definition and GraphPatch inputs must be regular files no larger than 8 Mi
 Predicate ASTs may nest at most 64 levels. These limits bound parser and recursive
 validation exposure; they do not substitute for reviewing graph provenance.
 
+Git artifact closure manifests must be regular, non-symlink files no larger than 1 MiB
+and are read through the caller's cancellation context. Git evidence commands remove
+repository/object-store redirection variables, disable replacement objects and lazy
+fetch, and derive commit parents and reachability from raw object bytes. Repository
+replace refs, legacy grafts, or ambient `GIT_DIR`/`GIT_WORK_TREE` therefore cannot
+rewrite an exact closure or scope report.
+
 All authority JSON rejects duplicate keys, unsafe numeric forms, more than 64 nesting
 levels, excessive values, overlong keys/strings, and trailing documents. Journal
 segments are regular non-symlink canonical files limited to 16 MiB, 10,000 events per
@@ -117,7 +124,7 @@ uses inspection-only security and recovery checks. Structural qualification neve
 claims that CI actually ran for a particular tag or that production adoption occurred;
 the tag workflow supplies build evidence and the report leaves adoption gaps explicit.
 
-The historical compatibility job builds exact commit-pinned v0.10–v0.21 sources in
+The historical compatibility job builds exact commit-pinned v0.10.0–v0.22.2 sources in
 temporary directories. Source archives reject traversal, links, unsupported entry
 types, excessive entries, and excessive expanded bytes. Readiness reports cite the
 manifest digest but cannot turn this CI evidence into production validation.

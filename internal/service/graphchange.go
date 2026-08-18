@@ -35,19 +35,30 @@ type PatchOperation struct {
 }
 
 type GraphImpact struct {
-	CurrentRevision  string   `json:"currentRevision"`
-	ProposedRevision string   `json:"proposedRevision"`
-	AddedNodes       []string `json:"addedNodes,omitempty"`
-	UpdatedNodes     []string `json:"updatedNodes,omitempty"`
-	RemovedNodes     []string `json:"removedNodes,omitempty"`
-	AddedEdges       []string `json:"addedEdges,omitempty"`
-	RemovedEdges     []string `json:"removedEdges,omitempty"`
-	AddedRoles       []string `json:"addedRoles,omitempty"`
-	UpdatedRoles     []string `json:"updatedRoles,omitempty"`
-	RemovedRoles     []string `json:"removedRoles,omitempty"`
-	DependencyCut    []string `json:"dependencyCut,omitempty"`
-	Token            string   `json:"token,omitempty"`
-	ExpiresAt        string   `json:"expiresAt"`
+	CurrentRevision    string   `json:"currentRevision"`
+	ProposedRevision   string   `json:"proposedRevision"`
+	AddedNodes         []string `json:"addedNodes,omitempty"`
+	UpdatedNodes       []string `json:"updatedNodes,omitempty"`
+	RemovedNodes       []string `json:"removedNodes,omitempty"`
+	AddedEdges         []string `json:"addedEdges,omitempty"`
+	RemovedEdges       []string `json:"removedEdges,omitempty"`
+	AddedRoles         []string `json:"addedRoles,omitempty"`
+	UpdatedRoles       []string `json:"updatedRoles,omitempty"`
+	RemovedRoles       []string `json:"removedRoles,omitempty"`
+	DependencyCut      []string `json:"dependencyCut,omitempty"`
+	Token              string   `json:"token,omitempty"`
+	ExpiresAt          string   `json:"expiresAt"`
+	AddedNodeCount     int      `json:"addedNodeCount,omitempty"`
+	UpdatedNodeCount   int      `json:"updatedNodeCount,omitempty"`
+	RemovedNodeCount   int      `json:"removedNodeCount,omitempty"`
+	AddedEdgeCount     int      `json:"addedEdgeCount,omitempty"`
+	RemovedEdgeCount   int      `json:"removedEdgeCount,omitempty"`
+	AddedRoleCount     int      `json:"addedRoleCount,omitempty"`
+	UpdatedRoleCount   int      `json:"updatedRoleCount,omitempty"`
+	RemovedRoleCount   int      `json:"removedRoleCount,omitempty"`
+	DependencyCutCount int      `json:"dependencyCutCount,omitempty"`
+	ImpactDigest       string   `json:"impactDigest,omitempty"`
+	Truncated          bool     `json:"truncated,omitempty"`
 }
 
 type graphChangeToken struct {

@@ -67,6 +67,28 @@ func TestPublishedSchemaDigestGateIncludesAuthorityRelocation(t *testing.T) {
 	}
 }
 
+func TestPublishedSchemaDigestGateIncludesGitEvidenceSurfaces(t *testing.T) {
+	for name, selected := range map[string]func(contract.Report) contract.DocumentedSurface{
+		"artifact closure":  func(report contract.Report) contract.DocumentedSurface { return report.GitArtifactClosure },
+		"integration scope": func(report contract.Report) contract.DocumentedSurface { return report.GitIntegrationScope },
+	} {
+		t.Run(name, func(t *testing.T) {
+			report := contract.Current()
+			target := selected(report)
+			reader := func(relative string) ([]byte, error) {
+				raw, err := os.ReadFile(filepath.Join("..", "..", relative))
+				if relative == target.SchemaPath {
+					raw = append(raw, ' ')
+				}
+				return raw, err
+			}
+			if publishedSchemaDigestsMatchReader(report, reader) {
+				t.Fatalf("%s schema mutation bypassed published digest qualification", name)
+			}
+		})
+	}
+}
+
 func TestFailedBundleEvidenceRemainsSchemaValid(t *testing.T) {
 	report, err := Run("../..", "")
 	if err != nil {

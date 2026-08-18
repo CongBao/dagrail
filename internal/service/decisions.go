@@ -18,6 +18,7 @@ import (
 
 type completionInput struct {
 	Outcome        string                `json:"outcome"`
+	OutcomeRef     string                `json:"outcomeRef"`
 	Facts          domain.PredicateFacts `json:"facts"`
 	EvidenceRefs   []domain.EvidenceRef  `json:"evidenceRefs"`
 	Classification string                `json:"classification"`

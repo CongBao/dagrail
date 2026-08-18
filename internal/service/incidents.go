@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const incidentResolutionSupersededByRepair = "superseded_by_repair"
+
 func (s *Service) ProgressIncident(incidentID, actorRole, note string, madeProgress bool, idempotencyKey string) (domain.Incident, error) {
 	return s.ProgressIncidentContext(context.Background(), incidentID, actorRole, note, madeProgress, idempotencyKey)
 }
@@ -24,7 +26,7 @@ func (s *Service) ProgressIncidentContext(ctx context.Context, incidentID, actor
 	if err != nil {
 		return domain.Incident{}, err
 	}
-	return s.updateIncident(ctx, incidentID, actorRole, idempotencyKey, "incident.progress", requestDigest, func(incident *domain.Incident, now time.Time) error {
+	return s.updateIncident(ctx, incidentID, actorRole, idempotencyKey, "incident.progress", requestDigest, func(incident *domain.Incident, _ domain.State, now time.Time) error {
 		if incident.Status != "open" {
 			return fmt.Errorf("incident %s is not open", incident.ID)
 		}
@@ -57,7 +59,7 @@ func (s *Service) TripIncidentContext(ctx context.Context, incidentID, actorRole
 	if err != nil {
 		return domain.Incident{}, err
 	}
-	return s.updateIncident(ctx, incidentID, actorRole, idempotencyKey, "incident.trip", requestDigest, func(incident *domain.Incident, _ time.Time) error {
+	return s.updateIncident(ctx, incidentID, actorRole, idempotencyKey, "incident.trip", requestDigest, func(incident *domain.Incident, _ domain.State, _ time.Time) error {
 		if incident.Status == "resolved" {
 			return fmt.Errorf("resolved incident cannot be tripped")
 		}
@@ -74,11 +76,14 @@ func (s *Service) ResolveIncidentContext(ctx context.Context, incidentID, actorR
 	if err := validateIncidentText("resolution", resolution, 1024); err != nil {
 		return domain.Incident{}, err
 	}
+	if resolution == incidentResolutionSupersededByRepair {
+		return domain.Incident{}, fmt.Errorf("resolution %s is reserved for incident supersede", resolution)
+	}
 	requestDigest, err := incidentRequestDigest("incident.resolve", map[string]any{"resolution": resolution})
 	if err != nil {
 		return domain.Incident{}, err
 	}
-	return s.updateIncident(ctx, incidentID, actorRole, idempotencyKey, "incident.resolve", requestDigest, func(incident *domain.Incident, _ time.Time) error {
+	return s.updateIncident(ctx, incidentID, actorRole, idempotencyKey, "incident.resolve", requestDigest, func(incident *domain.Incident, _ domain.State, _ time.Time) error {
 		if incident.Status == "resolved" {
 			return fmt.Errorf("incident %s is already resolved", incident.ID)
 		}
@@ -105,7 +110,7 @@ func (s *Service) SetIncidentDispositionContext(ctx context.Context, incidentID,
 	if err != nil {
 		return domain.Incident{}, err
 	}
-	return s.updateIncident(ctx, incidentID, actorRole, idempotencyKey, "incident.disposition", requestDigest, func(incident *domain.Incident, now time.Time) error {
+	return s.updateIncident(ctx, incidentID, actorRole, idempotencyKey, "incident.disposition", requestDigest, func(incident *domain.Incident, _ domain.State, now time.Time) error {
 		if incident.Status == "resolved" {
 			return fmt.Errorf("resolved incident cannot receive a disposition")
 		}
@@ -123,6 +128,45 @@ func (s *Service) SetIncidentDispositionContext(ctx context.Context, incidentID,
 		}
 		return nil
 	})
+}
+
+func (s *Service) SupersedeIncident(incidentID, successorNodeID, actorRole, note, idempotencyKey string) (domain.Incident, error) {
+	return s.SupersedeIncidentContext(context.Background(), incidentID, successorNodeID, actorRole, note, idempotencyKey)
+}
+
+func (s *Service) SupersedeIncidentContext(ctx context.Context, incidentID, successorNodeID, actorRole, note, idempotencyKey string) (domain.Incident, error) {
+	if strings.TrimSpace(successorNodeID) == "" {
+		return domain.Incident{}, fmt.Errorf("successor node is required")
+	}
+	if err := validateIncidentText("supersede note", note, 1024); err != nil {
+		return domain.Incident{}, err
+	}
+	requestDigest, err := incidentRequestDigest("incident.supersede", map[string]any{"successorNodeId": successorNodeID, "note": note})
+	if err != nil {
+		return domain.Incident{}, err
+	}
+	return s.updateIncident(ctx, incidentID, actorRole, idempotencyKey, "incident.supersede", requestDigest, func(incident *domain.Incident, state domain.State, now time.Time) error {
+		return supersedeIncidentValue(incident, state, successorNodeID, note, now)
+	})
+}
+
+func supersedeIncidentValue(incident *domain.Incident, state domain.State, successorNodeID, note string, now time.Time) error {
+	if incident.Status == "resolved" {
+		return fmt.Errorf("resolved incident cannot be superseded")
+	}
+	if incident.SourceType != "attempt" {
+		return fmt.Errorf("only attempt incidents can be superseded by a repair node")
+	}
+	if !validIncidentSuccessor(state, *incident, successorNodeID) {
+		return fmt.Errorf("node %s is not a declared active repair successor for incident %s", successorNodeID, incident.ID)
+	}
+	incident.Status = "resolved"
+	incident.Resolution = incidentResolutionSupersededByRepair
+	incident.RemedyNodeID = successorNodeID
+	incident.SupersededAt = now.Format(time.RFC3339Nano)
+	incident.LastProgress = note
+	incident.LastProgressAt = incident.SupersededAt
+	return nil
 }
 
 func validateIncidentText(label, value string, maximum int) error {
@@ -147,7 +191,7 @@ func incidentRequestDigest(kind string, value any) (string, error) {
 	return authorityRequestDigest(kind, raw)
 }
 
-func (s *Service) updateIncident(ctx context.Context, incidentID, actorRole, idempotencyKey, commandKind, requestDigest string, mutate func(*domain.Incident, time.Time) error) (domain.Incident, error) {
+func (s *Service) updateIncident(ctx context.Context, incidentID, actorRole, idempotencyKey, commandKind, requestDigest string, mutate func(*domain.Incident, domain.State, time.Time) error) (domain.Incident, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.Incident{}, err
 	}
@@ -212,7 +256,7 @@ func (s *Service) updateIncident(ctx context.Context, incidentID, actorRole, ide
 	if _, err := validLeaseAt(state, actorRole, now); err != nil {
 		return domain.Incident{}, err
 	}
-	if err := mutate(&incident, now); err != nil {
+	if err := mutate(&incident, state, now); err != nil {
 		return domain.Incident{}, err
 	}
 	if err := ctx.Err(); err != nil {

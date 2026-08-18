@@ -2,6 +2,112 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.23.0 — 2026-08-18
+
+### Added
+
+- orchestrator context now carries a compact authorization envelope, project-wide
+  signed actions, and deterministic remediation proposals for ready work, stale
+  Attempts, expired Roles, pending Effects, orphaned Resources, and Incidents;
+- Attempt incidents can be closed through a signed `incident.supersede` action when a
+  typed edge or `supersedes` declaration identifies the bounded repair successor;
+- `effect-continuity:<action-id>` inspection separates unrelated journal-head progress
+  from changes to the prepared adapter ID, version, schema, or canonical Effect request;
+- `artifact inspect-scope` classifies exact base/candidate/target/prospective Git deltas,
+  while `artifact verify-git-closure` verifies commits, ordered parents, trees, tags,
+  peeled refs, and reachability before disposable handoff state is removed;
+- both Git evidence reports have closed v1alpha1 schemas published and digest-bound by
+  `dagrail contract` and release qualification.
+
+### Changed
+
+- bundled orchestrator, worker, and reviewer skills now consume the operations plan,
+  use causal Effect continuity, and require typed Git scope/closure evidence at the
+  appropriate boundary; they also preserve the one safe cross-session exception for
+  an unknown-result retry using the original ref, the same RFC 8785 canonical JSON
+  input value, and idempotency key;
+- the README is now a short product introduction centered on the problem, architecture,
+  supported harnesses, one-command installation, and essential usage; release history
+  remains in this changelog.
+
+### Fixed
+
+- every `allowedActions[].inputSchema` is now enforced by the same runtime entry point
+  before a journal mutation; lifecycle import separately validates the normalized
+  writer proof shape instead of confusing it with caller input;
+- Effect preparation persists the adapter version and schema hash, and reconciliation
+  fails closed when a same-ID adapter was upgraded or legacy metadata is unavailable;
+- retained lifecycle migration schemas still accept v0.22 Effect payloads without the
+  additive adapter metadata pair; imported legacy Effects remain visible but cannot be
+  reconciled automatically, and a partial metadata pair is rejected;
+- v0.22 Incident histories that used the later-reserved repair phrase as ordinary
+  resolution text remain importable when no repair binding is present; current writers
+  still require the complete typed successor action for new repair semantics;
+- generic Incident resolution cannot forge the reserved `superseded_by_repair`
+  disposition without the typed successor action and its complete repair binding;
+- signed Incident successor actions commit against the exact signed journal head and
+  cannot cross a concurrent graph/head advance;
+- Git scope evidence compares complete tree entries, including mode changes, both
+  rename endpoints, and candidate changes discarded from the prospective tree;
+  a prospective third value is never mislabeled conflict resolution, and artifact
+  retention accepts only real durable refs, never revision expressions;
+- oversized context keeps compact Role authorization plus an `operations:<key>`
+  recovery ref, while open Incidents use a bounded, paginated summary index; minimum
+  contexts use fixed-length opaque Role/Node refs even when declaration IDs are long;
+- read-only context/action queries no longer lazily create the signing secret; writable
+  project bootstrap establishes it durably and inspection fails closed if it is missing;
+- operations inspection propagates missing, damaged, or unreadable action-secret errors
+  instead of presenting an incomplete empty action plan;
+- Git artifact inspection disables partial-clone lazy fetch, propagates cancellation,
+  and reads each commit tree once rather than spawning a subprocess per changed path;
+- Git evidence now removes ambient repository/object-store redirection, ignores replace
+  refs and grafts, and verifies commit identity plus retention from raw object bytes;
+  closure manifests are regular-file-only, bounded before allocation, and cancellable;
+- Git closure verification now enumerates refs and object types in fixed process-count
+  batches, caches each retaining ref's raw ancestor closure, and propagates cancellation
+  as interruption instead of misreporting missing evidence;
+- pre-wait and operations recovery now expose exact counts with 24-KiB-bounded previews
+  and journal-head/inventory-bound pages; stale page offsets fail closed, dependency
+  cuts use count/digest/ref summaries with one shared adjacency/cache per audit, and CLI
+  plus MCP context/inspect cancellation reaches the underlying computation;
+- Incident successors and resource availability are indexed once per query instead of
+  multiplying Incidents or planned Nodes by the complete graph/resource set; identifiers
+  too large for one page use compact signed action bindings and digest-bound detail chunks
+  rather than making a returned continuation ref impossible to consume;
+- authorized action planning now builds Role capability, Node, Effect-by-Attempt, and
+  Resource-by-Attempt indexes once, avoiding residual Node-by-Node and Node-by-Resource
+  scans on large active DAGs;
+- oversized Role/session authorization and imported Attempt IDs use fixed-length opaque
+  refs plus digest-bound detail chunks, keeping operations and ActionResult surfaces
+  within their byte budgets;
+- schema-legal outcomes larger than the action-input budget remain executable through a
+  controller-bound `outcomeRef`, with an optional chunked ID mapping for audit detail;
+- status, history, frontier, evidence, Incident, remediation, Effect continuity, and
+  stored-authority inspection now share one 24-KiB summary and digest-bound detail
+  protocol; CLI and MCP accept opaque Role, Node, Attempt, Incident, Resource, and
+  Effect selectors instead of requiring schema-legal large IDs to fit smaller inputs;
+- lifecycle migration preserves released pre-v0.23 opaque inputs for actions whose
+  persisted meaning is completely proven by companion native events, while current
+  action calls still enforce their closed input schemas;
+- confirmed Effect history remains portable after its adapter is upgraded or removed;
+  nonterminal Effects retain strict adapter-continuity admission;
+- zero-delta Git scope reports encode `entries` as an empty array and therefore match
+  their published schema;
+- the README quick start now binds the declared example Role and its commands are
+  exercised from an empty project with only README-provided bytes by an executable
+  regression test.
+
+### Boundaries
+
+- remediation entries are deterministic proposals, not an autonomous scheduler;
+  mutations still require a current signed action, active Role lease, capability, and
+  stable idempotency key;
+- Git artifact inspection is read-only and repository-neutral. It does not merge,
+  retain, delete, push, or infer semantic approval.
+- pre-v0.23 nonterminal Effects remain readable but lack a provable adapter version and
+  schema binding; reconcile them with the exact prior runtime before upgrade or leave
+  their dependency cut conservatively blocked.
+
 ## 0.22.2 — 2026-08-17
 
 ### Fixed

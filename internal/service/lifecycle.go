@@ -116,14 +116,16 @@ type LifecycleNodeProjection struct {
 }
 
 type LifecycleEffectProjection struct {
-	ID            string `json:"id"`
-	NodeID        string `json:"nodeId"`
-	AttemptID     string `json:"attemptId"`
-	AdapterID     string `json:"adapterId"`
-	OwnerRole     string `json:"ownerRole,omitempty"`
-	Status        string `json:"status"`
-	ReceiptDigest string `json:"receiptDigest,omitempty"`
-	Sequence      uint64 `json:"sequence"`
+	ID                string `json:"id"`
+	NodeID            string `json:"nodeId"`
+	AttemptID         string `json:"attemptId"`
+	AdapterID         string `json:"adapterId"`
+	AdapterVersion    string `json:"adapterVersion,omitempty"`
+	AdapterSchemaHash string `json:"adapterSchemaHash,omitempty"`
+	OwnerRole         string `json:"ownerRole,omitempty"`
+	Status            string `json:"status"`
+	ReceiptDigest     string `json:"receiptDigest,omitempty"`
+	Sequence          uint64 `json:"sequence"`
 }
 
 type LifecycleResourceProjection struct {
@@ -529,8 +531,28 @@ func (s *Service) validateLifecycleMigration(state domain.State, segments []jour
 	if nativeCount == 0 || nativeCount+1 > journal.MaxEventsPerSegment {
 		return result, fmt.Errorf("native lifecycle event count exceeds the atomic segment limit")
 	}
-	if err := validateLifecycleEventSequence(state, normalizedRecords); err != nil {
+	simulatedState, err := simulateLifecycleEventSequence(state, normalizedRecords)
+	if err != nil {
 		return result, fmt.Errorf("lifecycle migration transition preflight: %w", err)
+	}
+	for _, effect := range simulatedState.Effects {
+		// A confirmed Effect is terminal external evidence: it can never be
+		// dispatched or reconciled again, so importing it does not depend on the
+		// currently compiled adapter. Preserve its original metadata for audit
+		// while allowing later runtimes to upgrade or remove that adapter.
+		if effect.Status == "confirmed" {
+			continue
+		}
+		if effect.AdapterVersion == "" && effect.AdapterSchemaHash == "" {
+			continue
+		}
+		adapter, exists := s.Providers.Effect(effect.AdapterID)
+		if !exists {
+			return result, fmt.Errorf("lifecycle migration effect adapter %s is unavailable", effect.AdapterID)
+		}
+		if err := validateEffectAdapterBinding(effect, adapter.Metadata()); err != nil {
+			return result, fmt.Errorf("lifecycle migration effect %s: %w", effect.ID, err)
+		}
 	}
 	migrationID, err := lifecycleMigrationID(manifest)
 	if err != nil {
@@ -688,7 +710,7 @@ func (s *Service) LifecycleProjection() (LifecycleProjection, error) {
 		report.Actions = append(report.Actions, value)
 	}
 	for _, value := range state.Effects {
-		report.Effects = append(report.Effects, LifecycleEffectProjection{ID: value.ID, NodeID: value.NodeID, AttemptID: value.AttemptID, AdapterID: value.AdapterID, OwnerRole: value.OwnerRole, Status: value.Status, ReceiptDigest: digestRaw(value.Receipt), Sequence: value.Sequence})
+		report.Effects = append(report.Effects, LifecycleEffectProjection{ID: value.ID, NodeID: value.NodeID, AttemptID: value.AttemptID, AdapterID: value.AdapterID, AdapterVersion: value.AdapterVersion, AdapterSchemaHash: value.AdapterSchemaHash, OwnerRole: value.OwnerRole, Status: value.Status, ReceiptDigest: digestRaw(value.Receipt), Sequence: value.Sequence})
 	}
 	for _, value := range state.Resources {
 		report.Resources = append(report.Resources, LifecycleResourceProjection{ID: value.ID, Kind: value.Kind, Quantity: value.Quantity, NodeID: value.NodeID, AttemptID: value.AttemptID, RoleID: value.RoleID, Status: value.Status, ClosureStatus: value.ClosureStatus, ClosureReceiptDigest: digestRaw(value.ClosureReceipt), LeasedAt: value.LeasedAt, ReleasedAt: value.ReleasedAt})
@@ -1077,7 +1099,7 @@ func validateMigratedState(state domain.State) error {
 		action, actionOK := state.Actions[id]
 		attempt, attemptOK := state.Attempts[effect.AttemptID]
 		node, nodeOK := state.NodeDefinition(effect.NodeID)
-		if id == "" || effect.ID != id || !actionOK || action.Kind != "effect.prepare" || !lifecycleEffectActionStatusCompatible(effect.Status, action.Status) || action.NodeID != effect.NodeID || action.AttemptID != effect.AttemptID || !attemptOK || !nodeOK || node.Kind != "effect" || effect.NodeID != attempt.NodeID || effect.AdapterID == "" || effect.IdempotencyKey == "" || len(effect.Request) == 0 || len(effect.Prepared) == 0 || !oneOf(effect.Status, "prepared", "dispatched", "confirmed", "failed", "unknown", "reconciling") || !validTimestamp(effect.PreparedAt) || !timestampAtOrAfter(effect.UpdatedAt, effect.PreparedAt) {
+		if id == "" || effect.ID != id || !actionOK || action.Kind != "effect.prepare" || !lifecycleEffectActionStatusCompatible(effect.Status, action.Status) || action.NodeID != effect.NodeID || action.AttemptID != effect.AttemptID || !attemptOK || !nodeOK || node.Kind != "effect" || effect.NodeID != attempt.NodeID || effect.AdapterID == "" || !validEffectAdapterMetadataPair(effect) || effect.IdempotencyKey == "" || len(effect.Request) == 0 || len(effect.Prepared) == 0 || !oneOf(effect.Status, "prepared", "dispatched", "confirmed", "failed", "unknown", "reconciling") || !validTimestamp(effect.PreparedAt) || !timestampAtOrAfter(effect.UpdatedAt, effect.PreparedAt) {
 			return fmt.Errorf("effect %q violates the imported lifecycle contract", id)
 		}
 		if err := validateLifecycleEffectDeclaration(effect, node); err != nil {

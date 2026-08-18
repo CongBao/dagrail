@@ -22,7 +22,11 @@ func TestActionSecretRejectsSymlinkSubstitution(t *testing.T) {
 	if err := os.WriteFile(target, make([]byte, 32), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, filepath.Join(svc.Project.DataDir, "action-secret")); err != nil {
+	secretPath := filepath.Join(svc.Project.DataDir, "action-secret")
+	if err := os.Remove(secretPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, secretPath); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.actionSecret(); err == nil || !strings.Contains(err.Error(), "non-symlink") {

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -14,19 +15,29 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/CongBao/dagrail/internal/domain"
 	"github.com/CongBao/dagrail/internal/journal"
+	"github.com/CongBao/dagrail/internal/project"
 	"github.com/google/uuid"
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 type AllowedAction struct {
-	ID          string         `json:"id"`
-	Kind        string         `json:"kind"`
-	Ref         string         `json:"ref"`
-	TargetRef   string         `json:"targetRef,omitempty"`
-	InputSchema map[string]any `json:"inputSchema"`
+	ID               string         `json:"id"`
+	Kind             string         `json:"kind"`
+	Ref              string         `json:"ref"`
+	NodeID           string         `json:"nodeId,omitempty"`
+	NodeRef          string         `json:"nodeRef,omitempty"`
+	AttemptID        string         `json:"attemptId,omitempty"`
+	TargetRef        string         `json:"targetRef,omitempty"`
+	InputSchema      map[string]any `json:"inputSchema,omitempty"`
+	DetailRef        string         `json:"detailRef,omitempty"`
+	DetailDigest     string         `json:"detailDigest,omitempty"`
+	DetailBytes      int            `json:"detailBytes,omitempty"`
+	DetailsTruncated bool           `json:"detailsTruncated,omitempty"`
 }
 
 type ActionList struct {
@@ -34,29 +45,86 @@ type ActionList struct {
 }
 
 type ActionResult struct {
-	ActionID  string `json:"actionId"`
-	Kind      string `json:"kind"`
-	NodeID    string `json:"nodeId"`
-	AttemptID string `json:"attemptId,omitempty"`
-	ObjectRef string `json:"objectRef,omitempty"`
-	Status    string `json:"status"`
-	Sequence  uint64 `json:"sequence"`
+	ActionID           string `json:"actionId"`
+	Kind               string `json:"kind"`
+	NodeID             string `json:"nodeId,omitempty"`
+	NodeRef            string `json:"nodeRef,omitempty"`
+	AttemptID          string `json:"attemptId,omitempty"`
+	AttemptRef         string `json:"attemptRef,omitempty"`
+	AttemptIDDigest    string `json:"attemptIdDigest,omitempty"`
+	AttemptIDBytes     int    `json:"attemptIdBytes,omitempty"`
+	AttemptIDTruncated bool   `json:"attemptIdTruncated,omitempty"`
+	ObjectRef          string `json:"objectRef,omitempty"`
+	ObjectInspectRef   string `json:"objectInspectRef,omitempty"`
+	ObjectRefDetailRef string `json:"objectRefDetailRef,omitempty"`
+	ObjectRefDigest    string `json:"objectRefDigest,omitempty"`
+	ObjectRefBytes     int    `json:"objectRefBytes,omitempty"`
+	ObjectRefTruncated bool   `json:"objectRefTruncated,omitempty"`
+	Status             string `json:"status"`
+	Sequence           uint64 `json:"sequence"`
 }
 
-type actionRefPayload struct {
-	ActionID      string `json:"actionId"`
-	ProjectID     string `json:"projectId"`
-	GraphRevision string `json:"graphRevision"`
-	ProviderSet   string `json:"providerSet"`
-	HeadHash      string `json:"headHash"`
-	RoleID        string `json:"roleId"`
-	SessionID     string `json:"sessionId"`
-	NodeID        string `json:"nodeId"`
-	AttemptID     string `json:"attemptId,omitempty"`
-	ResourceID    string `json:"resourceId,omitempty"`
-	Kind          string `json:"kind"`
-	ExpiresAt     string `json:"expiresAt"`
+func boundedActionResult(state domain.State, result ActionResult) ActionResult {
+	if len([]byte(result.NodeID)) > preWaitInlineIDBytes {
+		result.NodeRef = nodeRefForNode(state, result.NodeID)
+		result.NodeID = ""
+	}
+	if len([]byte(result.AttemptID)) > preWaitInlineIDBytes {
+		sum := sha256.Sum256([]byte(result.AttemptID))
+		result.AttemptRef = attemptIDDetailRef(state, result.AttemptID, hex.EncodeToString(sum[:]), 0)
+		result.AttemptIDDigest = "sha256:" + hex.EncodeToString(sum[:])
+		result.AttemptIDBytes = len([]byte(result.AttemptID))
+		result.AttemptIDTruncated = true
+		result.AttemptID = ""
+	}
+	if len([]byte(result.ObjectRef)) > preWaitInlineIDBytes {
+		sum := sha256.Sum256([]byte(result.ObjectRef))
+		if kind, id, ok := strings.Cut(result.ObjectRef, ":"); ok {
+			switch {
+			case kind == "incident":
+				result.ObjectInspectRef = incidentRefForIncident(state, id)
+				result.ObjectRefDetailRef = objectReferenceDetailRef(state, kind, id, hex.EncodeToString(sum[:]), 0)
+			case boundedStoredObjectKinds[kind]:
+				result.ObjectInspectRef = storedObjectRef(state, kind, id)
+				result.ObjectRefDetailRef = objectReferenceDetailRef(state, kind, id, hex.EncodeToString(sum[:]), 0)
+			}
+		}
+		result.ObjectRefDigest = "sha256:" + hex.EncodeToString(sum[:])
+		result.ObjectRefBytes = len([]byte(result.ObjectRef))
+		result.ObjectRefTruncated = true
+		result.ObjectRef = ""
+	}
+	return result
 }
+
+var allowedActionSchemaCache sync.Map
+
+type actionRefPayload struct {
+	ActionID        string `json:"actionId"`
+	ProjectID       string `json:"projectId"`
+	GraphRevision   string `json:"graphRevision"`
+	ProviderSet     string `json:"providerSet"`
+	HeadHash        string `json:"headHash"`
+	RoleID          string `json:"roleId,omitempty"`
+	SessionID       string `json:"sessionId,omitempty"`
+	NodeID          string `json:"nodeId,omitempty"`
+	AttemptID       string `json:"attemptId,omitempty"`
+	ResourceID      string `json:"resourceId,omitempty"`
+	IncidentID      string `json:"incidentId,omitempty"`
+	SuccessorNodeID string `json:"successorNodeId,omitempty"`
+	Kind            string `json:"kind"`
+	ExpiresAt       string `json:"expiresAt"`
+	Compact         bool   `json:"compact,omitempty"`
+	RoleKey         string `json:"roleKey,omitempty"`
+	SessionKey      string `json:"sessionKey,omitempty"`
+	NodeKey         string `json:"nodeKey,omitempty"`
+	AttemptKey      string `json:"attemptKey,omitempty"`
+	ResourceKey     string `json:"resourceKey,omitempty"`
+	IncidentKey     string `json:"incidentKey,omitempty"`
+	SuccessorKey    string `json:"successorKey,omitempty"`
+}
+
+const maxInlineActionRefPayloadBytes = 8 * 1024
 
 func (s *Service) BindRole(roleID, harness, sessionID string, ttl time.Duration, takeover bool, idempotencyKey string) (domain.RoleLease, error) {
 	if idempotencyKey == "" {
@@ -139,6 +207,89 @@ func (s *Service) BindRole(roleID, harness, sessionID string, ttl time.Duration,
 	return state.Leases[roleID], nil
 }
 
+func (s *Service) applyIncidentSupersedeAction(ctx context.Context, state domain.State, payload actionRefPayload, input json.RawMessage, idempotencyKey string) (ActionResult, error) {
+	if payload.ProjectID != state.ProjectID {
+		return ActionResult{}, fmt.Errorf("incident action reference belongs to another project")
+	}
+	if err := validateAllowedActionInput(incidentSupersedeInputSchema(), input); err != nil {
+		return ActionResult{}, err
+	}
+	var value struct {
+		Note string `json:"note"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(input))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		return ActionResult{}, fmt.Errorf("decode incident supersede input: %w", err)
+	}
+	if value.Note == "" || len(value.Note) > 1024 {
+		return ActionResult{}, fmt.Errorf("incident supersede note must be 1..1024 bytes")
+	}
+	requestDigest, err := incidentRequestDigest("incident.supersede", map[string]any{"successorNodeId": payload.SuccessorNodeID, "note": value.Note})
+	if err != nil {
+		return ActionResult{}, err
+	}
+	if command, ok := state.Commands[idempotencyKey]; ok {
+		if command.Kind != "incident.supersede" || command.ActorRole != payload.RoleID || command.ObjectRef != "incident:"+payload.IncidentID || (command.RequestDigest != "" && command.RequestDigest != requestDigest) {
+			return ActionResult{}, fmt.Errorf("idempotency key is already bound to another command")
+		}
+		incident, exists := state.Incidents[payload.IncidentID]
+		if !exists || incident.RemedyNodeID != payload.SuccessorNodeID || incident.Status != "resolved" {
+			return ActionResult{}, fmt.Errorf("idempotent incident successor result is unavailable")
+		}
+		return ActionResult{ActionID: payload.ActionID, Kind: payload.Kind, NodeID: payload.SuccessorNodeID, ObjectRef: "incident:" + payload.IncidentID, Status: incident.Status, Sequence: command.Sequence}, nil
+	}
+	if payload.GraphRevision != state.GraphRevision || payload.ProviderSet != providerFingerprint(state.Graph) || payload.HeadHash != state.HeadHash || payload.IncidentID == "" || payload.SuccessorNodeID == "" {
+		return ActionResult{}, fmt.Errorf("incident action reference is stale or incomplete")
+	}
+	expires, err := time.Parse(time.RFC3339Nano, payload.ExpiresAt)
+	now := s.Now().UTC()
+	if err != nil || !now.Before(expires) {
+		return ActionResult{}, fmt.Errorf("incident action reference is expired")
+	}
+	lease, err := validLeaseAt(state, payload.RoleID, now)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	if lease.SessionID != payload.SessionID {
+		return ActionResult{}, fmt.Errorf("incident action reference session no longer owns the role")
+	}
+	if _, err := s.requireRoleCapability(state, payload.RoleID, domain.CapabilityIncidentManage); err != nil {
+		return ActionResult{}, err
+	}
+	incident, exists := state.Incidents[payload.IncidentID]
+	if !exists {
+		return ActionResult{}, fmt.Errorf("unknown incident %s", payload.IncidentID)
+	}
+	if incident.OwnerRole != "" && incident.OwnerRole != payload.RoleID {
+		return ActionResult{}, fmt.Errorf("incident %s belongs to role %s", payload.IncidentID, incident.OwnerRole)
+	}
+	if err := supersedeIncidentValue(&incident, state, payload.SuccessorNodeID, value.Note, now); err != nil {
+		return ActionResult{}, err
+	}
+	if s.beforeIncidentSupersedeAppend != nil {
+		s.beforeIncidentSupersedeAppend()
+	}
+	if err := ctx.Err(); err != nil {
+		return ActionResult{}, err
+	}
+	incident.UpdatedAt = now.Format(time.RFC3339Nano)
+	incidentRaw, _ := json.Marshal(incident)
+	expectedHead := payload.HeadHash
+	segment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "incident.supersede", ActorRole: payload.RoleID, IdempotencyKey: idempotencyKey, ObjectRef: "incident:" + payload.IncidentID, RequestDigest: requestDigest}, []journal.Event{{Type: "incident.updated", Payload: incidentRaw}}, now, &expectedHead)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	state, segments, err := s.load()
+	if err != nil {
+		return ActionResult{}, err
+	}
+	if err := s.Projection.Sync(state, segments); err != nil {
+		return ActionResult{}, err
+	}
+	return ActionResult{ActionID: payload.ActionID, Kind: payload.Kind, NodeID: payload.SuccessorNodeID, ObjectRef: "incident:" + payload.IncidentID, Status: state.Incidents[payload.IncidentID].Status, Sequence: segment.Sequence}, nil
+}
+
 func (s *Service) ReleaseRole(roleID, sessionID, idempotencyKey string) error {
 	if idempotencyKey == "" {
 		return fmt.Errorf("idempotency key is required")
@@ -182,11 +333,54 @@ func (s *Service) ListActions(roleID, nodeID string) (ActionList, error) {
 	if err != nil {
 		return ActionList{}, err
 	}
-	return s.listActions(state, roleID, nodeID)
+	return s.listBoundedActionsFromState(state, roleID, nodeID)
+}
+
+func (s *Service) listBoundedActionsFromState(state domain.State, roleID, nodeID string) (ActionList, error) {
+	result, err := s.listActions(state, roleID, nodeID)
+	if err != nil {
+		return ActionList{}, err
+	}
+	inventoryDigest := ""
+	for index := range result.Actions {
+		raw, marshalErr := json.Marshal(result.Actions[index])
+		if marshalErr != nil {
+			return ActionList{}, marshalErr
+		}
+		if len(raw) <= operationsInlineActionBytes {
+			continue
+		}
+		if inventoryDigest == "" {
+			all, listErr := s.projectAllowedActionsContext(context.Background(), state, roleID, 0, s.Now().UTC())
+			if listErr != nil {
+				return ActionList{}, listErr
+			}
+			inventoryDigest = operationsActionsDigest(all)
+		}
+		result.Actions[index], err = boundedAllowedAction(state, roleID, inventoryDigest, result.Actions[index])
+		if err != nil {
+			return ActionList{}, err
+		}
+	}
+	return result, nil
 }
 
 func (s *Service) listActions(state domain.State, roleID, nodeID string) (ActionList, error) {
-	lease, err := s.validLease(state, roleID)
+	return s.listActionsAt(state, roleID, nodeID, s.Now().UTC())
+}
+
+func (s *Service) listActionsAt(state domain.State, roleID, nodeID string, now time.Time) (ActionList, error) {
+	ready := map[string]bool{}
+	if state.Nodes[nodeID].Status == "planned" {
+		for _, readyNode := range domain.ComputeFrontier(state).Ready {
+			ready[readyNode] = true
+		}
+	}
+	return s.listActionsAtWithReady(state, roleID, nodeID, now, ready)
+}
+
+func (s *Service) listActionsAtWithReady(state domain.State, roleID, nodeID string, now time.Time, ready map[string]bool) (ActionList, error) {
+	index, err := s.buildActionPlanningIndex(context.Background(), state, roleID, now)
 	if err != nil {
 		return ActionList{}, err
 	}
@@ -197,8 +391,80 @@ func (s *Service) listActions(state domain.State, roleID, nodeID string) (Action
 	if node.Role != roleID {
 		return ActionList{}, fmt.Errorf("node %s belongs to role %s", nodeID, node.Role)
 	}
-	if _, err := s.requireRoleCapability(state, roleID, domain.RequiredNodeCapability(node.Kind)); err != nil {
-		return ActionList{}, err
+	return s.listActionsForNodeAtWithReady(state, node, now, ready, index)
+}
+
+type actionPlanningIndex struct {
+	roleID             string
+	lease              domain.RoleLease
+	capabilities       map[string]bool
+	resourcesByAttempt map[string][]domain.ResourceLease
+	effectsByAttempt   map[string]domain.EffectAction
+	secret             []byte
+	providerSet        string
+}
+
+func (s *Service) buildActionPlanningIndex(ctx context.Context, state domain.State, roleID string, now time.Time) (actionPlanningIndex, error) {
+	lease, err := validLeaseAt(state, roleID, now)
+	if err != nil {
+		return actionPlanningIndex{}, err
+	}
+	capabilities := map[string]bool{}
+	roleFound := false
+	if state.Graph != nil {
+		for _, role := range state.Graph.Spec.Roles {
+			if err := ctx.Err(); err != nil {
+				return actionPlanningIndex{}, err
+			}
+			if role.ID != roleID {
+				continue
+			}
+			roleFound = true
+			for _, capability := range role.Capabilities {
+				capabilities[capability] = true
+			}
+			break
+		}
+	}
+	if !roleFound {
+		return actionPlanningIndex{}, fmt.Errorf("unknown role %s", roleID)
+	}
+	resourcesByAttempt := map[string][]domain.ResourceLease{}
+	for _, resource := range state.Resources {
+		if err := ctx.Err(); err != nil {
+			return actionPlanningIndex{}, err
+		}
+		if resource.Status == "active" {
+			resourcesByAttempt[resource.AttemptID] = append(resourcesByAttempt[resource.AttemptID], resource)
+		}
+	}
+	for attemptID := range resourcesByAttempt {
+		sort.Slice(resourcesByAttempt[attemptID], func(i, j int) bool {
+			return resourcesByAttempt[attemptID][i].ID < resourcesByAttempt[attemptID][j].ID
+		})
+	}
+	effectsByAttempt := map[string]domain.EffectAction{}
+	for _, effect := range state.Effects {
+		if err := ctx.Err(); err != nil {
+			return actionPlanningIndex{}, err
+		}
+		effectsByAttempt[effect.AttemptID] = effect
+	}
+	secret, err := s.actionSecret()
+	if err != nil {
+		return actionPlanningIndex{}, err
+	}
+	return actionPlanningIndex{roleID: roleID, lease: lease, capabilities: capabilities, resourcesByAttempt: resourcesByAttempt, effectsByAttempt: effectsByAttempt, secret: secret, providerSet: providerFingerprint(state.Graph)}, nil
+}
+
+func (s *Service) listActionsForNodeAtWithReady(state domain.State, node domain.NodeDefinition, now time.Time, ready map[string]bool, index actionPlanningIndex) (ActionList, error) {
+	roleID := index.roleID
+	nodeID := node.ID
+	if node.Role != roleID {
+		return ActionList{}, fmt.Errorf("node %s belongs to role %s", nodeID, node.Role)
+	}
+	if !index.capabilities[domain.RequiredNodeCapability(node.Kind)] {
+		return ActionList{}, fmt.Errorf("role %s lacks required capability %s", roleID, domain.RequiredNodeCapability(node.Kind))
 	}
 	runtime := state.Nodes[nodeID]
 	type actionCandidate struct{ kind, resourceID string }
@@ -206,11 +472,8 @@ func (s *Service) listActions(state domain.State, roleID, nodeID string) (Action
 	add := func(kind string) { candidates = append(candidates, actionCandidate{kind: kind}) }
 	attemptID := ""
 	if runtime.Status == "planned" {
-		frontier := domain.ComputeFrontier(state)
-		for _, ready := range frontier.Ready {
-			if ready == nodeID {
-				add("node.start")
-			}
+		if ready[nodeID] {
+			add("node.start")
 		}
 	} else if runtime.Status == "active" {
 		attempt, found := state.LatestAttempt(nodeID)
@@ -221,7 +484,7 @@ func (s *Service) listActions(state domain.State, roleID, nodeID string) (Action
 		switch attempt.Status {
 		case "running":
 			if node.Kind == "effect" {
-				if effect, exists := state.EffectForAttempt(attempt.ID); !exists {
+				if effect, exists := index.effectsByAttempt[attempt.ID]; !exists {
 					for _, kind := range []string{"attempt.checkpoint", "attempt.wait", "effect.prepare"} {
 						add(kind)
 					}
@@ -261,11 +524,8 @@ func (s *Service) listActions(state domain.State, roleID, nodeID string) (Action
 				add("evidence.assess-reuse")
 			}
 		}
-		if domain.RoleHasCapability(state.Graph, roleID, domain.CapabilityResourceClose) {
-			for _, resource := range state.Resources {
-				if resource.AttemptID != attempt.ID || resource.Status != "active" {
-					continue
-				}
+		if index.capabilities[domain.CapabilityResourceClose] {
+			for _, resource := range index.resourcesByAttempt[attempt.ID] {
 				kind := "resource.close"
 				if resource.ClosureStatus == "unknown" || resource.ClosureStatus == "failed" || resource.ClosureStatus == "reconciling" {
 					kind = "resource.reconcile"
@@ -280,22 +540,18 @@ func (s *Service) listActions(state domain.State, roleID, nodeID string) (Action
 		}
 		return candidates[i].kind < candidates[j].kind
 	})
-	secret, err := s.actionSecret()
-	if err != nil {
-		return ActionList{}, err
-	}
 	result := ActionList{Actions: make([]AllowedAction, 0, len(candidates))}
 	for _, candidate := range candidates {
 		kind := candidate.kind
-		expires := s.Now().UTC().Add(5 * time.Minute)
-		if leaseExpiry, parseErr := time.Parse(time.RFC3339Nano, lease.ExpiresAt); parseErr == nil && leaseExpiry.Before(expires) {
+		expires := now.Add(5 * time.Minute)
+		if leaseExpiry, parseErr := time.Parse(time.RFC3339Nano, index.lease.ExpiresAt); parseErr == nil && leaseExpiry.Before(expires) {
 			expires = leaseExpiry
 		}
-		providerSet := providerFingerprint(state.Graph)
-		identity := strings.Join([]string{state.ProjectID, state.HeadHash, state.GraphRevision, providerSet, roleID, lease.SessionID, nodeID, attemptID, candidate.resourceID, kind}, "\x00")
+		providerSet := index.providerSet
+		identity := strings.Join([]string{state.ProjectID, state.HeadHash, state.GraphRevision, providerSet, roleID, index.lease.SessionID, nodeID, attemptID, candidate.resourceID, kind}, "\x00")
 		sum := sha256.Sum256([]byte(identity))
-		payload := actionRefPayload{ActionID: hex.EncodeToString(sum[:]), ProjectID: state.ProjectID, GraphRevision: state.GraphRevision, ProviderSet: providerSet, HeadHash: state.HeadHash, RoleID: roleID, SessionID: lease.SessionID, NodeID: nodeID, AttemptID: attemptID, ResourceID: candidate.resourceID, Kind: kind, ExpiresAt: expires.Format(time.RFC3339Nano)}
-		ref, err := signActionRef(payload, secret)
+		payload := actionRefPayload{ActionID: hex.EncodeToString(sum[:]), ProjectID: state.ProjectID, GraphRevision: state.GraphRevision, ProviderSet: providerSet, HeadHash: state.HeadHash, RoleID: roleID, SessionID: index.lease.SessionID, NodeID: nodeID, AttemptID: attemptID, ResourceID: candidate.resourceID, Kind: kind, ExpiresAt: expires.Format(time.RFC3339Nano)}
+		ref, err := signActionRef(payload, index.secret)
 		if err != nil {
 			return ActionList{}, err
 		}
@@ -303,7 +559,7 @@ func (s *Service) listActions(state domain.State, roleID, nodeID string) (Action
 		if candidate.resourceID != "" {
 			targetRef = "resource:" + candidate.resourceID
 		}
-		result.Actions = append(result.Actions, AllowedAction{ID: payload.ActionID, Kind: kind, Ref: ref, TargetRef: targetRef, InputSchema: actionInputSchema(kind, node)})
+		result.Actions = append(result.Actions, AllowedAction{ID: payload.ActionID, Kind: kind, Ref: ref, NodeID: nodeID, AttemptID: attemptID, TargetRef: targetRef, InputSchema: actionInputSchemaForState(state, kind, node)})
 	}
 	return result, nil
 }
@@ -344,12 +600,61 @@ func (s *Service) ApplyActionContext(ctx context.Context, ref string, input json
 	if err != nil {
 		return ActionResult{}, err
 	}
-	if command, ok := state.Commands[idempotencyKey]; ok {
-		result, resultErr := actionResultForSequence(state, command.Sequence)
-		if resultErr != nil || result.ActionID != payload.ActionID || result.Kind != payload.Kind || (command.RequestDigest != "" && command.RequestDigest != requestDigest) {
-			return ActionResult{}, fmt.Errorf("idempotency key is already bound to another command")
+	if payload.Kind == "incident.supersede" {
+		if command, ok := state.Commands[idempotencyKey]; ok {
+			incidentID := strings.TrimPrefix(command.ObjectRef, "incident:")
+			incident, exists := state.Incidents[incidentID]
+			if !exists || incident.Status != "resolved" || incident.RemedyNodeID == "" {
+				return ActionResult{}, fmt.Errorf("idempotent incident successor result is unavailable")
+			}
+			var value struct {
+				Note string `json:"note"`
+			}
+			if err := validateAllowedActionInput(incidentSupersedeInputSchema(), input); err != nil {
+				return ActionResult{}, err
+			}
+			decoder := json.NewDecoder(bytes.NewReader(input))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&value); err != nil {
+				return ActionResult{}, fmt.Errorf("decode incident supersede input: %w", err)
+			}
+			if value.Note == "" || len(value.Note) > 1024 {
+				return ActionResult{}, fmt.Errorf("incident supersede note must be 1..1024 bytes")
+			}
+			incidentDigest, err := incidentRequestDigest("incident.supersede", map[string]any{"successorNodeId": incident.RemedyNodeID, "note": value.Note})
+			if err != nil {
+				return ActionResult{}, err
+			}
+			roleMatches := payload.RoleID == command.ActorRole
+			incidentMatches := payload.IncidentID == incidentID
+			successorMatches := payload.SuccessorNodeID == incident.RemedyNodeID
+			if payload.Compact {
+				roleMatches = payload.RoleKey == actionBindingKey(state.ProjectID, "role", command.ActorRole)
+				incidentMatches = payload.IncidentKey == actionBindingKey(state.ProjectID, "incident", incidentID)
+				successorMatches = payload.SuccessorKey == actionBindingKey(state.ProjectID, "node", incident.RemedyNodeID)
+			}
+			if command.Kind != "incident.supersede" || command.ObjectRef != "incident:"+incidentID || !roleMatches || !incidentMatches || !successorMatches || (command.RequestDigest != "" && command.RequestDigest != incidentDigest) {
+				return ActionResult{}, fmt.Errorf("idempotency key is already bound to another command")
+			}
+			return boundedActionResult(state, ActionResult{ActionID: payload.ActionID, Kind: payload.Kind, NodeID: incident.RemedyNodeID, ObjectRef: command.ObjectRef, Status: incident.Status, Sequence: command.Sequence}), nil
 		}
-		return result, nil
+	}
+	if payload.Kind != "incident.supersede" {
+		if command, ok := state.Commands[idempotencyKey]; ok {
+			result, resultErr := actionResultForSequence(state, command.Sequence)
+			if resultErr != nil || result.ActionID != payload.ActionID || result.Kind != payload.Kind || (command.RequestDigest != "" && command.RequestDigest != requestDigest) {
+				return ActionResult{}, fmt.Errorf("idempotency key is already bound to another command")
+			}
+			return boundedActionResult(state, result), nil
+		}
+	}
+	payload, err = resolveCompactActionRef(ctx, state, payload)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	if payload.Kind == "incident.supersede" {
+		result, applyErr := s.applyIncidentSupersedeAction(ctx, state, payload, input, idempotencyKey)
+		return boundedActionResult(state, result), applyErr
 	}
 	if payload.ProjectID != state.ProjectID || payload.GraphRevision != state.GraphRevision || payload.ProviderSet != providerFingerprint(state.Graph) || payload.HeadHash != state.HeadHash {
 		return ActionResult{}, fmt.Errorf("action reference is stale")
@@ -373,11 +678,16 @@ func (s *Service) ApplyActionContext(ctx context.Context, ref string, input json
 	if _, err := s.requireRoleCapability(state, payload.RoleID, domain.RequiredNodeCapability(node.Kind)); err != nil {
 		return ActionResult{}, err
 	}
+	if err := validateAllowedActionInput(actionInputSchema(payload.Kind, node), input); err != nil {
+		return ActionResult{}, err
+	}
 	if payload.Kind == "resource.close" || payload.Kind == "resource.reconcile" {
-		return s.applyResourceAction(state, payload, input, idempotencyKey, requestDigest)
+		result, applyErr := s.applyResourceAction(state, payload, input, idempotencyKey, requestDigest)
+		return boundedActionResult(state, result), applyErr
 	}
 	if payload.Kind == "effect.prepare" {
-		return s.applyEffectAction(ctx, state, payload, input, idempotencyKey, requestDigest, node)
+		result, applyErr := s.applyEffectAction(ctx, state, payload, input, idempotencyKey, requestDigest, node)
+		return boundedActionResult(state, result), applyErr
 	}
 	now := authorizedAt.Format(time.RFC3339Nano)
 	events := make([]journal.Event, 0, 2)
@@ -497,6 +807,10 @@ func (s *Service) ApplyActionContext(ctx context.Context, ref string, input json
 			if err != nil {
 				return ActionResult{}, err
 			}
+			value.Outcome, err = resolveCompletionOutcome(node, value.Outcome, value.OutcomeRef)
+			if err != nil {
+				return ActionResult{}, err
+			}
 			if node.Kind == "task" && outcomeClass(node, value.Outcome) == "success" && attempt.Status != "submitted" {
 				return ActionResult{}, fmt.Errorf("successful task completion requires a submitted attempt")
 			}
@@ -579,7 +893,7 @@ func (s *Service) ApplyActionContext(ctx context.Context, ref string, input json
 	if !ok || actionRecord.Sequence != segment.Sequence {
 		return actionResultForSequence(state, segment.Sequence)
 	}
-	return ActionResult{ActionID: actionRecord.ID, Kind: actionRecord.Kind, NodeID: actionRecord.NodeID, AttemptID: actionRecord.AttemptID, ObjectRef: objectRefForSequence(state, actionRecord.Sequence), Status: actionRecord.Status, Sequence: actionRecord.Sequence}, nil
+	return boundedActionResult(state, ActionResult{ActionID: actionRecord.ID, Kind: actionRecord.Kind, NodeID: actionRecord.NodeID, AttemptID: actionRecord.AttemptID, ObjectRef: objectRefForSequence(state, actionRecord.Sequence), Status: actionRecord.Status, Sequence: actionRecord.Sequence}), nil
 }
 
 // revalidateActionAuthorization closes the window created by a slow semantic
@@ -617,7 +931,7 @@ func actionResultForSequence(state domain.State, sequence uint64) (ActionResult,
 		if effect, ok := state.Effects[action.ID]; ok {
 			status, resultSequence = effect.Status, effect.Sequence
 		}
-		return ActionResult{ActionID: action.ID, Kind: action.Kind, NodeID: action.NodeID, AttemptID: action.AttemptID, ObjectRef: objectRefForSequence(state, sequence), Status: status, Sequence: resultSequence}, nil
+		return boundedActionResult(state, ActionResult{ActionID: action.ID, Kind: action.Kind, NodeID: action.NodeID, AttemptID: action.AttemptID, ObjectRef: objectRefForSequence(state, sequence), Status: status, Sequence: resultSequence}), nil
 	}
 	return ActionResult{}, fmt.Errorf("journal command at sequence %d has no action result", sequence)
 }
@@ -705,7 +1019,15 @@ func (s *Service) actionSecret() ([]byte, error) {
 	if data, exists, err := readActionSecret(path); err != nil {
 		return nil, err
 	} else if exists {
+		if !s.readOnlyInspection {
+			if err := project.SyncDirectory(s.Project.DataDir); err != nil {
+				return nil, fmt.Errorf("confirm action secret durability: %w", err)
+			}
+		}
 		return data, nil
+	}
+	if s.readOnlyInspection {
+		return nil, fmt.Errorf("action secret is not initialized; run a writable DAGrail command before requesting signed actions")
 	}
 	var result []byte
 	err := s.Journal.WithLock(func() error {
@@ -743,6 +1065,9 @@ func (s *Service) actionSecret() ([]byte, error) {
 		if err := os.Rename(tmp, path); err != nil {
 			return err
 		}
+		if err := project.SyncDirectory(s.Project.DataDir); err != nil {
+			return fmt.Errorf("confirm action secret durability: %w", err)
+		}
 		result = data
 		return nil
 	})
@@ -773,10 +1098,147 @@ func readActionSecret(path string) ([]byte, bool, error) {
 	return data, true, nil
 }
 
+func actionBindingKey(projectID, kind, value string) string {
+	if value == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(strings.Join([]string{projectID, kind, value}, "\x00")))
+	return hex.EncodeToString(sum[:])
+}
+
+func resolveCompactActionRef(ctx context.Context, state domain.State, payload actionRefPayload) (actionRefPayload, error) {
+	if !payload.Compact {
+		return payload, nil
+	}
+	if payload.ProjectID != state.ProjectID || state.Graph == nil || payload.RoleKey == "" || payload.NodeKey == "" {
+		return actionRefPayload{}, fmt.Errorf("compact action reference is stale or incomplete")
+	}
+	resolve := func(kind, key string, values func(func(string) bool)) (string, error) {
+		if key == "" {
+			return "", nil
+		}
+		matched := ""
+		values(func(value string) bool {
+			if ctx.Err() != nil {
+				return false
+			}
+			if actionBindingKey(payload.ProjectID, kind, value) == key {
+				if matched != "" && matched != value {
+					matched = "!collision"
+					return false
+				}
+				matched = value
+			}
+			return true
+		})
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if matched == "" || matched == "!collision" {
+			return "", fmt.Errorf("compact action reference %s binding is stale", kind)
+		}
+		return matched, nil
+	}
+	var err error
+	payload.RoleID, err = resolve("role", payload.RoleKey, func(yield func(string) bool) {
+		for _, role := range state.Graph.Spec.Roles {
+			if !yield(role.ID) {
+				return
+			}
+		}
+	})
+	if err != nil {
+		return actionRefPayload{}, err
+	}
+	lease, exists := state.Leases[payload.RoleID]
+	if !exists || actionBindingKey(payload.ProjectID, "session:"+payload.RoleID, lease.SessionID) != payload.SessionKey {
+		return actionRefPayload{}, fmt.Errorf("compact action reference session binding is stale")
+	}
+	payload.SessionID = lease.SessionID
+	payload.NodeID, err = resolve("node", payload.NodeKey, func(yield func(string) bool) {
+		for _, node := range state.Graph.Spec.Nodes {
+			if !yield(node.ID) {
+				return
+			}
+		}
+	})
+	if err != nil {
+		return actionRefPayload{}, err
+	}
+	payload.AttemptID, err = resolve("attempt", payload.AttemptKey, func(yield func(string) bool) {
+		for id := range state.Attempts {
+			if !yield(id) {
+				return
+			}
+		}
+	})
+	if err != nil {
+		return actionRefPayload{}, err
+	}
+	payload.ResourceID, err = resolve("resource", payload.ResourceKey, func(yield func(string) bool) {
+		for id := range state.Resources {
+			if !yield(id) {
+				return
+			}
+		}
+	})
+	if err != nil {
+		return actionRefPayload{}, err
+	}
+	payload.IncidentID, err = resolve("incident", payload.IncidentKey, func(yield func(string) bool) {
+		for id := range state.Incidents {
+			if !yield(id) {
+				return
+			}
+		}
+	})
+	if err != nil {
+		return actionRefPayload{}, err
+	}
+	payload.SuccessorNodeID, err = resolve("node", payload.SuccessorKey, func(yield func(string) bool) {
+		for _, node := range state.Graph.Spec.Nodes {
+			if !yield(node.ID) {
+				return
+			}
+		}
+	})
+	if err != nil {
+		return actionRefPayload{}, err
+	}
+	return payload, nil
+}
+
+func compactActionRef(payload actionRefPayload) actionRefPayload {
+	return actionRefPayload{
+		ActionID:      payload.ActionID,
+		ProjectID:     payload.ProjectID,
+		GraphRevision: payload.GraphRevision,
+		ProviderSet:   payload.ProviderSet,
+		HeadHash:      payload.HeadHash,
+		Kind:          payload.Kind,
+		ExpiresAt:     payload.ExpiresAt,
+		Compact:       true,
+		RoleKey:       actionBindingKey(payload.ProjectID, "role", payload.RoleID),
+		SessionKey:    actionBindingKey(payload.ProjectID, "session:"+payload.RoleID, payload.SessionID),
+		NodeKey:       actionBindingKey(payload.ProjectID, "node", payload.NodeID),
+		AttemptKey:    actionBindingKey(payload.ProjectID, "attempt", payload.AttemptID),
+		ResourceKey:   actionBindingKey(payload.ProjectID, "resource", payload.ResourceID),
+		IncidentKey:   actionBindingKey(payload.ProjectID, "incident", payload.IncidentID),
+		SuccessorKey:  actionBindingKey(payload.ProjectID, "node", payload.SuccessorNodeID),
+	}
+}
+
 func signActionRef(payload actionRefPayload, secret []byte) (string, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
+	}
+	if len(raw) > maxInlineActionRefPayloadBytes {
+		payload = compactActionRef(payload)
+		raw, err = json.Marshal(payload)
+		if err != nil {
+			return "", err
+		}
 	}
 	mac := hmac.New(sha256.New, secret)
 	_, _ = mac.Write(raw)
@@ -808,22 +1270,78 @@ func verifyActionRef(ref string, secret []byte) (actionRefPayload, error) {
 	return payload, nil
 }
 
+func outcomeBindingRef(nodeID, outcomeID string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{nodeID, outcomeID}, "\x00")))
+	return "outcome:" + hex.EncodeToString(sum[:])
+}
+
+func resolveCompletionOutcome(node domain.NodeDefinition, outcomeID, outcomeRef string) (string, error) {
+	if (outcomeID == "") == (outcomeRef == "") {
+		return "", fmt.Errorf("completion input requires exactly one of outcome or outcomeRef")
+	}
+	if outcomeID != "" {
+		return outcomeID, nil
+	}
+	matched := ""
+	for _, outcome := range node.Outcomes {
+		if outcomeBindingRef(node.ID, outcome.ID) != outcomeRef {
+			continue
+		}
+		if matched != "" && matched != outcome.ID {
+			return "", fmt.Errorf("outcome reference collision")
+		}
+		matched = outcome.ID
+	}
+	if matched == "" {
+		return "", fmt.Errorf("outcome reference is not declared by node %s", node.ID)
+	}
+	return matched, nil
+}
+
+func actionInputSchemaForState(state domain.State, kind string, node domain.NodeDefinition) map[string]any {
+	schema := actionInputSchema(kind, node)
+	if !oneOf(kind, "attempt.finish", "task.complete", "review.resolve", "decision.record", "effect.complete") {
+		return schema
+	}
+	options := make([]map[string]any, 0, len(node.Outcomes))
+	for _, outcome := range node.Outcomes {
+		ref := outcomeBindingRef(node.ID, outcome.ID)
+		option := map[string]any{"ref": ref}
+		if len([]byte(outcome.ID)) <= preWaitInlineIDBytes {
+			option["id"] = outcome.ID
+		} else {
+			sum := sha256.Sum256([]byte(outcome.ID))
+			option["idDigest"] = "sha256:" + hex.EncodeToString(sum[:])
+			option["idBytes"] = len([]byte(outcome.ID))
+			option["idDetailRef"] = outcomeIDDetailRef(state, node.ID, strings.TrimPrefix(ref, "outcome:"), 0)
+		}
+		options = append(options, option)
+	}
+	schema["x-dagrailOutcomeOptions"] = options
+	return schema
+}
+
 func actionInputSchema(kind string, node domain.NodeDefinition) map[string]any {
 	digest := map[string]any{"type": "string", "pattern": `^sha256:[a-f0-9]{64}$`}
+	evidenceRef := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"digest", "type", "size"}, "properties": map[string]any{"digest": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}, "type": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "size": map[string]any{"type": "integer", "minimum": 0}, "uri": map[string]any{"type": "string", "maxLength": 2048}}}
 	provenance := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"producer"}, "properties": map[string]any{"producer": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}, "revision": map[string]any{"type": "string", "maxLength": 256}, "invocationDigest": digest}}
 	artifact := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"digest", "type", "size", "provenance"}, "properties": map[string]any{"digest": digest, "type": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "size": map[string]any{"type": "integer", "minimum": 0}, "uri": map[string]any{"type": "string", "maxLength": 2048}, "provenance": provenance}}
 	protectedInput := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"name", "digest"}, "properties": map[string]any{"name": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "digest": digest}}
 	switch kind {
 	case "attempt.checkpoint":
-		return map[string]any{"type": "object", "required": []string{"summary"}, "properties": map[string]any{"summary": map[string]any{"type": "string", "maxLength": 2048}, "evidenceRefs": map[string]any{"type": "array"}}}
+		return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"summary"}, "properties": map[string]any{"summary": map[string]any{"type": "string", "minLength": 1, "maxLength": 2048}, "evidenceRefs": map[string]any{"type": "array", "maxItems": 128, "items": evidenceRef}}}
 	case "attempt.finish", "task.complete", "review.resolve", "decision.record", "effect.complete":
 		outcomes := make([]string, 0, len(node.Outcomes))
+		outcomeRefs := make([]string, 0, len(node.Outcomes))
 		for _, outcome := range node.Outcomes {
-			outcomes = append(outcomes, outcome.ID)
+			if len([]byte(outcome.ID)) <= preWaitInlineIDBytes {
+				outcomes = append(outcomes, outcome.ID)
+			}
+			outcomeRefs = append(outcomeRefs, outcomeBindingRef(node.ID, outcome.ID))
 		}
 		factMap := map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}
 		facts := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"decision": factMap, "evidence": factMap, "policy": factMap}}
-		return map[string]any{"type": "object", "required": []string{"outcome"}, "additionalProperties": false, "properties": map[string]any{"outcome": map[string]any{"type": "string", "enum": outcomes}, "facts": facts, "evidenceRefs": map[string]any{"type": "array"}, "classification": map[string]any{"enum": []string{"work-product", "policy", "fixture", "infrastructure", "evidence", "external-effect", "unknown"}}}}
+		return map[string]any{"type": "object", "oneOf": []any{map[string]any{"required": []string{"outcome"}}, map[string]any{"required": []string{"outcomeRef"}}}, "additionalProperties": false, "properties": map[string]any{"outcome": map[string]any{"type": "string", "enum": outcomes}, "outcomeRef": map[string]any{"type": "string", "enum": outcomeRefs}, "facts": facts, "evidenceRefs": map[string]any{"type": "array", "maxItems": 128, "items": evidenceRef}, "classification": map[string]any{"enum": []string{"work-product", "policy", "fixture", "infrastructure", "evidence", "external-effect", "unknown"}}}}
 	case "gate.evaluate":
 		return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"input"}, "properties": map[string]any{"input": map[string]any{}, "evidence": map[string]any{"type": "array", "maxItems": 128}, "evidenceRefs": map[string]any{"type": "array", "maxItems": 128}}}
 	case "resource.close", "resource.reconcile":
@@ -837,6 +1355,49 @@ func actionInputSchema(kind string, node domain.NodeDefinition) map[string]any {
 	default:
 		return map[string]any{"type": "object", "additionalProperties": false}
 	}
+}
+
+func incidentSupersedeInputSchema() map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"note"}, "properties": map[string]any{"note": map[string]any{"type": "string", "minLength": 1, "maxLength": 1024}}}
+}
+
+func validateAllowedActionInput(schemaDocument map[string]any, input json.RawMessage) error {
+	var instance any
+	if err := json.Unmarshal(input, &instance); err != nil {
+		return fmt.Errorf("decode action input: %w", err)
+	}
+	schemaJSON, err := json.Marshal(schemaDocument)
+	if err != nil {
+		return fmt.Errorf("encode allowed action input schema: %w", err)
+	}
+	schemaDigest := sha256.Sum256(schemaJSON)
+	cacheKey := hex.EncodeToString(schemaDigest[:])
+	if cached, ok := allowedActionSchemaCache.Load(cacheKey); ok {
+		if err := cached.(*jsonschema.Schema).Validate(instance); err != nil {
+			return fmt.Errorf("action input does not match allowed action schema: %w", err)
+		}
+		return nil
+	}
+	var normalizedSchema any
+	if err := json.Unmarshal(schemaJSON, &normalizedSchema); err != nil {
+		return fmt.Errorf("normalize allowed action input schema: %w", err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	resource := "urn:dagrail:allowed-action-runtime:" + cacheKey
+	if err := compiler.AddResource(resource, normalizedSchema); err != nil {
+		return fmt.Errorf("compile allowed action input schema: %w", err)
+	}
+	compiled, err := compiler.Compile(resource)
+	if err != nil {
+		return fmt.Errorf("compile allowed action input schema: %w", err)
+	}
+	actual, _ := allowedActionSchemaCache.LoadOrStore(cacheKey, compiled)
+	compiled = actual.(*jsonschema.Schema)
+	if err := compiled.Validate(instance); err != nil {
+		return fmt.Errorf("action input does not match allowed action schema: %w", err)
+	}
+	return nil
 }
 
 func completionAction(node domain.NodeDefinition) string {

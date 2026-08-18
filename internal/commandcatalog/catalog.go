@@ -47,6 +47,7 @@ type Report struct {
 
 var commands = []Command{
 	{Name: "action", Summary: "List or apply controller-issued actions", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"apply", "list"}},
+	{Name: "artifact", Summary: "Verify Git handoff closure or classify prospective integration scope", Effect: "read", Project: "none", Output: "json", Subcommands: []string{"inspect-scope", "verify-git-closure"}},
 	{Name: "backup", Summary: "Create, verify, or restore portable journal backups", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"create", "restore", "verify"}},
 	{Name: "commands", Summary: "Describe the bounded machine-readable CLI surface", Effect: "read", Project: "none", Output: "json", Subcommands: []string{}},
 	{Name: "completion", Summary: "Generate shell completion from the command catalog", Effect: "read", Project: "none", Output: "text", Subcommands: []string{"bash", "fish", "powershell", "zsh"}},
@@ -59,7 +60,7 @@ var commands = []Command{
 	{Name: "harness", Summary: "Probe harness capabilities or emit a manual envelope", Effect: "read", Project: "optional", Output: "json", Subcommands: []string{"envelope", "probe"}},
 	{Name: "history", Summary: "Read bounded journal history", Effect: "read", Project: "required", Output: "json", Subcommands: []string{}},
 	{Name: "hook", Summary: "Handle a bounded harness hook event", Effect: "read", Project: "optional", Output: "json", Subcommands: []string{}},
-	{Name: "incident", Summary: "Classify, progress, disposition, trip, or resolve a governed incident", Effect: "write", Project: "required", Output: "json", Subcommands: []string{"disposition", "progress", "resolve", "trip"}},
+	{Name: "incident", Summary: "Classify, progress, disposition, supersede, trip, or resolve a governed incident", Effect: "write", Project: "required", Output: "json", Subcommands: []string{"disposition", "progress", "resolve", "supersede", "trip"}},
 	{Name: "init", Summary: "Initialize a DAGrail project", Effect: "write", Project: "optional", Output: "json", Subcommands: []string{}},
 	{Name: "inspect", Summary: "Inspect an object by opaque reference", Effect: "read", Project: "required", Output: "json", Subcommands: []string{}},
 	{Name: "journal", Summary: "Verify, export, replay, or inspect journal compatibility", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"compatibility", "export", "replay", "verify"}},
@@ -67,7 +68,7 @@ var commands = []Command{
 	{Name: "mcp", Summary: "Serve the six high-level tools over stdio", Effect: "serve", Project: "required", Output: "transport", Subcommands: []string{}},
 	{Name: "observe", Summary: "Assess or verify an isolated shadow project", Effect: "mixed", Project: "optional", Output: "json", Subcommands: []string{"assess", "create-shadow", "verify-shadow"}},
 	{Name: "plugin", Summary: "Manage runtime and harness plugin projections", Effect: "mixed", Project: "none", Output: "json", Subcommands: []string{"bundle-status", "conformance", "install", "materialize", "rollback", "runtime-status", "status", "uninstall"}},
-	{Name: "pre-wait", Summary: "Check machine liveness before yielding", Effect: "read", Project: "required", Output: "json", Subcommands: []string{}},
+	{Name: "pre-wait", Summary: "Check liveness with bounded counts, previews, and inspect refs", Effect: "read", Project: "required", Output: "json", Subcommands: []string{}},
 	{Name: "projection", Summary: "Rebuild or render derived projections", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"rebuild", "render"}},
 	{Name: "provider", Summary: "List, check, or invoke compiled providers", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"check", "invoke", "list"}},
 	{Name: "qualify", Summary: "Evaluate structural release qualification", Effect: "read", Project: "optional", Output: "json", Subcommands: []string{"release"}},

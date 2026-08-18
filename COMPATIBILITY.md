@@ -32,6 +32,10 @@ digests, context budgets, and command inventory implemented by the current binar
 - DecisionRecord v1alpha1 is append-only authority. Fields are additive; the record
   continues to bind Project, Graph Revision, Node, Attempt, Role, input digest, closed
   outcome, and exact provider identity when the source is a provider.
+- New Effect records bind adapter ID, version, schema hash, and canonical request.
+  Existing records remain readable, but a pre-v0.23 nonterminal Effect without adapter
+  metadata cannot be reconciled automatically; operators must close it with the exact
+  prior runtime or keep its dependency cut conservatively blocked.
 - SQLite is never portable authority and may be rebuilt from the verified journal.
 - SecurityAudit and JournalVerification v1alpha1 fields are governed by the schema
   paths and exact digests in `dagrail contract`. They are additive, read-only reports;
@@ -70,8 +74,12 @@ digests, context budgets, and command inventory implemented by the current binar
   additive in-version; the four broad error classes and their exit codes remain stable
   through the beta line. Completion is generated from the catalog, not an independent
   authority. Installation diagnostics remain path-free and omit raw host output.
-- HistoricalBinaryMatrix v1alpha1 closes the v0.10–v0.21 input window by exact commit.
-  ReadinessDecision v1alpha1 may declare external-validation readiness but cannot set
+- HistoricalBinaryMatrix v1alpha1 closes the v0.10.0–v0.22.2 input window by exact commit.
+- LifecycleMigration v1alpha1/v1beta1 keep v0.22 Effect payloads readable. The additive
+  `adapterVersion`/`adapterSchemaHash` fields are an optional pair on imported history;
+  current writers emit both, while an unbound nonterminal Effect cannot be reconciled
+  automatically.
+- ReadinessDecision v1alpha1 may declare external-validation readiness but cannot set
   production validation or 1.0 readiness. Changing a pinned historical commit or
   weakening an adoption gap requires a new contract version and explicit rationale.
 - Explorer requests accept only loopback/localhost Host values. An explicit Origin must

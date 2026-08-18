@@ -676,7 +676,7 @@ func TestLifecycleTransitionPreflightRejectsInvalidResourceAndEffectHistories(t 
 		state.Graph, state.GraphRevision = &graph, strings.Repeat("b", 64)
 		state.Nodes["effect"] = domain.NodeRuntime{Status: "planned"}
 		events := []LifecycleMigrationEvent{lease, attempt("effect"), running,
-			{Type: "effect.prepared", Payload: payload(map[string]any{"id": "action-1", "nodeId": "effect", "attemptId": "attempt-1", "adapterId": "manual", "ownerRole": "worker", "status": "prepared", "request": map[string]any{"operation": "dispatch"}, "prepared": map[string]any{"adapterId": "manual", "binding": map[string]any{"operation": "dispatch"}}, "idempotencyKey": "effect/1", "preparedAt": now, "updatedAt": now})},
+			{Type: "effect.prepared", Payload: payload(map[string]any{"id": "action-1", "nodeId": "effect", "attemptId": "attempt-1", "adapterId": "manual", "adapterVersion": "0.1.0", "adapterSchemaHash": "sha256:manual-effect-v1", "ownerRole": "worker", "status": "prepared", "request": map[string]any{"operation": "dispatch"}, "prepared": map[string]any{"adapterId": "manual", "binding": map[string]any{"operation": "dispatch"}}, "idempotencyKey": "effect/1", "preparedAt": now, "updatedAt": now})},
 			{Type: "action.applied", Payload: payload(map[string]any{"id": "action-1", "kind": "effect.prepare", "nodeId": "effect", "attemptId": "attempt-1", "status": "prepared", "input": map[string]any{}})},
 			{Type: "effect.observed", Payload: payload(map[string]any{"actionId": "action-1", "status": "confirmed", "receipt": map[string]any{"status": "confirmed"}, "updatedAt": now})},
 		}
@@ -691,7 +691,7 @@ func TestLifecycleTransitionPreflightRejectsInvalidResourceAndEffectHistories(t 
 		state.Graph, state.GraphRevision = &graph, strings.Repeat("c", 64)
 		state.Nodes["effect"] = domain.NodeRuntime{Status: "planned"}
 		prepare := []LifecycleMigrationEvent{
-			{Type: "effect.prepared", Payload: payload(map[string]any{"id": "action-1", "nodeId": "effect", "attemptId": "attempt-1", "adapterId": "manual", "ownerRole": "worker", "status": "prepared", "request": map[string]any{"operation": "dispatch"}, "prepared": map[string]any{"adapterId": "manual", "binding": map[string]any{"operation": "dispatch"}}, "idempotencyKey": "effect/1", "preparedAt": now, "updatedAt": now})},
+			{Type: "effect.prepared", Payload: payload(map[string]any{"id": "action-1", "nodeId": "effect", "attemptId": "attempt-1", "adapterId": "manual", "adapterVersion": "0.1.0", "adapterSchemaHash": "sha256:manual-effect-v1", "ownerRole": "worker", "status": "prepared", "request": map[string]any{"operation": "dispatch"}, "prepared": map[string]any{"adapterId": "manual", "binding": map[string]any{"operation": "dispatch"}}, "idempotencyKey": "effect/1", "preparedAt": now, "updatedAt": now})},
 			{Type: "action.applied", Payload: payload(map[string]any{"id": "action-1", "kind": "effect.prepare", "nodeId": "effect", "attemptId": "attempt-1", "status": "prepared", "input": map[string]any{}})},
 		}
 		records := commandRecords("effect", prepare, []LifecycleMigrationEvent{{Type: "effect.dispatched", Payload: payload(map[string]any{"actionId": "action-1", "dispatchedAt": now})}}, []LifecycleMigrationEvent{{Type: "effect.observed", Payload: payload(map[string]any{"actionId": "action-1", "status": "confirmed", "receipt": map[string]any{"status": "confirmed"}, "updatedAt": now})}})
@@ -706,7 +706,7 @@ func TestLifecycleTransitionPreflightRejectsInvalidResourceAndEffectHistories(t 
 		state.Graph, state.GraphRevision = &graph, strings.Repeat("d", 64)
 		state.Nodes["effect"] = domain.NodeRuntime{Status: "planned"}
 		prepare := []LifecycleMigrationEvent{
-			{Type: "effect.prepared", Payload: payload(map[string]any{"id": "action-1", "nodeId": "effect", "attemptId": "attempt-1", "adapterId": "manual", "ownerRole": "worker", "status": "prepared", "request": map[string]any{"operation": "dispatch"}, "prepared": map[string]any{"adapterId": "manual", "binding": map[string]any{"operation": "dispatch"}}, "idempotencyKey": "effect/1", "preparedAt": now, "updatedAt": now})},
+			{Type: "effect.prepared", Payload: payload(map[string]any{"id": "action-1", "nodeId": "effect", "attemptId": "attempt-1", "adapterId": "manual", "adapterVersion": "0.1.0", "adapterSchemaHash": "sha256:manual-effect-v1", "ownerRole": "worker", "status": "prepared", "request": map[string]any{"operation": "dispatch"}, "prepared": map[string]any{"adapterId": "manual", "binding": map[string]any{"operation": "dispatch"}}, "idempotencyKey": "effect/1", "preparedAt": now, "updatedAt": now})},
 			{Type: "action.applied", Payload: payload(map[string]any{"id": "action-1", "kind": "effect.prepare", "nodeId": "effect", "attemptId": "attempt-1", "status": "prepared", "input": map[string]any{}})},
 		}
 		records := commandRecords("effect", prepare, []LifecycleMigrationEvent{{Type: "effect.dispatched", Payload: payload(map[string]any{"actionId": "action-1", "dispatchedAt": now})}})
@@ -721,7 +721,7 @@ func TestLifecycleTransitionPreflightRejectsInvalidResourceAndEffectHistories(t 
 		state.Graph, state.GraphRevision = &graph, strings.Repeat("e", 64)
 		state.Nodes["effect"] = domain.NodeRuntime{Status: "planned"}
 		prepare := []LifecycleMigrationEvent{
-			{Type: "effect.prepared", Payload: payload(map[string]any{"id": "action-1", "nodeId": "effect", "attemptId": "attempt-1", "adapterId": "manual", "ownerRole": "worker", "status": "prepared", "request": map[string]any{"operation": "dispatch"}, "prepared": map[string]any{"adapterId": "manual", "binding": map[string]any{"operation": "dispatch"}}, "idempotencyKey": "effect/1", "preparedAt": now, "updatedAt": now})},
+			{Type: "effect.prepared", Payload: payload(map[string]any{"id": "action-1", "nodeId": "effect", "attemptId": "attempt-1", "adapterId": "manual", "adapterVersion": "0.1.0", "adapterSchemaHash": "sha256:manual-effect-v1", "ownerRole": "worker", "status": "prepared", "request": map[string]any{"operation": "dispatch"}, "prepared": map[string]any{"adapterId": "manual", "binding": map[string]any{"operation": "dispatch"}}, "idempotencyKey": "effect/1", "preparedAt": now, "updatedAt": now})},
 			{Type: "action.applied", Payload: payload(map[string]any{"id": "action-1", "kind": "effect.prepare", "nodeId": "effect", "attemptId": "attempt-1", "status": "prepared", "input": map[string]any{}})},
 		}
 		records := commandRecords("effect", prepare, []LifecycleMigrationEvent{{Type: "effect.reconciling", Payload: payload(map[string]any{"actionId": "action-1", "reconcilingAt": now})}})
@@ -736,7 +736,7 @@ func TestLifecycleTransitionPreflightRejectsInvalidResourceAndEffectHistories(t 
 		state.Graph, state.GraphRevision = &graph, strings.Repeat("f", 64)
 		state.Nodes["effect"] = domain.NodeRuntime{Status: "planned"}
 		prepare := []LifecycleMigrationEvent{
-			{Type: "effect.prepared", Payload: payload(map[string]any{"id": "action-1", "nodeId": "effect", "attemptId": "attempt-1", "adapterId": "manual", "ownerRole": "worker", "status": "prepared", "request": map[string]any{"operation": "dispatch"}, "prepared": map[string]any{"adapterId": "manual", "binding": map[string]any{"operation": "dispatch"}}, "idempotencyKey": "effect/1", "preparedAt": now, "updatedAt": now})},
+			{Type: "effect.prepared", Payload: payload(map[string]any{"id": "action-1", "nodeId": "effect", "attemptId": "attempt-1", "adapterId": "manual", "adapterVersion": "0.1.0", "adapterSchemaHash": "sha256:manual-effect-v1", "ownerRole": "worker", "status": "prepared", "request": map[string]any{"operation": "dispatch"}, "prepared": map[string]any{"adapterId": "manual", "binding": map[string]any{"operation": "dispatch"}}, "idempotencyKey": "effect/1", "preparedAt": now, "updatedAt": now})},
 			{Type: "action.applied", Payload: payload(map[string]any{"id": "action-1", "kind": "effect.prepare", "nodeId": "effect", "attemptId": "attempt-1", "status": "prepared", "input": map[string]any{}})},
 		}
 		records := commandRecords("effect", prepare, []LifecycleMigrationEvent{{Type: "effect.dispatched", Payload: payload(map[string]any{"actionId": "action-1", "dispatchedAt": now})}}, []LifecycleMigrationEvent{{Type: "effect.observed", Payload: payload(map[string]any{"actionId": "action-1", "status": "reconciling", "receipt": map[string]any{"status": "reconciling"}, "updatedAt": now})}})
@@ -994,7 +994,7 @@ func TestLifecycleSimulatorMatchesEveryCurrentWriterPrefix(t *testing.T) {
 	if _, err := svc.BindRole("worker", "codex", "session-1", 2*time.Hour, false, "role/renew-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.ApplyAction(findActionRef(t, svc, "worker", "task", "node.start"), json.RawMessage(`true`), "node/start"); err != nil {
+	if _, err := svc.ApplyAction(findActionRef(t, svc, "worker", "task", "node.start"), json.RawMessage(`{}`), "node/start"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.ApplyAction(findActionRef(t, svc, "worker", "task", "attempt.checkpoint"), json.RawMessage(`{"summary":"durable prefix"}`), "attempt/checkpoint"); err != nil {
@@ -1109,7 +1109,7 @@ func TestLifecycleSimulatorMatchesSemanticResourceIncidentAndEffectWriters(t *te
 		if _, err := svc.ApplyAction(findActionRef(t, svc, "worker", "effect", "node.start"), json.RawMessage(`{}`), "effect/start"); err != nil {
 			t.Fatal(err)
 		}
-		prepared, err := svc.ApplyAction(findActionRef(t, svc, "worker", "effect", "effect.prepare"), json.RawMessage(`true`), "effect/prepare")
+		prepared, err := svc.ApplyAction(findActionRef(t, svc, "worker", "effect", "effect.prepare"), json.RawMessage(`{}`), "effect/prepare")
 		if err != nil || prepared.Status != "unknown" {
 			t.Fatalf("manual effect did not enter unknown: %+v %v", prepared, err)
 		}
@@ -1690,7 +1690,7 @@ func TestLifecycleResourceReceiptSchemaRejectsNull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	effect := map[string]any{"id": "effect-1", "nodeId": "effect", "attemptId": "attempt-1", "adapterId": "manual", "ownerRole": "worker", "status": "prepared", "request": nil, "prepared": map[string]any{"adapterId": "manual", "binding": true}, "idempotencyKey": "prepare", "preparedAt": "2026-08-15T01:02:03Z", "updatedAt": "2026-08-15T01:02:03Z"}
+	effect := map[string]any{"id": "effect-1", "nodeId": "effect", "attemptId": "attempt-1", "adapterId": "manual", "adapterVersion": "0.1.0", "adapterSchemaHash": "sha256:manual-effect-v1", "ownerRole": "worker", "status": "prepared", "request": nil, "prepared": map[string]any{"adapterId": "manual", "binding": true}, "idempotencyKey": "prepare", "preparedAt": "2026-08-15T01:02:03Z", "updatedAt": "2026-08-15T01:02:03Z"}
 	if err := effectSchema.Validate(effect); err == nil {
 		t.Fatal("published lifecycle schema accepted a null Effect request")
 	}
@@ -2147,7 +2147,7 @@ func lifecycleManifest(t *testing.T, projectID, graphRevision, head string) Life
 		{SourceSequence: 2, SourceEventID: "source-2", OccurredAt: now, Events: []LifecycleMigrationEvent{
 			{Type: "attempt.leased", Payload: payload(attempt)},
 			{Type: "attempt.status-changed", Payload: payload(map[string]any{"attemptId": "attempt-1", "status": "running", "updatedAt": now})},
-			{Type: "action.applied", Payload: payload(map[string]any{"id": "action-start", "kind": "node.start", "nodeId": "task", "attemptId": "attempt-1", "status": "confirmed", "input": true})},
+			{Type: "action.applied", Payload: payload(map[string]any{"id": "action-start", "kind": "node.start", "nodeId": "task", "attemptId": "attempt-1", "status": "confirmed", "input": map[string]any{}})},
 		}},
 		{SourceSequence: 3, SourceEventID: "source-3", OccurredAt: now, Events: []LifecycleMigrationEvent{
 			{Type: "attempt.status-changed", Payload: payload(map[string]any{"attemptId": "attempt-1", "status": "submitted", "updatedAt": now})},

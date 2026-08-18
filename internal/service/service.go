@@ -31,6 +31,7 @@ type Service struct {
 	Now                           func() time.Time
 	ConfirmLocator                func(string) error
 	beforeLegacyAuthoritySnapshot func()
+	beforeIncidentSupersedeAppend func()
 	recoveryInspection            bool
 	readOnlyInspection            bool
 }
@@ -149,6 +150,9 @@ func open(root string, mode openMode, settle bool) (*Service, error) {
 	}
 	if mode == openRecovery {
 		return service, nil
+	}
+	if _, err := service.actionSecret(); err != nil {
+		return nil, err
 	}
 	if settle {
 		if err := service.settleAutomatic(); err != nil {

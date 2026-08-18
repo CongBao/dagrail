@@ -39,6 +39,20 @@ validation and shell completion. `dagrail completion bash|zsh|fish|powershell` e
 bounded script derived from that catalog. `dagrail contract` binds the catalog schema
 and digest into the broader compatibility surface.
 
+`dagrail artifact inspect-scope` compares exact base, candidate, target, and prospective
+Git commits and classifies complete tree entries (path, mode, and object ID) without
+treating target history as producer scope. Rename endpoints and discarded candidate
+changes remain explicit and unexplained prospective deltas fail closed.
+`dagrail artifact verify-git-closure` checks exact commit/tree/tag identities, ordered
+parents, peeled refs, and continued reachability through actual full refs; revision
+expressions are not retention authority. Commit identity and retention are derived from
+raw object bytes and the raw ordered-parent graph, not replace refs, grafts, or Git's
+interpreted revision view. Both bind the caller-selected repository after removing
+repository-redirection environment, disable Git lazy fetch, fail closed on missing
+promisor objects, use bounded batch reads, and are byte-nonmutating read surfaces with
+schemas and digests published by `dagrail contract`. Closure manifests must be regular,
+non-symlink files of at most 1 MiB; their bounded reader honors caller cancellation.
+
 By default, command errors remain concise text on stderr. Automation can place
 `--errors=json` before the command or set `DAGRAIL_ERROR_FORMAT=json` to receive a
 CLIError v1alpha1 envelope. The stable broad exits are `1` operation failure, `2` usage,
@@ -87,6 +101,10 @@ checkpointed. Journal-derived query state remains authoritative. Inspection stil
 requires the ordinary local authority claim, establishment fence, and lineage and does
 not create a missing runtime. A failing query report does not authorize or perform
 repair; relaxed authority access exists only behind explicit recovery commands.
+The signed-action secret is created durably during explicit initialization or another
+writable open. An inspection handle never creates or repairs it; a damaged/legacy
+runtime missing that file receives a closed diagnostic until an authorized writable
+command performs the local bootstrap.
 
 Authority adoption, rotation, and relocation publish a replacement locator only after
 the schema-4 establishment fence and its rebuildable projection are both durable. An
@@ -107,8 +125,8 @@ The stdio server exposes only these high-level tools:
 
 | Tool | Purpose | Mutation |
 | --- | --- | --- |
-| `dag_context` | bounded role/view work package and cursor delta | no |
-| `dag_inspect` | follow opaque refs into selected detail | no |
+| `dag_context` | bounded role/view work package, authorization, remediations, actions, and cursor delta | no |
+| `dag_inspect` | follow opaque refs, including `effect-continuity:<action-id>`, into selected detail | no |
 | `dag_apply` | apply a controller-issued allowed-action ref | yes |
 | `dag_graph_change` | preview or apply a revision-bound graph patch | apply only |
 | `dag_reconcile` | observe an ambiguous external effect | yes |
@@ -116,9 +134,54 @@ The stdio server exposes only these high-level tools:
 
 Tool input-schema digests are part of `dagrail contract`. Callers cannot construct raw
 lifecycle transitions; allowed-action refs bind project, head, Graph Revision, Role
-lease, Node/Attempt, provider set, and expiry.
+lease, Node/Attempt, provider set, and expiry. The returned `inputSchema` is enforced at
+`dag_apply`/`action apply` before the journal commit; it is not advisory metadata.
+The orchestrator view also exposes project-wide signed actions and deterministic
+remediation proposals. An `incident.supersede` action can close an Attempt incident only
+when a typed edge or `supersedes` declaration identifies an active/planned repair Node.
+Effect continuity compares the prepared adapter ID, version, schema hash, and canonical
+request digest separately from unrelated journal-head advancement. A missing legacy
+binding or same-ID adapter upgrade fails reconciliation closed.
 `dag_context` accepts only `orchestrator`, `worker`, or `reviewer`; a caller may lower
 the byte budget to at least 512 bytes but cannot raise the fixed 12/8/12-KiB maximum.
+When a schema-legal Role or Node ID is larger than the MCP selector limit, pass the
+controller-issued `role_ref` or `node_ref` instead of copying the identifier. Graph
+apply accepts `actor_role_ref`, and Effect reconcile accepts `effect_ref`; each is an
+opaque selector for the exact current authority object, not a caller-defined alias.
+When content must be truncated, compact authorization and a fixed-length opaque
+`operations:<key>` ref survive;
+following that opaque ref recovers bounded signed actions and remediation proposals.
+The operations index and each action page are capped at 24 KiB. Exact action and
+remediation counts remain visible; truncation returns journal-head and inventory-bound
+`operations-actions:<opaque-role>:<head>:<digest>:<offset>` and pre-wait inspect refs.
+Action refs switch to an equivalent compact, signed binding when declaration IDs would
+otherwise dominate the response. Oversized action detail and liveness identifiers are
+returned through digest-bound base64 chunks; callers concatenate decoded chunks and
+verify the advertised digest instead of expanding one large value into model context.
+The same bounded-identity rule covers Role/session authorization and imported Attempt
+IDs. A terminal action whose declared outcome is too large for the 64-KiB action input
+uses the controller-issued `outcomeRef`; its `x-dagrailOutcomeOptions` entry binds that
+short ref to an optional digest-bound outcome-ID detail stream. The ref selects exactly
+one outcome on the signed Node and cannot be reused on another Node.
+`dag_pre_wait` is independently bounded: it returns exact per-category counts, small
+deterministic previews, `truncated`, and
+`pre-wait-page:<head>:<inventory-digest>:<offset>` inspect refs. A page fails stale if
+either the journal head or time-dependent liveness inventory changes. A
+remediation embeds only a small dependency-cut preview plus its exact count, SHA-256
+digest, and byte-bounded `dependency-cut:<digest>:<offset>` pages; an individually large
+cut member uses its own digest-bound chunk ref. CLI and MCP cancellation
+interrupt context, inspect, operations, inventory, and cut computation instead of
+returning a misleading partial diagnostic.
+If an apply call crashes, times out, or loses its response, retry the original signed
+ref with the same RFC 8785 canonical JSON input value and the same idempotency
+key—even after a session replacement. Whitespace and object-key order may differ;
+the semantic JSON value may not. This exception retrieves the committed result only;
+old refs remain invalid for changed input, a new key, or new work.
+Open Incidents use snapshot-bound incident-index pages rather than copying unbounded
+detail into the work package. Status, history, frontier, evidence indexes, individual
+authority objects, and Effect continuity also switch to 24-KiB summaries plus
+digest-bound chunks when necessary. Direct CLI evidence filters accept `--node-ref`
+and `--attempt-ref`; mutating CLI selectors use the corresponding opaque ref flags.
 Graph apply and effect reconciliation recheck the active owner lease. Tool cancellation
 is propagated into policy providers and effect adapters; cancellation never commits a
 semantic Decision that was not returned.
@@ -131,13 +194,18 @@ generic provider invocation output alone never advances a Node.
 ## JSON schemas
 
 Published schemas live in `schemas/`. Current governed reports include lifecycle
-migration/projection, the Explorer UI
+migration/projection, Git artifact closure/integration scope, the Explorer UI
 API, security audit, journal verification, plugin conformance, support report, recovery
 rehearsal, explicit legacy-authority adoption, authority rotation/relocation, release qualification,
 and the compatibility contract itself. Reports use
 closed objects so misspelled or silently added fields fail validation. ReleaseManifest
 v1beta1 and ReleaseVerification v1alpha1 bind the complete distribution set separately
 from source qualification.
+
+Lifecycle migration retains the v0.22 Effect shape: `adapterVersion` and
+`adapterSchemaHash` are an optional pair for imported history. Current writers always
+emit both. Missing legacy metadata is preserved as unknown and blocks automatic Effect
+reconciliation; supplying only one field or changing a bound value fails closed.
 
 ## Go provider SDK
 

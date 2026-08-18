@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -1117,15 +1118,26 @@ func backupReport(envelope BackupEnvelope) BackupReport {
 }
 
 func (s *Service) History(after uint64, limit int) (HistoryPage, error) {
+	return s.HistoryContext(context.Background(), after, limit)
+}
+
+func (s *Service) HistoryContext(ctx context.Context, after uint64, limit int) (HistoryPage, error) {
+	if err := ctx.Err(); err != nil {
+		return HistoryPage{}, err
+	}
+	segments, err := s.Journal.ReadAll()
+	if err != nil {
+		return HistoryPage{}, err
+	}
+	return historyFromSegmentsContext(ctx, segments, after, limit)
+}
+
+func historyFromSegmentsContext(ctx context.Context, segments []journal.Segment, after uint64, limit int) (HistoryPage, error) {
 	if limit == 0 {
 		limit = 25
 	}
 	if limit < 1 || limit > 100 {
 		return HistoryPage{}, fmt.Errorf("history limit must be 1..100")
-	}
-	segments, err := s.Journal.ReadAll()
-	if err != nil {
-		return HistoryPage{}, err
 	}
 	if after > uint64(len(segments)) {
 		return HistoryPage{}, fmt.Errorf("history cursor exceeds journal head")
@@ -1136,8 +1148,14 @@ func (s *Service) History(after uint64, limit int) (HistoryPage, error) {
 	}
 	page := HistoryPage{After: after, NextCursor: after, Entries: []HistoryEntry{}, Truncated: end < len(segments)}
 	for _, segment := range segments[int(after):end] {
+		if err := ctx.Err(); err != nil {
+			return HistoryPage{}, err
+		}
 		eventTypes := make([]string, 0, len(segment.Events))
 		for _, event := range segment.Events {
+			if err := ctx.Err(); err != nil {
+				return HistoryPage{}, err
+			}
 			eventTypes = append(eventTypes, event.Type)
 		}
 		page.Entries = append(page.Entries, HistoryEntry{Sequence: segment.Sequence, CommandKind: segment.Command.Kind, ActorRole: segment.Command.ActorRole, EventTypes: eventTypes, CommittedAt: segment.CommittedAt, SegmentHash: segment.SegmentHash})
@@ -1147,22 +1165,48 @@ func (s *Service) History(after uint64, limit int) (HistoryPage, error) {
 }
 
 func (s *Service) Status() (OperationalStatus, error) {
+	return s.StatusContext(context.Background())
+}
+
+func (s *Service) StatusContext(ctx context.Context) (OperationalStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return OperationalStatus{}, err
+	}
 	state, _, err := s.load()
 	if err != nil {
 		return OperationalStatus{}, err
 	}
-	result := OperationalStatus{ProjectID: state.ProjectID, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, HeadHash: state.HeadHash, Nodes: map[string]int{}, Attempts: map[string]int{}, Effects: map[string]int{}, Incidents: map[string]int{}, Frontier: domain.ComputeFrontier(state)}
+	return operationalStatusFromStateContext(ctx, state, s.Now().UTC())
+}
+
+func operationalStatusFromStateContext(ctx context.Context, state domain.State, now time.Time) (OperationalStatus, error) {
+	frontier, err := domain.ComputeFrontierContext(ctx, state)
+	if err != nil {
+		return OperationalStatus{}, err
+	}
+	result := OperationalStatus{ProjectID: state.ProjectID, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, HeadHash: state.HeadHash, Nodes: map[string]int{}, Attempts: map[string]int{}, Effects: map[string]int{}, Incidents: map[string]int{}, Frontier: frontier}
 	for _, node := range state.Nodes {
+		if err := ctx.Err(); err != nil {
+			return OperationalStatus{}, err
+		}
 		result.Nodes[node.Status]++
 	}
 	for _, attempt := range state.Attempts {
+		if err := ctx.Err(); err != nil {
+			return OperationalStatus{}, err
+		}
 		result.Attempts[attempt.Status]++
 	}
 	for _, effect := range state.Effects {
+		if err := ctx.Err(); err != nil {
+			return OperationalStatus{}, err
+		}
 		result.Effects[effect.Status]++
 	}
-	now := s.Now().UTC()
 	for id, incident := range state.Incidents {
+		if err := ctx.Err(); err != nil {
+			return OperationalStatus{}, err
+		}
 		result.Incidents[incident.Status]++
 		if incident.Status == "open" {
 			if deadline, parseErr := time.Parse(time.RFC3339Nano, incident.Deadline); parseErr == nil && !now.Before(deadline) {
@@ -1171,6 +1215,9 @@ func (s *Service) Status() (OperationalStatus, error) {
 		}
 	}
 	for role, lease := range state.Leases {
+		if err := ctx.Err(); err != nil {
+			return OperationalStatus{}, err
+		}
 		if lease.Active {
 			if expires, parseErr := time.Parse(time.RFC3339Nano, lease.ExpiresAt); parseErr != nil || !now.Before(expires) {
 				result.ExpiredRoleLeases = append(result.ExpiredRoleLeases, role)
