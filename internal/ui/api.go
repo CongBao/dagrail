@@ -12,17 +12,20 @@ import (
 	"strings"
 
 	"github.com/CongBao/dagrail/internal/domain"
+	"github.com/CongBao/dagrail/internal/grouping"
 	"github.com/CongBao/dagrail/internal/service"
 )
 
 const (
-	explorerAPIVersion = "dagrail.io/ui/v1beta1"
-	maxAPIResponse     = 2 * 1024 * 1024
-	maxNodePage        = 200
-	maxTopologyNodes   = 500
-	maxHistoryPage     = 100
-	maxOperationsPage  = 200
-	maxNodeDetailItems = 100
+	explorerAPIVersion   = "dagrail.io/ui/v1beta2"
+	maxAPIResponse       = 2 * 1024 * 1024
+	maxNodePage          = 200
+	maxTopologyNodes     = 500
+	maxHistoryPage       = 100
+	maxOperationsPage    = 200
+	maxNodeDetailItems   = 100
+	maxGroupEdgePage     = 100
+	maxAggregateEdgePage = 100
 )
 
 type ExplorerOverview struct {
@@ -62,14 +65,56 @@ type NodePage struct {
 }
 
 type TopologyPage struct {
-	APIVersion    string                  `json:"apiVersion"`
-	GraphRevision string                  `json:"graphRevision"`
-	HeadSequence  uint64                  `json:"headSequence"`
-	Focus         string                  `json:"focus,omitempty"`
-	Depth         int                     `json:"depth"`
-	Page          PageInfo                `json:"page"`
-	Nodes         []NodeView              `json:"nodes"`
-	Edges         []domain.EdgeDefinition `json:"edges"`
+	APIVersion            string                  `json:"apiVersion"`
+	GraphRevision         string                  `json:"graphRevision"`
+	HeadSequence          uint64                  `json:"headSequence"`
+	Mode                  string                  `json:"mode"`
+	Focus                 string                  `json:"focus,omitempty"`
+	Depth                 int                     `json:"depth"`
+	Page                  PageInfo                `json:"page"`
+	Nodes                 []NodeView              `json:"nodes"`
+	Edges                 []domain.EdgeDefinition `json:"edges"`
+	Groups                []GroupView             `json:"groups,omitempty"`
+	Lanes                 []grouping.Lane         `json:"lanes,omitempty"`
+	AggregateEdges        []AggregateEdgeView     `json:"aggregateEdges,omitempty"`
+	AggregateEdgePage     *PageInfo               `json:"aggregateEdgePage,omitempty"`
+	AggregateEdgeIndexRef string                  `json:"aggregateEdgeIndexRef,omitempty"`
+	ExpandedGroupIDs      []string                `json:"expandedGroupIds,omitempty"`
+	MembershipDigest      string                  `json:"membershipDigest,omitempty"`
+	ProjectionDigest      string                  `json:"projectionDigest,omitempty"`
+}
+
+type GroupView struct {
+	grouping.GroupSummary
+	InternalMatchCount int `json:"internalMatchCount,omitempty"`
+}
+
+type AggregateEdgeView struct {
+	FromRef       string `json:"fromRef"`
+	ToRef         string `json:"toRef"`
+	PredicateKind string `json:"predicateKind"`
+	OutcomeClass  string `json:"outcomeClass,omitempty"`
+	Count         int    `json:"count"`
+	EdgeDigest    string `json:"edgeDigest"`
+	InspectRef    string `json:"inspectRef"`
+}
+
+type GroupEdgePage struct {
+	APIVersion    string   `json:"apiVersion"`
+	GraphRevision string   `json:"graphRevision"`
+	HeadSequence  uint64   `json:"headSequence"`
+	Ref           string   `json:"ref"`
+	Page          PageInfo `json:"page"`
+	EdgeIDs       []string `json:"edgeIds"`
+}
+
+type AggregateEdgePage struct {
+	APIVersion     string              `json:"apiVersion"`
+	GraphRevision  string              `json:"graphRevision"`
+	HeadSequence   uint64              `json:"headSequence"`
+	Ref            string              `json:"ref"`
+	Page           PageInfo            `json:"page"`
+	AggregateEdges []AggregateEdgeView `json:"aggregateEdges"`
 }
 
 type NodeContractView struct {
@@ -79,6 +124,7 @@ type NodeContractView struct {
 	Role        string                   `json:"role,omitempty"`
 	Objective   string                   `json:"objective,omitempty"`
 	Parent      string                   `json:"parent,omitempty"`
+	GroupID     string                   `json:"groupId,omitempty"`
 	Supersedes  string                   `json:"supersedes,omitempty"`
 	Outcomes    []domain.Outcome         `json:"outcomes"`
 	RetryBudget int                      `json:"retryBudget"`
@@ -215,7 +261,7 @@ func registerExplorerAPI(mux *http.ServeMux, svc *service.Service) {
 		return writeAPIResult(w, value, err)
 	}))
 	mux.HandleFunc("/api/v1/topology", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
-		filter, err := parseNodeFilter(r, map[string]bool{"q": true, "status": true, "kind": true, "role": true, "focus": true, "depth": true, "limit": true})
+		filter, err := parseNodeFilter(r, map[string]bool{"q": true, "status": true, "kind": true, "role": true, "focus": true, "depth": true, "limit": true, "mode": true, "groupState": true, "expanded": true, "collapsed": true})
 		if err != nil {
 			return err
 		}
@@ -231,7 +277,23 @@ func registerExplorerAPI(mux *http.ServeMux, svc *service.Service) {
 		if err != nil {
 			return err
 		}
-		value, err := buildTopology(svc, filter, focus, depth, limit)
+		mode, err := queryString(r, "mode", 16)
+		if err != nil || (mode != "" && mode != "summary" && mode != "detail") {
+			return clientError(http.StatusBadRequest, "mode must be summary or detail")
+		}
+		groupState, err := queryGroupState(r)
+		if err != nil {
+			return err
+		}
+		expanded, err := queryStrings(r, "expanded", 256, 4096, 16*1024)
+		if err != nil {
+			return err
+		}
+		collapsed, err := queryStrings(r, "collapsed", 256, 4096, 16*1024)
+		if err != nil {
+			return err
+		}
+		value, err := buildTopology(svc, filter, focus, depth, limit, mode, groupState, expanded, collapsed)
 		return writeAPIResult(w, value, err)
 	}))
 	mux.HandleFunc("/api/v1/node", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
@@ -243,6 +305,68 @@ func registerExplorerAPI(mux *http.ServeMux, svc *service.Service) {
 			return clientError(http.StatusBadRequest, "node id is required")
 		}
 		value, err := buildNodeDetail(svc, nodeID)
+		return writeAPIResult(w, value, err)
+	}))
+	mux.HandleFunc("/api/v1/group-edges", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
+		if err := requireQuery(r, map[string]bool{"ref": true, "cursor": true, "limit": true, "groupState": true, "expanded": true, "collapsed": true}); err != nil {
+			return err
+		}
+		ref, err := queryString(r, "ref", 128)
+		if err != nil || !strings.HasPrefix(ref, "group-edges:") {
+			return clientError(http.StatusBadRequest, "valid group edge ref is required")
+		}
+		cursor, err := queryInt(r, "cursor", 0, 0, 1_000_000_000)
+		if err != nil {
+			return err
+		}
+		groupState, err := queryGroupState(r)
+		if err != nil {
+			return err
+		}
+		limit, err := queryInt(r, "limit", 100, 1, maxGroupEdgePage)
+		if err != nil {
+			return err
+		}
+		expanded, err := queryStrings(r, "expanded", 256, 4096, 16*1024)
+		if err != nil {
+			return err
+		}
+		collapsed, err := queryStrings(r, "collapsed", 256, 4096, 16*1024)
+		if err != nil {
+			return err
+		}
+		value, err := buildGroupEdgePage(svc, ref, cursor, limit, groupState, expanded, collapsed)
+		return writeAPIResult(w, value, err)
+	}))
+	mux.HandleFunc("/api/v1/aggregate-edges", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
+		if err := requireQuery(r, map[string]bool{"ref": true, "cursor": true, "limit": true, "groupState": true, "expanded": true, "collapsed": true}); err != nil {
+			return err
+		}
+		ref, err := queryString(r, "ref", 128)
+		if err != nil || !strings.HasPrefix(ref, "aggregate-edges:") {
+			return clientError(http.StatusBadRequest, "valid aggregate edge index ref is required")
+		}
+		cursor, err := queryInt(r, "cursor", 0, 0, 1_000_000_000)
+		if err != nil {
+			return err
+		}
+		limit, err := queryInt(r, "limit", maxAggregateEdgePage, 1, maxAggregateEdgePage)
+		if err != nil {
+			return err
+		}
+		groupState, err := queryGroupState(r)
+		if err != nil {
+			return err
+		}
+		expanded, err := queryStrings(r, "expanded", 256, 4096, 16*1024)
+		if err != nil {
+			return err
+		}
+		collapsed, err := queryStrings(r, "collapsed", 256, 4096, 16*1024)
+		if err != nil {
+			return err
+		}
+		value, err := buildAggregateEdgePage(svc, ref, cursor, limit, groupState, expanded, collapsed)
 		return writeAPIResult(w, value, err)
 	}))
 	mux.HandleFunc("/api/v1/history", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
@@ -381,7 +505,7 @@ func buildOverview(svc *service.Service) (ExplorerOverview, error) {
 		Project:       map[string]string{"id": svc.Project.Config.ProjectID, "name": svc.Project.Config.Name},
 		GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Counts: counts,
 		Frontier: FrontierSummary{Ready: ready, ReadyCount: len(frontier.Ready), ReadyTruncated: len(ready) < len(frontier.Ready), BlockedCount: len(frontier.Blocked), ResourceBlocked: len(frontier.ResourceBlocked), DependencyCuts: len(frontier.DependencyCuts)},
-		Facets:   map[string][]string{"statuses": {"ready", "blocked", "resource-blocked", "planned", "active", "terminal", "superseded", "skipped"}, "kinds": kinds, "roles": roles},
+		Facets:   map[string][]string{"statuses": {"ready", "blocked", "attention", "accepted", "returned", "completed", "unreachable", "resource-blocked", "planned", "active", "terminal", "superseded", "skipped"}, "kinds": kinds, "roles": roles},
 	}, nil
 }
 
@@ -406,10 +530,19 @@ func buildNodePage(svc *service.Service, filter nodeFilter, cursor, limit int) (
 	return NodePage{APIVersion: explorerAPIVersion, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Page: page, Nodes: views[cursor:end]}, nil
 }
 
-func buildTopology(svc *service.Service, filter nodeFilter, focus string, depth, limit int) (TopologyPage, error) {
+func buildTopology(svc *service.Service, filter nodeFilter, focus string, depth, limit int, mode, groupState string, expandedIDs, collapsedIDs []string) (TopologyPage, error) {
 	state, err := svc.State()
 	if err != nil {
 		return TopologyPage{}, err
+	}
+	if mode == "" {
+		mode = "detail"
+		if state.Graph != nil && len(state.Graph.Spec.Groups) > 0 {
+			mode = "summary"
+		}
+	}
+	if mode == "summary" {
+		return buildSummaryTopology(state, filter, focus, depth, limit, groupState, expandedIDs, collapsedIDs)
 	}
 	views := filteredNodeViews(state, filter)
 	if focus != "" {
@@ -436,7 +569,248 @@ func buildTopology(svc *service.Service, filter nodeFilter, focus string, depth,
 		}
 	}
 	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
-	return TopologyPage{APIVersion: explorerAPIVersion, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Focus: focus, Depth: depth, Page: PageInfo{Cursor: 0, Limit: limit, Total: total, Truncated: len(views) < total}, Nodes: views, Edges: edges}, nil
+	return TopologyPage{APIVersion: explorerAPIVersion, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Mode: "detail", Focus: focus, Depth: depth, Page: PageInfo{Cursor: 0, Limit: limit, Total: total, Truncated: len(views) < total}, Nodes: views, Edges: edges}, nil
+}
+
+func buildSummaryTopology(state domain.State, filter nodeFilter, focus string, depth, limit int, groupState string, expandedIDs, collapsedIDs []string) (TopologyPage, error) {
+	if state.Graph == nil {
+		return TopologyPage{APIVersion: explorerAPIVersion, Mode: "summary", Depth: depth, Nodes: []NodeView{}, Edges: []domain.EdgeDefinition{}, Groups: []GroupView{}, AggregateEdges: []AggregateEdgeView{}}, nil
+	}
+	groups := map[string]domain.GroupDefinition{}
+	for _, group := range state.Graph.Spec.Groups {
+		groups[group.ID] = group
+	}
+	overrides, err := groupOverrides(state.Graph, groupState, expandedIDs, collapsedIDs)
+	if err != nil {
+		return TopologyPage{}, err
+	}
+	if focus != "" {
+		if group, ok := groups[focus]; ok {
+			for current := group.ParentGroupID; current != ""; current = groups[current].ParentGroupID {
+				overrides[current] = true
+			}
+		} else if node, ok := state.NodeDefinition(focus); ok {
+			for current := node.GroupID; current != ""; current = groups[current].ParentGroupID {
+				overrides[current] = true
+			}
+		} else {
+			return TopologyPage{}, clientError(http.StatusNotFound, "unknown focus group or node")
+		}
+	}
+	projection, err := grouping.Build(state, overrides)
+	if err != nil {
+		return TopologyPage{}, err
+	}
+	matchedViews := filteredNodeViews(state, filter)
+	matchedNodes := map[string]bool{}
+	matchCounts := map[string]int{}
+	for _, view := range matchedViews {
+		matchedNodes[view.ID] = true
+		node, _ := state.NodeDefinition(view.ID)
+		for current := node.GroupID; current != ""; current = groups[current].ParentGroupID {
+			matchCounts[current]++
+		}
+	}
+	filtering := filter.Query != "" || filter.Status != "" || filter.Kind != "" || filter.Role != ""
+	includedGroups := map[string]bool{}
+	if filtering {
+		query := strings.ToLower(filter.Query)
+		for _, summary := range projection.Groups {
+			if matchCounts[summary.ID] > 0 || (query != "" && strings.Contains(strings.ToLower(summary.ID+"\x00"+summary.Title+"\x00"+summary.Kind), query)) || (filter.Status != "" && (summary.DisplayStatus == filter.Status || summary.LifecycleStatus == filter.Status)) {
+				for current := summary.ID; current != ""; current = groups[current].ParentGroupID {
+					includedGroups[current] = true
+				}
+			}
+		}
+	}
+	groupViews := []GroupView{}
+	for _, summary := range projection.Groups {
+		if filtering && !includedGroups[summary.ID] {
+			continue
+		}
+		groupViews = append(groupViews, GroupView{GroupSummary: summary, InternalMatchCount: matchCounts[summary.ID]})
+	}
+	visibleNodeIDs := []string{}
+	for _, nodeID := range projection.VisibleNodes {
+		if !filtering || matchedNodes[nodeID] {
+			visibleNodeIDs = append(visibleNodeIDs, nodeID)
+		}
+	}
+	total := len(visibleNodeIDs)
+	if len(visibleNodeIDs) > limit {
+		visibleNodeIDs = visibleNodeIDs[:limit]
+	}
+	views := viewsForOrderedIDs(state, visibleNodeIDs)
+	expanded := []string{}
+	for _, summary := range projection.Groups {
+		if summary.Expanded {
+			expanded = append(expanded, summary.ID)
+		}
+	}
+	sort.Strings(expanded)
+	aggregateEdges, aggregatePage, aggregateRef := aggregateEdgeIndex(projection, 0, maxAggregateEdgePage)
+	return TopologyPage{
+		APIVersion: explorerAPIVersion, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence,
+		Mode: "summary", Focus: focus, Depth: depth, Page: PageInfo{Cursor: 0, Limit: limit, Total: total, Truncated: len(views) < total},
+		Nodes: views, Edges: []domain.EdgeDefinition{}, Groups: groupViews, Lanes: filterLanes(projection.Lanes, groupViews, views), AggregateEdges: aggregateEdges,
+		AggregateEdgePage: &aggregatePage, AggregateEdgeIndexRef: aggregateRef,
+		ExpandedGroupIDs: expanded, MembershipDigest: projection.MembershipDigest, ProjectionDigest: projection.ProjectionDigest,
+	}, nil
+}
+
+func filterLanes(lanes []grouping.Lane, groups []GroupView, nodes []NodeView) []grouping.Lane {
+	visibleGroups := map[string]bool{}
+	for _, group := range groups {
+		visibleGroups["group:"+group.ID] = true
+	}
+	visibleNodes := map[string]bool{}
+	for _, node := range nodes {
+		visibleNodes["node:"+node.ID] = true
+	}
+	result := make([]grouping.Lane, 0, len(lanes))
+	for _, lane := range lanes {
+		filtered := grouping.Lane{ID: lane.ID, Title: lane.Title, GroupRefs: []string{}, NodeRefs: []string{}}
+		for _, ref := range lane.GroupRefs {
+			if visibleGroups[ref] {
+				filtered.GroupRefs = append(filtered.GroupRefs, ref)
+			}
+		}
+		for _, ref := range lane.NodeRefs {
+			if visibleNodes[ref] {
+				filtered.NodeRefs = append(filtered.NodeRefs, ref)
+			}
+		}
+		if len(filtered.GroupRefs)+len(filtered.NodeRefs) > 0 {
+			result = append(result, filtered)
+		}
+	}
+	return result
+}
+
+func buildGroupEdgePage(svc *service.Service, ref string, cursor, limit int, groupState string, expandedIDs, collapsedIDs []string) (GroupEdgePage, error) {
+	state, err := svc.State()
+	if err != nil {
+		return GroupEdgePage{}, err
+	}
+	if state.Graph == nil {
+		return GroupEdgePage{}, clientError(http.StatusNotFound, "group edge ref is unavailable")
+	}
+	overrides, err := groupOverrides(state.Graph, groupState, expandedIDs, collapsedIDs)
+	if err != nil {
+		return GroupEdgePage{}, err
+	}
+	projection, err := grouping.Build(state, overrides)
+	if err != nil {
+		return GroupEdgePage{}, err
+	}
+	for _, edge := range projection.AggregateEdges {
+		if edge.InspectRef != ref {
+			continue
+		}
+		if cursor > len(edge.EdgeIDs) {
+			return GroupEdgePage{}, clientError(http.StatusBadRequest, "group edge cursor exceeds result")
+		}
+		end := cursor + limit
+		if end > len(edge.EdgeIDs) {
+			end = len(edge.EdgeIDs)
+		}
+		page := PageInfo{Cursor: cursor, Limit: limit, Total: len(edge.EdgeIDs), Truncated: end < len(edge.EdgeIDs)}
+		if end < len(edge.EdgeIDs) {
+			next := end
+			page.NextCursor = &next
+		}
+		return GroupEdgePage{APIVersion: explorerAPIVersion, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Ref: ref, Page: page, EdgeIDs: append([]string{}, edge.EdgeIDs[cursor:end]...)}, nil
+	}
+	return GroupEdgePage{}, clientError(http.StatusNotFound, "group edge ref is stale or unknown")
+}
+
+func buildAggregateEdgePage(svc *service.Service, ref string, cursor, limit int, groupState string, expandedIDs, collapsedIDs []string) (AggregateEdgePage, error) {
+	state, err := svc.State()
+	if err != nil {
+		return AggregateEdgePage{}, err
+	}
+	if state.Graph == nil {
+		return AggregateEdgePage{}, clientError(http.StatusNotFound, "aggregate edge index ref is unavailable")
+	}
+	overrides, err := groupOverrides(state.Graph, groupState, expandedIDs, collapsedIDs)
+	if err != nil {
+		return AggregateEdgePage{}, err
+	}
+	projection, err := grouping.Build(state, overrides)
+	if err != nil {
+		return AggregateEdgePage{}, err
+	}
+	expectedRef := aggregateEdgeIndexRef(projection)
+	if ref != expectedRef {
+		return AggregateEdgePage{}, clientError(http.StatusNotFound, "aggregate edge index ref is stale or unknown")
+	}
+	if cursor > len(projection.AggregateEdges) {
+		return AggregateEdgePage{}, clientError(http.StatusBadRequest, "aggregate edge cursor exceeds result")
+	}
+	edges, page, _ := aggregateEdgeIndex(projection, cursor, limit)
+	return AggregateEdgePage{APIVersion: explorerAPIVersion, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Ref: ref, Page: page, AggregateEdges: edges}, nil
+}
+
+func groupOverrides(graph *domain.GraphDefinition, groupState string, expandedIDs, collapsedIDs []string) (map[string]bool, error) {
+	groups := map[string]bool{}
+	for _, group := range graph.Spec.Groups {
+		groups[group.ID] = true
+	}
+	overrides := map[string]bool{}
+	if groupState != "" {
+		expanded := groupState == "expanded"
+		for groupID := range groups {
+			overrides[groupID] = expanded
+		}
+	}
+	explicitExpanded := map[string]bool{}
+	for _, groupID := range expandedIDs {
+		if !groups[groupID] {
+			return nil, clientError(http.StatusBadRequest, "unknown expanded group")
+		}
+		explicitExpanded[groupID] = true
+		overrides[groupID] = true
+	}
+	for _, groupID := range collapsedIDs {
+		if !groups[groupID] {
+			return nil, clientError(http.StatusBadRequest, "unknown collapsed group")
+		}
+		if explicitExpanded[groupID] {
+			return nil, clientError(http.StatusBadRequest, "group cannot be both expanded and collapsed")
+		}
+		overrides[groupID] = false
+	}
+	return overrides, nil
+}
+
+func aggregateEdgeIndex(projection grouping.Projection, cursor, limit int) ([]AggregateEdgeView, PageInfo, string) {
+	total := len(projection.AggregateEdges)
+	if cursor > total {
+		cursor = total
+	}
+	end := cursor + limit
+	if end > total {
+		end = total
+	}
+	page := PageInfo{Cursor: cursor, Limit: limit, Total: total, Truncated: end < total}
+	if end < total {
+		next := end
+		page.NextCursor = &next
+	}
+	edges := make([]AggregateEdgeView, 0, end-cursor)
+	for _, edge := range projection.AggregateEdges[cursor:end] {
+		edges = append(edges, AggregateEdgeView{FromRef: edge.FromRef, ToRef: edge.ToRef, PredicateKind: edge.PredicateKind, OutcomeClass: edge.OutcomeClass, Count: edge.Count, EdgeDigest: edge.EdgeDigest, InspectRef: edge.InspectRef})
+	}
+	ref := ""
+	if total > 0 {
+		ref = aggregateEdgeIndexRef(projection)
+	}
+	return edges, page, ref
+}
+
+func aggregateEdgeIndexRef(projection grouping.Projection) string {
+	digest := sha256.Sum256([]byte("dagrail-ui-aggregate-edge-index-v1\x00" + projection.ProjectionDigest))
+	return "aggregate-edges:" + hex.EncodeToString(digest[:])
 }
 
 func buildNodeDetail(svc *service.Service, nodeID string) (NodeDetail, error) {
@@ -448,7 +822,7 @@ func buildNodeDetail(svc *service.Service, nodeID string) (NodeDetail, error) {
 	if !ok {
 		return NodeDetail{}, clientError(http.StatusNotFound, "unknown node")
 	}
-	contract := NodeContractView{ID: node.ID, Title: node.Title, Kind: node.Kind, Role: node.Role, Objective: node.Objective, Parent: node.Parent, Supersedes: node.Supersedes, Outcomes: append([]domain.Outcome{}, node.Outcomes...), RetryBudget: node.RetryBudget, Resources: append([]domain.ResourceRequest{}, node.Resources...), InputBytes: len(node.Inputs)}
+	contract := NodeContractView{ID: node.ID, Title: node.Title, Kind: node.Kind, Role: node.Role, Objective: node.Objective, Parent: node.Parent, GroupID: node.GroupID, Supersedes: node.Supersedes, Outcomes: append([]domain.Outcome{}, node.Outcomes...), RetryBudget: node.RetryBudget, Resources: append([]domain.ResourceRequest{}, node.Resources...), InputBytes: len(node.Inputs)}
 	if len(node.Inputs) > 0 {
 		digest := sha256.Sum256(node.Inputs)
 		contract.InputSHA256 = "sha256:" + hex.EncodeToString(digest[:])
@@ -669,7 +1043,7 @@ func allNodeViews(state domain.State) []NodeView {
 	if state.Graph != nil {
 		for _, node := range state.Graph.Spec.Nodes {
 			runtime := state.Nodes[node.ID]
-			result = append(result, NodeView{ID: node.ID, Title: node.Title, Kind: node.Kind, Role: node.Role, Parent: node.Parent, Status: runtime.Status, Readiness: readiness[node.ID], Outcome: runtime.Outcome})
+			result = append(result, NodeView{ID: node.ID, Title: node.Title, Kind: node.Kind, Role: node.Role, Parent: node.Parent, GroupID: node.GroupID, Status: runtime.Status, Readiness: readiness[node.ID], Outcome: runtime.Outcome})
 		}
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
@@ -789,7 +1163,7 @@ func parseNodeFilter(r *http.Request, allowed map[string]bool) (nodeFilter, erro
 		return nodeFilter{}, err
 	}
 	if status != "" {
-		allowed := map[string]bool{"ready": true, "blocked": true, "resource-blocked": true, "planned": true, "active": true, "terminal": true, "superseded": true, "skipped": true}
+		allowed := map[string]bool{"ready": true, "blocked": true, "attention": true, "accepted": true, "returned": true, "completed": true, "unreachable": true, "resource-blocked": true, "planned": true, "active": true, "terminal": true, "superseded": true, "skipped": true}
 		if !allowed[status] {
 			return nodeFilter{}, clientError(http.StatusBadRequest, "invalid node status filter")
 		}
@@ -802,11 +1176,45 @@ func requireQuery(r *http.Request, allowed map[string]bool) error {
 		if !allowed[key] {
 			return clientError(http.StatusBadRequest, "unknown query parameter: "+key)
 		}
-		if len(values) != 1 {
+		if len(values) != 1 && key != "expanded" && key != "collapsed" {
 			return clientError(http.StatusBadRequest, "query parameter must appear once: "+key)
 		}
 	}
 	return nil
+}
+
+func queryStrings(r *http.Request, name string, maxItems, itemLimit, totalLimit int) ([]string, error) {
+	values := r.URL.Query()[name]
+	if len(values) > maxItems {
+		return nil, clientError(http.StatusBadRequest, name+" has too many values")
+	}
+	total := 0
+	seen := map[string]bool{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		length := len([]byte(value))
+		total += length
+		if length == 0 || length > itemLimit || total > totalLimit {
+			return nil, clientError(http.StatusBadRequest, name+" exceeds its byte limit")
+		}
+		if !seen[value] {
+			seen[value] = true
+			result = append(result, value)
+		}
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func queryGroupState(r *http.Request) (string, error) {
+	value, err := queryString(r, "groupState", 16)
+	if err != nil {
+		return "", err
+	}
+	if value != "" && value != "expanded" && value != "collapsed" {
+		return "", clientError(http.StatusBadRequest, "groupState must be expanded or collapsed")
+	}
+	return value, nil
 }
 
 func queryString(r *http.Request, name string, limit int) (string, error) {

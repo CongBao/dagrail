@@ -1295,10 +1295,22 @@ func TestStoredAuthorityClassesUseOneBoundedRecoverableInspectionProtocol(t *tes
 
 func TestGraphImpactUsesBoundedCountsWithoutLosingAdmissionToken(t *testing.T) {
 	long := strings.Repeat("x", 30_000)
-	impact := GraphImpact{CurrentRevision: strings.Repeat("a", 64), ProposedRevision: strings.Repeat("b", 64), AddedNodes: []string{long}, UpdatedRoles: []string{long}, DependencyCut: []string{long}, Token: "signed-impact-token", ExpiresAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	impact := GraphImpact{
+		CurrentRevision:  strings.Repeat("a", 64),
+		ProposedRevision: strings.Repeat("b", 64),
+		AddedNodes:       []string{long},
+		UpdatedRoles:     []string{long},
+		AddedGroups:      []string{long},
+		UpdatedGroups:    []string{long},
+		RemovedGroups:    []string{long},
+		MovedNodes:       []string{long},
+		DependencyCut:    []string{long},
+		Token:            "signed-impact-token",
+		ExpiresAt:        time.Now().UTC().Format(time.RFC3339Nano),
+	}
 	bounded := BoundedGraphImpact(impact)
 	raw, _ := json.Marshal(bounded)
-	if len(raw) > operationsMaxBytes || !bounded.Truncated || bounded.Token != impact.Token || bounded.AddedNodeCount != 1 || bounded.UpdatedRoleCount != 1 || bounded.DependencyCutCount != 1 || bounded.ImpactDigest == "" || len(bounded.AddedNodes) != 0 {
+	if len(raw) > operationsMaxBytes || !bounded.Truncated || bounded.Token != impact.Token || bounded.AddedNodeCount != 1 || bounded.UpdatedRoleCount != 1 || bounded.AddedGroupCount != 1 || bounded.UpdatedGroupCount != 1 || bounded.RemovedGroupCount != 1 || bounded.MovedNodeCount != 1 || bounded.DependencyCutCount != 1 || bounded.ImpactDigest == "" || len(bounded.AddedNodes) != 0 || len(bounded.AddedGroups) != 0 {
 		t.Fatalf("Graph impact was not bounded without losing admission authority: bytes=%d value=%#v", len(raw), bounded)
 	}
 }

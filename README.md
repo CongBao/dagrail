@@ -25,7 +25,8 @@ closure, and recovery.
 
 ## How it works
 
-- A typed graph declares Nodes, Roles, positive edge predicates, resources, and outcomes.
+- A typed graph declares Nodes, Roles, positive edge predicates, resources, outcomes,
+  and optional hierarchical groups for a clear project-level DAG.
 - An immutable hash-chained journal is runtime authority; SQLite is only a rebuildable
   local projection.
 - CLI and six MCP tools return bounded context and signed allowed actions, so an agent
@@ -118,7 +119,7 @@ dagrail action apply --root . --ref CHECKPOINT_ACTION_REF \
 | `dagrail artifact verify-git-closure` | Verify retained Git commits, trees, tags, and refs |
 | `dagrail journal verify` | Verify the immutable journal chain |
 | `dagrail projection rebuild` | Rebuild disposable SQLite state from the journal |
-| `dagrail ui` | Open the loopback-only, read-only DAG Explorer |
+| `dagrail ui` | Open the grouped project DAG or full execution-detail Explorer |
 
 Run `dagrail commands` for the complete machine-readable command catalog.
 

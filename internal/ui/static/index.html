@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Read-only local DAGrail governance explorer">
   <title>DAGrail · Read-only DAG Explorer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b1b2e'/%3E%3Cpath d='M16 18h14c12 0 20 7 20 14s-8 14-20 14H16zm10 8v12h5c6 0 10-2 10-6s-4-6-10-6z' fill='%2361adff'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
@@ -26,10 +27,11 @@
     <div class="explorer-shell">
       <aside class="sidebar" aria-label="Explorer controls">
         <nav class="view-nav" aria-label="Explorer views">
-          <button type="button" data-view="topology"><span>Topology</span><kbd>1</kbd></button>
-          <button type="button" data-view="nodes"><span>Nodes</span><kbd>2</kbd></button>
-          <button type="button" data-view="timeline"><span>Timeline</span><kbd>3</kbd></button>
-          <button type="button" data-view="operations"><span>Operations</span><kbd>4</kbd></button>
+          <button type="button" data-view="summary"><span>Project DAG</span><kbd>1</kbd></button>
+          <button type="button" data-view="detail"><span>Execution detail</span><kbd>2</kbd></button>
+          <button type="button" data-view="nodes"><span>Nodes</span><kbd>3</kbd></button>
+          <button type="button" data-view="timeline"><span>Timeline</span><kbd>4</kbd></button>
+          <button type="button" data-view="operations"><span>Operations</span><kbd>5</kbd></button>
         </nav>
 
         <form id="filters" class="filters" autocomplete="off">
@@ -53,17 +55,24 @@
       <div class="workspace">
         <section id="view-topology" class="view-panel" data-panel="topology">
           <div class="view-heading">
-            <div><span class="eyebrow">TOPOLOGY</span><h2>Execution graph</h2><p id="topology-caption" class="muted"></p></div>
+            <div><span id="topology-eyebrow" class="eyebrow">PROJECT DAG</span><h2 id="topology-title">Grouped summary</h2><p id="topology-caption" class="muted"></p><nav id="group-breadcrumb" class="breadcrumb" aria-label="Group breadcrumb"></nav></div>
             <div class="toolbar">
-              <label for="depth">Focus depth</label>
-              <select id="depth"><option value="1">1 hop</option><option value="2">2 hops</option><option value="3">3 hops</option><option value="4">4 hops</option></select>
+              <span id="detail-controls"><label for="depth">Focus depth</label>
+              <select id="depth"><option value="1">1 hop</option><option value="2">2 hops</option><option value="3">3 hops</option><option value="4">4 hops</option></select></span>
+              <button id="collapse-all" class="button" type="button">Collapse all</button>
+              <button id="expand-all" class="button" type="button">Expand all</button>
+              <button id="fit-view" class="button" type="button">Fit view</button>
+              <button id="center-selected" class="button" type="button">Center selected</button>
               <button id="zoom-out" class="icon-button" type="button" aria-label="Zoom out">−</button>
               <button id="zoom-reset" class="icon-button" type="button" aria-label="Reset zoom">100%</button>
               <button id="zoom-in" class="icon-button" type="button" aria-label="Zoom in">+</button>
             </div>
           </div>
           <div id="legend" class="legend" aria-label="Node status legend"></div>
-          <div id="graph-scroll" class="graph-scroll" tabindex="0"><svg id="graph" role="img" aria-label="DAG topology"></svg></div>
+          <div id="graph-scroll" class="graph-scroll" tabindex="0">
+            <svg id="graph" role="img" aria-label="DAG topology"></svg>
+            <svg id="minimap" class="minimap" role="img" aria-label="Topology minimap"></svg>
+          </div>
         </section>
 
         <section id="view-nodes" class="view-panel" data-panel="nodes" hidden>
@@ -87,7 +96,7 @@
   </main>
 
   <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
-  <aside id="node-drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-hidden="true" tabindex="-1">
+  <aside id="node-drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-hidden="true" tabindex="-1" inert>
     <div class="drawer-header"><div><span class="eyebrow">NODE INSPECTOR</span><h2 id="drawer-title">Node</h2></div><button id="drawer-close" class="icon-button" type="button" aria-label="Close node inspector">×</button></div>
     <div id="drawer-content" class="drawer-content"></div>
   </aside>

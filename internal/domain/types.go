@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -23,6 +24,11 @@ const (
 	MaxAuthorityValues      = 1_000_000
 	MaxAuthorityStringBytes = 1 << 20
 	MaxAuthorityKeyBytes    = 1024
+	MaxGraphGroups          = 256
+	MaxGroupIDRunes         = 64
+	MaxGroupTitleRunes      = 256
+	MaxGroupDepth           = 8
+	MaxGroupedRefRunes      = 256
 )
 
 type GraphDefinition struct {
@@ -40,10 +46,20 @@ type GraphMetadata struct {
 
 type GraphSpec struct {
 	Roles              []RoleDefinition   `json:"roles" yaml:"roles"`
+	Groups             []GroupDefinition  `json:"groups,omitempty" yaml:"groups,omitempty"`
 	Nodes              []NodeDefinition   `json:"nodes" yaml:"nodes"`
 	Edges              []EdgeDefinition   `json:"edges,omitempty" yaml:"edges,omitempty"`
 	ResourceCapacities []ResourceCapacity `json:"resourceCapacities,omitempty" yaml:"resourceCapacities,omitempty"`
 	Providers          []ProviderRef      `json:"providers,omitempty" yaml:"providers,omitempty"`
+}
+
+type GroupDefinition struct {
+	ID                 string `json:"id" yaml:"id"`
+	Title              string `json:"title" yaml:"title"`
+	Kind               string `json:"kind" yaml:"kind"`
+	ParentGroupID      string `json:"parentGroupId,omitempty" yaml:"parentGroupId,omitempty"`
+	SummaryNodeID      string `json:"summaryNodeId,omitempty" yaml:"summaryNodeId,omitempty"`
+	CollapsedByDefault bool   `json:"collapsedByDefault,omitempty" yaml:"collapsedByDefault,omitempty"`
 }
 
 type ResourceCapacity struct {
@@ -90,6 +106,7 @@ type NodeDefinition struct {
 	Title        string            `json:"title" yaml:"title"`
 	Objective    string            `json:"objective,omitempty" yaml:"objective,omitempty"`
 	Parent       string            `json:"parent,omitempty" yaml:"parent,omitempty"`
+	GroupID      string            `json:"groupId,omitempty" yaml:"groupId,omitempty"`
 	Supersedes   string            `json:"supersedes,omitempty" yaml:"supersedes,omitempty"`
 	Inputs       json.RawMessage   `json:"inputs,omitempty" yaml:"-"`
 	Outcomes     []Outcome         `json:"outcomes" yaml:"outcomes"`
@@ -146,6 +163,11 @@ var builtinKinds = map[string]bool{
 	"effect": true, "join": true, "milestone": true,
 }
 
+var builtinGroupKinds = map[string]bool{
+	"work-unit": true, "milestone": true, "gate": true,
+	"external": true, "governance": true, "custom": true,
+}
+
 func IsBuiltinNodeKind(kind string) bool { return builtinKinds[kind] }
 
 func ValidateGraph(g GraphDefinition) error {
@@ -191,6 +213,58 @@ func ValidateGraph(g GraphDefinition) error {
 		}
 		providerIDs[provider.ID] = true
 	}
+	groups := map[string]GroupDefinition{}
+	groupParents := map[string]string{}
+	if len(g.Spec.Groups) > MaxGraphGroups {
+		return fmt.Errorf("graph groups exceed %d", MaxGraphGroups)
+	}
+	for _, group := range g.Spec.Groups {
+		if group.ID == "" || groups[group.ID].ID != "" {
+			return fmt.Errorf("group IDs must be non-empty and unique: %q", group.ID)
+		}
+		if utf8.RuneCountInString(group.ID) > MaxGroupIDRunes {
+			return fmt.Errorf("group ID exceeds %d characters: %q", MaxGroupIDRunes, group.ID)
+		}
+		if strings.TrimSpace(group.Title) == "" {
+			return fmt.Errorf("group %s title is required", group.ID)
+		}
+		if utf8.RuneCountInString(group.Title) > MaxGroupTitleRunes {
+			return fmt.Errorf("group %s title exceeds %d characters", group.ID, MaxGroupTitleRunes)
+		}
+		if utf8.RuneCountInString(group.SummaryNodeID) > MaxGroupedRefRunes {
+			return fmt.Errorf("group %s summary node reference exceeds %d characters", group.ID, MaxGroupedRefRunes)
+		}
+		if !builtinGroupKinds[group.Kind] {
+			return fmt.Errorf("group %s has invalid kind %q", group.ID, group.Kind)
+		}
+		groups[group.ID] = group
+	}
+	for _, group := range g.Spec.Groups {
+		if group.ParentGroupID == "" {
+			continue
+		}
+		if group.ParentGroupID == group.ID || groups[group.ParentGroupID].ID == "" {
+			return fmt.Errorf("group %s has invalid parent group %s", group.ID, group.ParentGroupID)
+		}
+		groupParents[group.ID] = group.ParentGroupID
+	}
+	for groupID := range groups {
+		seen := map[string]bool{}
+		for current := groupID; current != ""; current = groupParents[current] {
+			if seen[current] {
+				return fmt.Errorf("group hierarchy contains a cycle at %s", current)
+			}
+			seen[current] = true
+			if len(seen) > MaxGroupDepth {
+				return fmt.Errorf("group %s exceeds maximum hierarchy depth %d", groupID, MaxGroupDepth)
+			}
+		}
+	}
+	if len(groups) > 0 {
+		if err := validateGroupedGraphFields(g); err != nil {
+			return err
+		}
+	}
 	nodes := map[string]NodeDefinition{}
 	for _, node := range g.Spec.Nodes {
 		if node.ID == "" || nodes[node.ID].ID != "" {
@@ -201,6 +275,9 @@ func ValidateGraph(g GraphDefinition) error {
 		}
 		if node.Role != "" && !roles[node.Role] {
 			return fmt.Errorf("node %s references unknown role %s", node.ID, node.Role)
+		}
+		if node.GroupID != "" && groups[node.GroupID].ID == "" {
+			return fmt.Errorf("node %s references unknown group %s", node.ID, node.GroupID)
 		}
 		if (node.Kind == "task" || node.Kind == "review" || node.Kind == "decision" || node.Kind == "gate" || node.Kind == "effect") && node.Role == "" {
 			return fmt.Errorf("node %s kind %s requires a role", node.ID, node.Kind)
@@ -279,6 +356,25 @@ func ValidateGraph(g GraphDefinition) error {
 		}
 		nodes[node.ID] = node
 	}
+	for _, group := range g.Spec.Groups {
+		if group.SummaryNodeID == "" {
+			continue
+		}
+		summary, ok := nodes[group.SummaryNodeID]
+		if !ok {
+			return fmt.Errorf("group %s references unknown summary node %s", group.ID, group.SummaryNodeID)
+		}
+		inside := false
+		for current := summary.GroupID; current != ""; current = groupParents[current] {
+			if current == group.ID {
+				inside = true
+				break
+			}
+		}
+		if !inside {
+			return fmt.Errorf("group %s summary node %s is outside its group subtree", group.ID, group.SummaryNodeID)
+		}
+	}
 	parents := map[string]string{}
 	superseded := map[string]string{}
 	for _, node := range g.Spec.Nodes {
@@ -349,6 +445,86 @@ func ValidateGraph(g GraphDefinition) error {
 	for _, degree := range indegree {
 		if degree != 0 {
 			return fmt.Errorf("graph contains a cycle")
+		}
+	}
+	return nil
+}
+
+func validateGroupedGraphFields(graph GraphDefinition) error {
+	bounded := func(label, value string, maximum int) error {
+		if utf8.RuneCountInString(value) > maximum {
+			return fmt.Errorf("grouped graph %s exceeds %d characters", label, maximum)
+		}
+		return nil
+	}
+	for _, role := range graph.Spec.Roles {
+		if err := bounded("role ID", role.ID, MaxGroupedRefRunes); err != nil {
+			return err
+		}
+	}
+	for _, node := range graph.Spec.Nodes {
+		for label, value := range map[string]string{"node ID": node.ID, "node kind": node.Kind, "node role": node.Role, "node parent": node.Parent, "node supersedes": node.Supersedes} {
+			if err := bounded(label, value, MaxGroupedRefRunes); err != nil {
+				return err
+			}
+		}
+		if err := bounded("node title", node.Title, 1024); err != nil {
+			return err
+		}
+		if err := bounded("node objective", node.Objective, 4096); err != nil {
+			return err
+		}
+		for _, outcome := range node.Outcomes {
+			if err := bounded("outcome ID", outcome.ID, MaxGroupedRefRunes); err != nil {
+				return err
+			}
+		}
+		for _, resource := range node.Resources {
+			if err := bounded("resource kind", resource.Kind, MaxGroupedRefRunes); err != nil {
+				return err
+			}
+		}
+		if node.Decision != nil {
+			for label, value := range map[string]string{"decision key": node.Decision.Key, "decision provider ID": node.Decision.ProviderID, "decision policy ID": node.Decision.PolicyID} {
+				if err := bounded(label, value, MaxGroupedRefRunes); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	for _, edge := range graph.Spec.Edges {
+		for label, value := range map[string]string{"edge ID": edge.ID, "edge source": edge.From, "edge target": edge.To} {
+			if err := bounded(label, value, MaxGroupedRefRunes); err != nil {
+				return err
+			}
+		}
+		if err := validateGroupedPredicateFields(edge.When, bounded); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateGroupedPredicateFields(predicate Predicate, bounded func(string, string, int) error) error {
+	if err := bounded("predicate outcome", predicate.Outcome, MaxGroupedRefRunes); err != nil {
+		return err
+	}
+	for _, match := range []*ValueMatch{predicate.Decision, predicate.Evidence, predicate.Policy} {
+		if match == nil {
+			continue
+		}
+		if err := bounded("predicate key", match.Key, MaxGroupedRefRunes); err != nil {
+			return err
+		}
+		if err := bounded("predicate value", match.Value, MaxGroupedRefRunes); err != nil {
+			return err
+		}
+	}
+	for _, children := range [][]Predicate{predicate.All, predicate.Any} {
+		for _, child := range children {
+			if err := validateGroupedPredicateFields(child, bounded); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

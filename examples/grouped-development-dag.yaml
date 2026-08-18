@@ -1,0 +1,88 @@
+apiVersion: dagrail.io/v1alpha1
+kind: Graph
+metadata:
+  name: Grouped development
+spec:
+  roles:
+    - id: developer
+      capabilities: [node.run]
+    - id: reviewer
+      capabilities: [node.run, node.review]
+  groups:
+    - id: delivery
+      title: Delivery
+      kind: custom
+    - id: build
+      title: Build feature
+      kind: work-unit
+      parentGroupId: delivery
+      summaryNodeId: build-complete
+      collapsedByDefault: true
+    - id: release
+      title: Release feature
+      kind: work-unit
+      parentGroupId: delivery
+      summaryNodeId: release-complete
+      collapsedByDefault: true
+  nodes:
+    - id: implement
+      kind: task
+      role: developer
+      title: Implement feature
+      groupId: build
+      outcomes:
+        - id: submitted
+          class: success
+    - id: review
+      kind: review
+      role: reviewer
+      title: Review feature
+      groupId: build
+      outcomes:
+        - id: approved
+          class: success
+        - id: returned
+          class: retryable
+    - id: build-complete
+      kind: milestone
+      title: Build complete
+      groupId: build
+      outcomes:
+        - id: completed
+          class: success
+    - id: publish
+      kind: task
+      role: developer
+      title: Publish release
+      groupId: release
+      outcomes:
+        - id: published
+          class: success
+    - id: release-complete
+      kind: milestone
+      title: Release complete
+      groupId: release
+      outcomes:
+        - id: completed
+          class: success
+  edges:
+    - id: implement-review
+      from: implement
+      to: review
+      when:
+        outcome: submitted
+    - id: review-build
+      from: review
+      to: build-complete
+      when:
+        outcome: approved
+    - id: build-publish
+      from: build-complete
+      to: publish
+      when:
+        outcome: completed
+    - id: publish-release
+      from: publish
+      to: release-complete
+      when:
+        outcome: published

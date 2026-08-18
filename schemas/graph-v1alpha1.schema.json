@@ -23,6 +23,7 @@
       "required": ["roles", "nodes"],
       "properties": {
         "roles": {"type": "array", "items": {"$ref": "#/$defs/role"}},
+        "groups": {"type": "array", "maxItems": 256, "items": {"$ref": "#/$defs/group"}},
         "nodes": {"type": "array", "items": {"$ref": "#/$defs/node"}},
         "edges": {"type": "array", "items": {"$ref": "#/$defs/edge"}},
         "resourceCapacities": {"type": "array", "items": {"$ref": "#/$defs/resourceCapacity"}},
@@ -30,7 +31,54 @@
       }
     }
   },
+  "allOf": [{
+    "if": {"properties": {"spec": {"required": ["groups"], "properties": {"groups": {"minItems": 1}}}}},
+    "then": {"properties": {"spec": {"properties": {
+      "roles": {"items": {"$ref": "#/$defs/groupedRoleFields"}},
+      "nodes": {"items": {"$ref": "#/$defs/groupedNodeFields"}},
+      "edges": {"items": {"$ref": "#/$defs/groupedEdgeFields"}}
+    }}}}
+  }],
   "$defs": {
+    "groupedRoleFields": {
+      "type": "object", "properties": {"id": {"type": "string", "maxLength": 256}}
+    },
+    "groupedNodeFields": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string", "maxLength": 256}, "kind": {"type": "string", "maxLength": 256},
+        "role": {"type": "string", "maxLength": 256}, "title": {"type": "string", "maxLength": 1024},
+        "objective": {"type": "string", "maxLength": 4096}, "parent": {"type": "string", "maxLength": 256},
+        "supersedes": {"type": "string", "maxLength": 256},
+        "outcomes": {"items": {"type": "object", "properties": {"id": {"type": "string", "maxLength": 256}}}},
+        "resources": {"items": {"type": "object", "properties": {"kind": {"type": "string", "maxLength": 256}}}},
+        "decision": {"type": "object", "properties": {
+          "key": {"type": "string", "maxLength": 256}, "providerId": {"type": "string", "maxLength": 256},
+          "policyId": {"type": "string", "maxLength": 256}
+        }}
+      }
+    },
+    "groupedEdgeFields": {
+      "type": "object", "properties": {
+        "id": {"type": "string", "maxLength": 256}, "from": {"type": "string", "maxLength": 256},
+        "to": {"type": "string", "maxLength": 256}, "when": {"$ref": "#/$defs/groupedPredicateFields"}
+      }
+    },
+    "groupedPredicateFields": {
+      "type": "object", "properties": {
+        "outcome": {"type": "string", "maxLength": 256},
+        "decision": {"$ref": "#/$defs/groupedValueMatchFields"},
+        "evidence": {"$ref": "#/$defs/groupedValueMatchFields"},
+        "policy": {"$ref": "#/$defs/groupedValueMatchFields"},
+        "all": {"type": "array", "items": {"$ref": "#/$defs/groupedPredicateFields"}},
+        "any": {"type": "array", "items": {"$ref": "#/$defs/groupedPredicateFields"}}
+      }
+    },
+    "groupedValueMatchFields": {
+      "type": "object", "properties": {
+        "key": {"type": "string", "maxLength": 256}, "value": {"type": "string", "maxLength": 256}
+      }
+    },
     "externalRef": {
       "type": "object",
       "required": ["system", "type", "id"],
@@ -46,6 +94,19 @@
     "role": {
       "type": "object", "additionalProperties": false, "required": ["id", "capabilities"],
       "properties": {"id": {"type": "string", "minLength": 1}, "capabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}}
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "kind"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 64},
+        "title": {"type": "string", "minLength": 1, "maxLength": 256},
+        "kind": {"enum": ["work-unit", "milestone", "gate", "external", "governance", "custom"]},
+        "parentGroupId": {"type": "string", "minLength": 1, "maxLength": 64},
+        "summaryNodeId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "collapsedByDefault": {"type": "boolean"}
+      }
     },
     "outcome": {
       "type": "object", "additionalProperties": false, "required": ["id", "class"],
@@ -66,7 +127,7 @@
         "id": {"type": "string", "minLength": 1},
         "kind": {"type": "string", "minLength": 1},
         "role": {"type": "string"}, "title": {"type": "string"}, "objective": {"type": "string"},
-        "parent": {"type": "string"}, "supersedes": {"type": "string"}, "inputs": {},
+        "parent": {"type": "string"}, "groupId": {"type": "string", "minLength": 1, "maxLength": 64}, "supersedes": {"type": "string"}, "inputs": {},
         "outcomes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/outcome"}},
         "retryBudget": {"type": "integer", "minimum": 0},
         "resources": {"type": "array", "items": {"$ref": "#/$defs/resourceRequest"}},

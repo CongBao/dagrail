@@ -2,6 +2,42 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.24.0 — 2026-08-18
+
+### Added
+
+- Graph v1alpha1 now supports explicit, nested `groups` and `node.groupId` declarations;
+  GraphPatch can add, update, remove, and revision-safely move Nodes between groups;
+- the deterministic grouping projection separates lifecycle from operational health,
+  binds membership/projection digests, aggregates cross-group edges, and exposes exact
+  source edges through bounded inspect refs;
+- Explorer API v1beta2 and the default Project DAG view render collapsed groups in fixed
+  generic lanes, preserve the complete Execution Detail view, and support group-aware
+  search, breadcrumbs, minimap, fit/center, keyboard disclosure, and URL-restorable
+  expansion state.
+
+### Changed
+
+- the summary render cap applies only to expanded internal Nodes; every top-level group
+  remains visible on graphs with more than 1,000 internal Nodes;
+- grouping authority is always explicit GraphRevision data. DAGrail ships no
+  project-specific metadata key or naming heuristic; integrations may propose normal
+  two-phase GraphPatch operations instead.
+
+### Fixed
+
+- group identifiers round-trip as repeated opaque query values instead of a comma-split
+  text protocol;
+- expand/collapse-all uses a compact URL state at the 256-group limit, while individual
+  group exceptions remain opaque and restorable;
+- dense aggregate-edge indexes are returned through a bounded, projection-bound cursor
+  ref, so a valid grouped DAG cannot lose its entire summary to the Explorer byte cap;
+- Graphs without declared groups continue to open directly in Execution Detail;
+- group declarations have closed count, depth, and field-size limits shared by runtime
+  validation and published schemas;
+- summary, detail, and aggregate-edge inspection remain byte-nonmutating across the
+  protected project/runtime tree.
+
 ## 0.23.1 — 2026-08-18
 
 ### Fixed

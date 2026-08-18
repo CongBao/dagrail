@@ -170,6 +170,96 @@ func TestGraphRejectsHierarchyCycleAndFloatingAuthorityNumber(t *testing.T) {
 	}
 }
 
+func TestGraphValidatesHierarchicalGroupsAndSummaryMembership(t *testing.T) {
+	graph := GraphDefinition{
+		APIVersion: GraphAPIVersion,
+		Kind:       GraphKind,
+		Metadata:   GraphMetadata{Name: "grouped"},
+		Spec: GraphSpec{
+			Groups: []GroupDefinition{
+				{ID: "phase", Title: "Phase", Kind: "custom"},
+				{ID: "work", Title: "Work", Kind: "work-unit", ParentGroupID: "phase", SummaryNodeID: "aggregate", CollapsedByDefault: true},
+			},
+			Nodes: []NodeDefinition{
+				{ID: "task", Kind: "join", Title: "Task", GroupID: "work", Outcomes: []Outcome{{ID: "done", Class: "success"}}},
+				{ID: "aggregate", Kind: "milestone", Title: "Aggregate", GroupID: "work", Outcomes: []Outcome{{ID: "complete", Class: "success"}}},
+				{ID: "outside", Kind: "milestone", Title: "Outside", Outcomes: []Outcome{{ID: "complete", Class: "success"}}},
+			},
+		},
+	}
+	if err := ValidateGraph(graph); err != nil {
+		t.Fatalf("valid hierarchical groups were rejected: %v", err)
+	}
+
+	t.Run("group cycle", func(t *testing.T) {
+		invalid := graph
+		invalid.Spec.Groups = append([]GroupDefinition{}, graph.Spec.Groups...)
+		invalid.Spec.Groups[0].ParentGroupID = "work"
+		if err := ValidateGraph(invalid); err == nil || !strings.Contains(err.Error(), "group hierarchy contains a cycle") {
+			t.Fatalf("group cycle was accepted: %v", err)
+		}
+	})
+
+	t.Run("unknown membership", func(t *testing.T) {
+		invalid := graph
+		invalid.Spec.Nodes = append([]NodeDefinition{}, graph.Spec.Nodes...)
+		invalid.Spec.Nodes[0].GroupID = "missing"
+		if err := ValidateGraph(invalid); err == nil || !strings.Contains(err.Error(), "unknown group") {
+			t.Fatalf("unknown group membership was accepted: %v", err)
+		}
+	})
+
+	t.Run("summary outside subtree", func(t *testing.T) {
+		invalid := graph
+		invalid.Spec.Groups = append([]GroupDefinition{}, graph.Spec.Groups...)
+		invalid.Spec.Groups[0].SummaryNodeID = "outside"
+		if err := ValidateGraph(invalid); err == nil || !strings.Contains(err.Error(), "summary node") {
+			t.Fatalf("summary node outside the group subtree was accepted: %v", err)
+		}
+	})
+
+	t.Run("group fields are bounded for explorer recovery", func(t *testing.T) {
+		invalid := graph
+		invalid.Spec.Groups = append([]GroupDefinition{}, graph.Spec.Groups...)
+		invalid.Spec.Groups[0].ID = strings.Repeat("g", MaxGroupIDRunes+1)
+		if err := ValidateGraph(invalid); err == nil || !strings.Contains(err.Error(), "group ID exceeds") {
+			t.Fatalf("oversized group ID was accepted: %v", err)
+		}
+	})
+
+	t.Run("group hierarchy depth is bounded", func(t *testing.T) {
+		invalid := graph
+		invalid.Spec.Groups = nil
+		invalid.Spec.Nodes = nil
+		parent := ""
+		for index := 0; index <= MaxGroupDepth; index++ {
+			id := fmt.Sprintf("level-%d", index)
+			invalid.Spec.Groups = append(invalid.Spec.Groups, GroupDefinition{ID: id, Title: id, Kind: "custom", ParentGroupID: parent})
+			parent = id
+		}
+		if err := ValidateGraph(invalid); err == nil || !strings.Contains(err.Error(), "maximum hierarchy depth") {
+			t.Fatalf("oversized group depth was accepted: %v", err)
+		}
+	})
+
+	t.Run("grouped view fields are bounded without narrowing legacy graphs", func(t *testing.T) {
+		oversized := strings.Repeat("n", MaxGroupedRefRunes+1)
+		invalid := graph
+		invalid.Spec.Nodes = append([]NodeDefinition{}, graph.Spec.Nodes...)
+		invalid.Spec.Nodes[0].ID = oversized
+		if err := ValidateGraph(invalid); err == nil || !strings.Contains(err.Error(), "grouped graph node ID exceeds") {
+			t.Fatalf("oversized grouped Node ID was accepted: %v", err)
+		}
+		legacy := invalid
+		legacy.Spec.Groups = nil
+		legacy.Spec.Nodes[0].GroupID = ""
+		legacy.Spec.Nodes[1].GroupID = ""
+		if err := ValidateGraph(legacy); err != nil {
+			t.Fatalf("group-only view bound narrowed a legacy Graph: %v", err)
+		}
+	})
+}
+
 func TestSensitiveMaterialIsRejectedEvenUnderInnocuousFieldNames(t *testing.T) {
 	cases := []json.RawMessage{
 		json.RawMessage(`{"endpoint":"https://user:password@example.com/path"}`),

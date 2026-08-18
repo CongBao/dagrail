@@ -25,13 +25,15 @@ type GraphPatch struct {
 }
 
 type PatchOperation struct {
-	Op     string                 `json:"op" yaml:"op"`
-	NodeID string                 `json:"nodeId,omitempty" yaml:"nodeId,omitempty"`
-	EdgeID string                 `json:"edgeId,omitempty" yaml:"edgeId,omitempty"`
-	RoleID string                 `json:"roleId,omitempty" yaml:"roleId,omitempty"`
-	Node   *domain.NodeDefinition `json:"node,omitempty" yaml:"node,omitempty"`
-	Edge   *domain.EdgeDefinition `json:"edge,omitempty" yaml:"edge,omitempty"`
-	Role   *domain.RoleDefinition `json:"role,omitempty" yaml:"role,omitempty"`
+	Op      string                  `json:"op" yaml:"op"`
+	NodeID  string                  `json:"nodeId,omitempty" yaml:"nodeId,omitempty"`
+	EdgeID  string                  `json:"edgeId,omitempty" yaml:"edgeId,omitempty"`
+	RoleID  string                  `json:"roleId,omitempty" yaml:"roleId,omitempty"`
+	GroupID string                  `json:"groupId,omitempty" yaml:"groupId,omitempty"`
+	Node    *domain.NodeDefinition  `json:"node,omitempty" yaml:"node,omitempty"`
+	Edge    *domain.EdgeDefinition  `json:"edge,omitempty" yaml:"edge,omitempty"`
+	Role    *domain.RoleDefinition  `json:"role,omitempty" yaml:"role,omitempty"`
+	Group   *domain.GroupDefinition `json:"group,omitempty" yaml:"group,omitempty"`
 }
 
 type GraphImpact struct {
@@ -45,6 +47,10 @@ type GraphImpact struct {
 	AddedRoles         []string `json:"addedRoles,omitempty"`
 	UpdatedRoles       []string `json:"updatedRoles,omitempty"`
 	RemovedRoles       []string `json:"removedRoles,omitempty"`
+	AddedGroups        []string `json:"addedGroups,omitempty"`
+	UpdatedGroups      []string `json:"updatedGroups,omitempty"`
+	RemovedGroups      []string `json:"removedGroups,omitempty"`
+	MovedNodes         []string `json:"movedNodes,omitempty"`
 	DependencyCut      []string `json:"dependencyCut,omitempty"`
 	Token              string   `json:"token,omitempty"`
 	ExpiresAt          string   `json:"expiresAt"`
@@ -56,6 +62,10 @@ type GraphImpact struct {
 	AddedRoleCount     int      `json:"addedRoleCount,omitempty"`
 	UpdatedRoleCount   int      `json:"updatedRoleCount,omitempty"`
 	RemovedRoleCount   int      `json:"removedRoleCount,omitempty"`
+	AddedGroupCount    int      `json:"addedGroupCount,omitempty"`
+	UpdatedGroupCount  int      `json:"updatedGroupCount,omitempty"`
+	RemovedGroupCount  int      `json:"removedGroupCount,omitempty"`
+	MovedNodeCount     int      `json:"movedNodeCount,omitempty"`
 	DependencyCutCount int      `json:"dependencyCutCount,omitempty"`
 	ImpactDigest       string   `json:"impactDigest,omitempty"`
 	Truncated          bool     `json:"truncated,omitempty"`
@@ -288,6 +298,57 @@ func applyGraphPatch(state domain.State, patch GraphPatch) (domain.GraphDefiniti
 	changedRoots := map[string]bool{}
 	for _, operation := range patch.Operations {
 		switch operation.Op {
+		case "addGroup":
+			if operation.Group == nil || operation.Group.ID == "" {
+				return graph, impact, nil, fmt.Errorf("addGroup requires group")
+			}
+			if _, ok := findGroup(graph, operation.Group.ID); ok {
+				return graph, impact, nil, fmt.Errorf("group %s already exists", operation.Group.ID)
+			}
+			graph.Spec.Groups = append(graph.Spec.Groups, *operation.Group)
+			impact.AddedGroups = append(impact.AddedGroups, operation.Group.ID)
+		case "updateGroup":
+			if operation.Group == nil || operation.Group.ID == "" {
+				return graph, impact, nil, fmt.Errorf("updateGroup requires group")
+			}
+			index, ok := findGroup(graph, operation.Group.ID)
+			if !ok {
+				return graph, impact, nil, fmt.Errorf("unknown group %s", operation.Group.ID)
+			}
+			graph.Spec.Groups[index] = *operation.Group
+			impact.UpdatedGroups = append(impact.UpdatedGroups, operation.Group.ID)
+		case "removeGroup":
+			index, ok := findGroup(graph, operation.GroupID)
+			if !ok {
+				return graph, impact, nil, fmt.Errorf("unknown group %s", operation.GroupID)
+			}
+			for _, group := range graph.Spec.Groups {
+				if group.ParentGroupID == operation.GroupID {
+					return graph, impact, nil, fmt.Errorf("group %s is still the parent of group %s", operation.GroupID, group.ID)
+				}
+			}
+			for _, node := range graph.Spec.Nodes {
+				if node.GroupID == operation.GroupID {
+					return graph, impact, nil, fmt.Errorf("group %s is still referenced by node %s", operation.GroupID, node.ID)
+				}
+			}
+			graph.Spec.Groups = append(graph.Spec.Groups[:index], graph.Spec.Groups[index+1:]...)
+			impact.RemovedGroups = append(impact.RemovedGroups, operation.GroupID)
+		case "moveNodeToGroup":
+			index, ok := findNode(graph, operation.NodeID)
+			if !ok {
+				return graph, impact, nil, fmt.Errorf("unknown node %s", operation.NodeID)
+			}
+			if operation.GroupID != "" {
+				if _, ok := findGroup(graph, operation.GroupID); !ok {
+					return graph, impact, nil, fmt.Errorf("unknown group %s", operation.GroupID)
+				}
+			}
+			if graph.Spec.Nodes[index].GroupID == operation.GroupID {
+				return graph, impact, nil, fmt.Errorf("node %s already has the requested group membership", operation.NodeID)
+			}
+			graph.Spec.Nodes[index].GroupID = operation.GroupID
+			impact.MovedNodes = append(impact.MovedNodes, operation.NodeID)
 		case "addRole":
 			if operation.Role == nil || operation.Role.ID == "" {
 				return graph, impact, nil, fmt.Errorf("addRole requires role")
@@ -419,10 +480,19 @@ func applyGraphPatch(state domain.State, patch GraphPatch) (domain.GraphDefiniti
 		return graph, impact, nil, err
 	}
 	impact.DependencyCut = dependencyCut(graph, changedRoots)
-	for _, values := range [][]string{impact.AddedNodes, impact.UpdatedNodes, impact.RemovedNodes, impact.AddedEdges, impact.RemovedEdges, impact.AddedRoles, impact.UpdatedRoles, impact.RemovedRoles, impact.DependencyCut} {
+	for _, values := range [][]string{impact.AddedNodes, impact.UpdatedNodes, impact.RemovedNodes, impact.AddedEdges, impact.RemovedEdges, impact.AddedRoles, impact.UpdatedRoles, impact.RemovedRoles, impact.AddedGroups, impact.UpdatedGroups, impact.RemovedGroups, impact.MovedNodes, impact.DependencyCut} {
 		sort.Strings(values)
 	}
 	return graph, impact, superseded, nil
+}
+
+func findGroup(graph domain.GraphDefinition, id string) (int, bool) {
+	for index, group := range graph.Spec.Groups {
+		if group.ID == id {
+			return index, true
+		}
+	}
+	return 0, false
 }
 
 func findNode(graph domain.GraphDefinition, id string) (int, bool) {

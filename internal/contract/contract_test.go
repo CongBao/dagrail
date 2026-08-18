@@ -26,10 +26,10 @@ func TestBetaContractIsDeterministicAndNamesExactlySixMCPTools(t *testing.T) {
 	if !reflect.DeepEqual(firstRaw, secondRaw) {
 		t.Fatal("compatibility contract is not deterministic")
 	}
-	if first.APIVersion != "dagrail.io/v1beta1" || first.Kind != "CompatibilityContract" || first.UI.APIVersion != "dagrail.io/ui/v1beta1" || len(first.MCP) != 6 {
+	if first.APIVersion != "dagrail.io/v1beta1" || first.Kind != "CompatibilityContract" || first.UI.APIVersion != "dagrail.io/ui/v1beta2" || first.GraphPatch.APIVersion != "dagrail.io/v1alpha1" || len(first.MCP) != 6 {
 		t.Fatalf("unexpected beta contract: %#v", first)
 	}
-	for name, surface := range map[string]DocumentedSurface{"command catalog": first.CommandCatalog, "CLI error": first.CLIError, "decision record": first.DecisionRecord, "installation diagnostic": first.Installation, "historical binary matrix": first.HistoricalMatrix, "readiness decision": first.Readiness, "ui": first.UI, "security": first.Security, "journal verification": first.JournalVerification, "plugin conformance": first.PluginConformance, "support": first.Support, "recovery": first.Recovery, "authority adoption": first.AuthorityAdoption, "authority rotation": first.AuthorityRotation, "authority relocation": first.AuthorityRelocation, "git artifact closure": first.GitArtifactClosure, "git integration scope": first.GitIntegrationScope, "release qualification": first.ReleaseQualification, "release manifest": first.ReleaseManifest, "release verification": first.ReleaseVerification, "lifecycle migration v1alpha1": first.LifecycleMigrationV1Alpha1, "lifecycle migration v1beta1": first.LifecycleMigration, "lifecycle projection": first.LifecycleProjection} {
+	for name, surface := range map[string]DocumentedSurface{"graph patch": first.GraphPatch, "command catalog": first.CommandCatalog, "CLI error": first.CLIError, "decision record": first.DecisionRecord, "installation diagnostic": first.Installation, "historical binary matrix": first.HistoricalMatrix, "readiness decision": first.Readiness, "ui": first.UI, "security": first.Security, "journal verification": first.JournalVerification, "plugin conformance": first.PluginConformance, "support": first.Support, "recovery": first.Recovery, "authority adoption": first.AuthorityAdoption, "authority rotation": first.AuthorityRotation, "authority relocation": first.AuthorityRelocation, "git artifact closure": first.GitArtifactClosure, "git integration scope": first.GitIntegrationScope, "release qualification": first.ReleaseQualification, "release manifest": first.ReleaseManifest, "release verification": first.ReleaseVerification, "lifecycle migration v1alpha1": first.LifecycleMigrationV1Alpha1, "lifecycle migration v1beta1": first.LifecycleMigration, "lifecycle projection": first.LifecycleProjection} {
 		schemaRaw, err := os.ReadFile("../../" + surface.SchemaPath)
 		if err != nil {
 			t.Fatal(err)
@@ -47,7 +47,7 @@ func TestBetaContractIsDeterministicAndNamesExactlySixMCPTools(t *testing.T) {
 	if got := "sha256:" + fmt.Sprintf("%x", graphDigest); got != first.Graph.SchemaSHA256 {
 		t.Fatalf("graph schema digest drift: contract=%s file=%s", first.Graph.SchemaSHA256, got)
 	}
-	wantCapabilities := []string{"dynamic-graph", "historical-lifecycle-import", "lifecycle-projection", "positive-predicate-ast", "resource-capacities", "resource-requests", "role-leases"}
+	wantCapabilities := []string{"dynamic-graph", "hierarchical-subgraphs", "historical-lifecycle-import", "lifecycle-projection", "positive-predicate-ast", "resource-capacities", "resource-requests", "role-leases"}
 	if !reflect.DeepEqual(first.Graph.Capabilities, wantCapabilities) {
 		t.Fatalf("graph capabilities are not closed and deterministic: %v", first.Graph.Capabilities)
 	}
@@ -87,6 +87,78 @@ func TestBetaContractMatchesItsPublishedSchema(t *testing.T) {
 	}
 	if err := schema.Validate(instance); err != nil {
 		t.Fatalf("contract does not match published schema: %v", err)
+	}
+}
+
+func TestPublishedGraphContractsAcceptHierarchicalGroupsAndClosedMoves(t *testing.T) {
+	instances := []struct {
+		path string
+		raw  string
+	}{
+		{
+			path: "../../schemas/graph-v1alpha1.schema.json",
+			raw:  `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"grouped"},"spec":{"roles":[],"groups":[{"id":"phase","title":"Phase","kind":"custom"},{"id":"work","title":"Work","kind":"work-unit","parentGroupId":"phase","summaryNodeId":"done","collapsedByDefault":true}],"nodes":[{"id":"done","kind":"milestone","title":"Done","groupId":"work","outcomes":[{"id":"reached","class":"success"}]}],"edges":[]}}`,
+		},
+		{
+			path: "../../schemas/graph-patch-v1alpha1.schema.json",
+			raw:  `{"apiVersion":"dagrail.io/v1alpha1","kind":"GraphPatch","operations":[{"op":"moveNodeToGroup","nodeId":"done","groupId":"work"}]}`,
+		},
+	}
+	for _, test := range instances {
+		schemaRaw, err := os.ReadFile(test.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var document, instance any
+		if json.Unmarshal(schemaRaw, &document) != nil || json.Unmarshal([]byte(test.raw), &instance) != nil {
+			t.Fatalf("invalid test document for %s", test.path)
+		}
+		compiler := jsonschema.NewCompiler()
+		compiler.DefaultDraft(jsonschema.Draft2020)
+		if err := compiler.AddResource(test.path, document); err != nil {
+			t.Fatal(err)
+		}
+		schema, err := compiler.Compile(test.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := schema.Validate(instance); err != nil {
+			t.Fatalf("%s rejected a supported hierarchical document: %v", test.path, err)
+		}
+	}
+
+	graphSchemaRaw, err := os.ReadFile("../../schemas/graph-v1alpha1.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var graphDocument any
+	if err := json.Unmarshal(graphSchemaRaw, &graphDocument); err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	if err := compiler.AddResource("urn:dagrail:bounded-group-graph", graphDocument); err != nil {
+		t.Fatal(err)
+	}
+	graphSchema, err := compiler.Compile("urn:dagrail:bounded-group-graph")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oversized := strings.Repeat("n", 257)
+	grouped := fmt.Sprintf(`{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"grouped"},"spec":{"roles":[],"groups":[{"id":"work","title":"Work","kind":"work-unit"}],"nodes":[{"id":%q,"kind":"milestone","title":"Done","groupId":"work","outcomes":[{"id":"done","class":"success"}]}]}}`, oversized)
+	legacy := fmt.Sprintf(`{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"legacy"},"spec":{"roles":[],"nodes":[{"id":%q,"kind":"milestone","title":"Done","outcomes":[{"id":"done","class":"success"}]}]}}`, oversized)
+	for name, test := range map[string]struct {
+		raw  string
+		want bool
+	}{"grouped oversized": {grouped, false}, "legacy oversized": {legacy, true}} {
+		var instance any
+		if err := json.Unmarshal([]byte(test.raw), &instance); err != nil {
+			t.Fatal(err)
+		}
+		err := graphSchema.Validate(instance)
+		if (err == nil) != test.want {
+			t.Fatalf("%s schema result mismatch: want valid=%v err=%v", name, test.want, err)
+		}
 	}
 }
 

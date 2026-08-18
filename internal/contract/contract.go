@@ -53,6 +53,7 @@ type Report struct {
 	Version                    string                   `json:"version"`
 	Stability                  string                   `json:"stability"`
 	Graph                      GraphSurface             `json:"graph"`
+	GraphPatch                 DocumentedSurface        `json:"graphPatch"`
 	CLI                        VersionedSurface         `json:"cli"`
 	CommandCatalog             DocumentedSurface        `json:"commandCatalog"`
 	CLIError                   DocumentedSurface        `json:"cliError"`
@@ -96,8 +97,13 @@ func Current() Report {
 			APIVersion:   "dagrail.io/v1alpha1",
 			Stability:    "additive",
 			SchemaPath:   "schemas/graph-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:33282af1ce75d9cc0ab2bf570144ff0e80ff7ec52599327851a7dd0107793c9e",
-			Capabilities: []string{"dynamic-graph", "historical-lifecycle-import", "lifecycle-projection", "positive-predicate-ast", "resource-capacities", "resource-requests", "role-leases"},
+			SchemaSHA256: "sha256:f8916758141af9be1bead54702eb03eb23add6ab3f5c452edf4e43b65a5c1f66",
+			Capabilities: []string{"dynamic-graph", "hierarchical-subgraphs", "historical-lifecycle-import", "lifecycle-projection", "positive-predicate-ast", "resource-capacities", "resource-requests", "role-leases"},
+		},
+		GraphPatch: DocumentedSurface{
+			APIVersion: "dagrail.io/v1alpha1", Stability: "additive-two-phase-change",
+			SchemaPath:   "schemas/graph-patch-v1alpha1.schema.json",
+			SchemaSHA256: "sha256:6bf72510e816b7597114418cd9ba887acc09b24fd7bef27f8880dca89396b26e",
 		},
 		CLI: VersionedSurface{APIVersion: "dagrail.io/cli/v1beta1", Stability: "additive"},
 		CommandCatalog: DocumentedSurface{
@@ -128,19 +134,19 @@ func Current() Report {
 			APIVersion:   compatibility.APIVersion,
 			Stability:    "closed-beta-window",
 			SchemaPath:   "schemas/historical-binary-matrix-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:5d31dc39f5fc44f44455ef6de3ce9cf3bf8b1ab68b1ca05bac42520cfe43daa8",
+			SchemaSHA256: "sha256:8dc7d7d5dc4479539aae02c8be3e47310162659506745e9b24d708c29f542536",
 		},
 		Readiness: DocumentedSurface{
 			APIVersion:   "dagrail.io/readiness-decision/v1alpha1",
 			Stability:    "additive-structural-decision",
 			SchemaPath:   "schemas/readiness-decision-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:59059a1f0eb86c461c8f034c7f9d88a45ed1ae2271d79e558c75141a1cc92e41",
+			SchemaSHA256: "sha256:652cf2651fda95f639be310b0ffaccb7865a150ea79bd8356d4a91695a70a9dc",
 		},
 		UI: DocumentedSurface{
-			APIVersion:   "dagrail.io/ui/v1beta1",
+			APIVersion:   "dagrail.io/ui/v1beta2",
 			Stability:    "additive-read-only",
-			SchemaPath:   "schemas/ui-api-v1beta1.schema.json",
-			SchemaSHA256: "sha256:ecebe87fa127fb18cce7df743422c9349e92129bc53c222339e02feb93fbda49",
+			SchemaPath:   "schemas/ui-api-v1beta2.schema.json",
+			SchemaSHA256: "sha256:d5a94ce72281e53ab61375037792f9f2f985191fa287a3727880ee15545ab8bc",
 		},
 		Security: DocumentedSurface{
 			APIVersion:   "dagrail.io/security/v1alpha1",
@@ -267,7 +273,7 @@ func Current() Report {
 			"command discovery and completion are generated from one bounded catalog",
 			"opt-in CLI error envelopes keep stable broad exit classes and preserve interruption",
 			"host plugin commands are output-bounded, time-bounded, and cancellation-aware",
-			"the v0.10.0 through v0.23.0 beta binaries are immutable inputs to the current upgrade and rollback matrix",
+			"the v0.10.0 through v0.23.1 beta binaries are immutable inputs to the current upgrade and rollback matrix",
 			"readiness can declare external-validation readiness but cannot infer production validation or 1.0 readiness",
 			"the loopback explorer rejects non-loopback Host values and cross-port Origin values without exposing CORS access",
 			"SQLite remains disposable and rebuildable from the verified journal",

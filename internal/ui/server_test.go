@@ -2,11 +2,13 @@ package ui_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,7 +76,7 @@ func TestReadOnlyUIExposesBoundedSnapshotAndNoWriteRoute(t *testing.T) {
 	}
 	indexBody, _ := io.ReadAll(index.Body)
 	_ = index.Body.Close()
-	if !strings.Contains(string(indexBody), "Read only") || !strings.Contains(string(indexBody), `role="dialog" aria-modal="true"`) || strings.Contains(string(indexBody), "https://") {
+	if !strings.Contains(string(indexBody), "Read only") || !strings.Contains(string(indexBody), `role="dialog" aria-modal="true"`) || !strings.Contains(string(indexBody), `data-view="summary"`) || !strings.Contains(string(indexBody), `data-view="detail"`) || !strings.Contains(string(indexBody), `aria-hidden="true" tabindex="-1" inert`) || strings.Contains(string(indexBody), "https://") {
 		t.Fatalf("unexpected UI shell: %s", indexBody)
 	}
 	assetResponse, err := http.Get(server.URL + "/assets/index.html")
@@ -93,6 +95,22 @@ func TestReadOnlyUIExposesBoundedSnapshotAndNoWriteRoute(t *testing.T) {
 	_ = stylesheet.Body.Close()
 	if stylesheet.StatusCode != http.StatusOK || !strings.Contains(string(stylesheetBody), "[hidden] { display:none !important; }") {
 		t.Fatalf("hidden UI controls are not guaranteed to collapse: %d %s", stylesheet.StatusCode, stylesheetBody)
+	}
+	script, err := http.Get(server.URL + "/assets/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scriptBody, _ := io.ReadAll(script.Body)
+	_ = script.Body.Close()
+	for _, contract := range []string{"aria-expanded", "ArrowRight", "ArrowLeft", "expanded", "collapsed", "renderBreadcrumb", "renderMinimap", "centerSelected"} {
+		if !strings.Contains(string(scriptBody), contract) {
+			t.Fatalf("UI interaction contract %q is missing", contract)
+		}
+	}
+	for _, contract := range []string{"view:'auto'", "groupState", "state.view==='auto'?'':state.view"} {
+		if !strings.Contains(string(scriptBody), contract) {
+			t.Fatalf("UI automatic legacy/detail or compact group-state contract %q is missing", contract)
+		}
 	}
 }
 
@@ -165,7 +183,7 @@ func TestExplorerAPIsAreFilteredBoundedAndPayloadFree(t *testing.T) {
 	defer server.Close()
 
 	overview := getJSON(t, server.URL+"/api/v1/overview", http.StatusOK)
-	if overview["apiVersion"] != "dagrail.io/ui/v1beta1" || overview["readOnly"] != true {
+	if overview["apiVersion"] != "dagrail.io/ui/v1beta2" || overview["readOnly"] != true {
 		t.Fatalf("unexpected overview: %#v", overview)
 	}
 	nodes := getJSON(t, server.URL+"/api/v1/nodes?q=beta&status=blocked&limit=20", http.StatusOK)
@@ -281,6 +299,314 @@ func TestExplorerLargeGraphUsesDeterministicPagesAndTopologyCaps(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > 5*time.Second*time.Duration(raceTestMultiplier) {
 		t.Fatalf("large explorer API gate exceeded 5s: %v", elapsed)
+	}
+}
+
+func TestExplorerSummaryTopologyKeepsAllGroupsBeyondInternalNodeCap(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := service.Init(root, "hierarchical explorer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := domain.GraphDefinition{
+		APIVersion: domain.GraphAPIVersion,
+		Kind:       domain.GraphKind,
+		Metadata:   domain.GraphMetadata{Name: "large grouped graph"},
+		Spec: domain.GraphSpec{
+			Roles:  []domain.RoleDefinition{{ID: "worker", Capabilities: []string{"node.run"}}},
+			Groups: []domain.GroupDefinition{},
+			Nodes:  []domain.NodeDefinition{},
+			Edges:  []domain.EdgeDefinition{},
+		},
+	}
+	for groupIndex := 0; groupIndex < 58; groupIndex++ {
+		groupID := fmt.Sprintf("group-%02d", groupIndex)
+		summaryNodeID := fmt.Sprintf("%s-node-20", groupID)
+		graph.Spec.Groups = append(graph.Spec.Groups, domain.GroupDefinition{ID: groupID, Title: fmt.Sprintf("Work unit %02d", groupIndex), Kind: "work-unit", SummaryNodeID: summaryNodeID, CollapsedByDefault: true})
+		for nodeIndex := 0; nodeIndex < 21; nodeIndex++ {
+			nodeID := fmt.Sprintf("%s-node-%02d", groupID, nodeIndex)
+			graph.Spec.Nodes = append(graph.Spec.Nodes, domain.NodeDefinition{ID: nodeID, Kind: "task", Role: "worker", Title: nodeID, GroupID: groupID, Outcomes: []domain.Outcome{{ID: "done", Class: "success"}}})
+		}
+		if groupIndex > 0 {
+			graph.Spec.Edges = append(graph.Spec.Edges, domain.EdgeDefinition{ID: fmt.Sprintf("edge-%02d", groupIndex), From: fmt.Sprintf("group-%02d-node-20", groupIndex-1), To: summaryNodeID, When: domain.Predicate{Outcome: "done"}})
+		}
+	}
+	graphRaw, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graphPath := filepath.Join(root, "grouped.json")
+	if err := os.WriteFile(graphPath, graphRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "graph", "governor"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(ui.Handler(svc))
+	defer server.Close()
+
+	var summary ui.TopologyPage
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/topology?limit=1", http.StatusOK), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.APIVersion != "dagrail.io/ui/v1beta2" || summary.Mode != "summary" || len(summary.Groups) != 58 || len(summary.Nodes) != 0 || summary.Page.Truncated {
+		t.Fatalf("summary render cap hid top-level structure: %#v", summary)
+	}
+	if summary.ProjectionDigest == "" || summary.MembershipDigest == "" {
+		t.Fatalf("summary projection provenance is missing: %#v", summary)
+	}
+	validateExplorerContract(t, summary)
+
+	var matched ui.TopologyPage
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/topology?mode=summary&q=group-19-node-07&limit=1", http.StatusOK), &matched); err != nil {
+		t.Fatal(err)
+	}
+	if len(matched.Groups) != 1 || matched.Groups[0].ID != "group-19" || matched.Groups[0].InternalMatchCount != 1 {
+		t.Fatalf("internal match lost its group context: %#v", matched.Groups)
+	}
+
+	var expanded ui.TopologyPage
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/topology?mode=summary&expanded=group-19&limit=200", http.StatusOK), &expanded); err != nil {
+		t.Fatal(err)
+	}
+	if len(expanded.Groups) != 58 || len(expanded.Nodes) != 21 || len(expanded.ExpandedGroupIDs) != 1 || expanded.ExpandedGroupIDs[0] != "group-19" {
+		t.Fatalf("single-group expansion changed unrelated groups: groups=%d nodes=%d expanded=%v", len(expanded.Groups), len(expanded.Nodes), expanded.ExpandedGroupIDs)
+	}
+	var collapsedFocus ui.TopologyPage
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/topology?mode=summary&focus=group-19&collapsed=group-19&limit=200", http.StatusOK), &collapsedFocus); err != nil {
+		t.Fatal(err)
+	}
+	if len(collapsedFocus.Nodes) != 0 || len(collapsedFocus.ExpandedGroupIDs) != 0 {
+		t.Fatalf("group focus overrode explicit collapse: nodes=%d expanded=%v", len(collapsedFocus.Nodes), collapsedFocus.ExpandedGroupIDs)
+	}
+
+	var detail ui.TopologyPage
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/topology?mode=detail&limit=200", http.StatusOK), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Mode != "detail" || len(detail.Nodes) != 200 || !detail.Page.Truncated {
+		t.Fatalf("execution detail no longer preserves the bounded flat graph: %#v", detail.Page)
+	}
+	validateExplorerContract(t, detail)
+}
+
+func TestExplorerAggregateEdgesAreBoundedAndRecoverable(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := service.Init(root, "aggregate edge explorer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := domain.GraphDefinition{
+		APIVersion: domain.GraphAPIVersion, Kind: domain.GraphKind, Metadata: domain.GraphMetadata{Name: "aggregate edges"},
+		Spec: domain.GraphSpec{
+			Groups: []domain.GroupDefinition{
+				{ID: "source-group", Title: "Source", Kind: "work-unit", SummaryNodeID: "source", CollapsedByDefault: true},
+				{ID: "target-group", Title: "Target", Kind: "work-unit", SummaryNodeID: "target", CollapsedByDefault: true},
+			},
+			Nodes: []domain.NodeDefinition{
+				{ID: "source", Kind: "milestone", Title: "Source", GroupID: "source-group", Outcomes: []domain.Outcome{{ID: "done", Class: "success"}}},
+				{ID: "target", Kind: "milestone", Title: "Target", GroupID: "target-group", Outcomes: []domain.Outcome{{ID: "done", Class: "success"}}},
+			},
+		},
+	}
+	for index := 0; index < 70; index++ {
+		graph.Spec.Edges = append(graph.Spec.Edges, domain.EdgeDefinition{ID: fmt.Sprintf("parallel-%02d", index), From: "source", To: "target", When: domain.Predicate{Outcome: "done"}})
+	}
+	raw, _ := json.Marshal(graph)
+	graphPath := filepath.Join(root, "aggregate.json")
+	if err := os.WriteFile(graphPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "graph", "governor"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(ui.Handler(svc))
+	defer server.Close()
+
+	var topology ui.TopologyPage
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/topology?mode=summary", http.StatusOK), &topology); err != nil {
+		t.Fatal(err)
+	}
+	if len(topology.AggregateEdges) != 1 || topology.AggregateEdges[0].Count != 70 || topology.AggregateEdges[0].InspectRef == "" {
+		t.Fatalf("aggregate edge summary is not bounded and recoverable: %#v", topology.AggregateEdges)
+	}
+	ref := url.QueryEscape(topology.AggregateEdges[0].InspectRef)
+	var page ui.GroupEdgePage
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/group-edges?ref="+ref+"&limit=50", http.StatusOK), &page); err != nil {
+		t.Fatal(err)
+	}
+	if page.Page.Total != 70 || len(page.EdgeIDs) != 50 || page.Page.NextCursor == nil || *page.Page.NextCursor != 50 {
+		t.Fatalf("aggregate edge detail is not recoverable: %#v", page)
+	}
+	var tail ui.GroupEdgePage
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/group-edges?ref="+ref+"&cursor=50&limit=50", http.StatusOK), &tail); err != nil {
+		t.Fatal(err)
+	}
+	if len(tail.EdgeIDs) != 20 || tail.Page.Truncated {
+		t.Fatalf("aggregate edge tail is incomplete: %#v", tail)
+	}
+	validateExplorerContract(t, topology, page, tail)
+}
+
+func TestExplorerDenseAggregateEdgeIndexIsBoundedAndRecoverable(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := service.Init(root, "dense aggregate edge explorer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := domain.GraphDefinition{
+		APIVersion: domain.GraphAPIVersion, Kind: domain.GraphKind,
+		Metadata: domain.GraphMetadata{Name: "dense aggregate edges"},
+	}
+	const groupCount = 135
+	for index := 0; index < groupCount; index++ {
+		groupID := fmt.Sprintf("group-%03d", index)
+		nodeID := fmt.Sprintf("node-%03d", index)
+		graph.Spec.Groups = append(graph.Spec.Groups, domain.GroupDefinition{ID: groupID, Title: groupID, Kind: "work-unit", SummaryNodeID: nodeID, CollapsedByDefault: true})
+		graph.Spec.Nodes = append(graph.Spec.Nodes, domain.NodeDefinition{ID: nodeID, Kind: "milestone", Title: nodeID, GroupID: groupID, Outcomes: []domain.Outcome{{ID: "done", Class: "success"}}})
+	}
+	for from := 0; from < groupCount; from++ {
+		for to := from + 1; to < groupCount; to++ {
+			graph.Spec.Edges = append(graph.Spec.Edges, domain.EdgeDefinition{ID: fmt.Sprintf("edge-%03d-%03d", from, to), From: fmt.Sprintf("node-%03d", from), To: fmt.Sprintf("node-%03d", to), When: domain.Predicate{Outcome: "done"}})
+		}
+	}
+	raw, _ := json.Marshal(graph)
+	graphPath := filepath.Join(root, "dense.json")
+	if err := os.WriteFile(graphPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "graph", "governor"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(ui.Handler(svc))
+	defer server.Close()
+
+	var topology ui.TopologyPage
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/topology", http.StatusOK), &topology); err != nil {
+		t.Fatal(err)
+	}
+	wantEdges := groupCount * (groupCount - 1) / 2
+	if topology.AggregateEdgePage == nil || topology.AggregateEdgePage.Total != wantEdges || !topology.AggregateEdgePage.Truncated || topology.AggregateEdgeIndexRef == "" || len(topology.AggregateEdges) > 100 {
+		t.Fatalf("dense aggregate edge index is not bounded and recoverable: page=%+v ref=%q inline=%d", topology.AggregateEdgePage, topology.AggregateEdgeIndexRef, len(topology.AggregateEdges))
+	}
+	var page ui.AggregateEdgePage
+	endpoint := server.URL + "/api/v1/aggregate-edges?ref=" + url.QueryEscape(topology.AggregateEdgeIndexRef) + "&cursor=100&limit=100"
+	if err := json.Unmarshal(getBody(t, endpoint, http.StatusOK), &page); err != nil {
+		t.Fatal(err)
+	}
+	if page.Page.Total != wantEdges || page.Page.Cursor != 100 || len(page.AggregateEdges) != 100 || page.Page.NextCursor == nil || *page.Page.NextCursor != 200 {
+		t.Fatalf("dense aggregate edge continuation is incomplete: %#v", page)
+	}
+	_ = getBody(t, endpoint+"&groupState=expanded", http.StatusNotFound)
+	validateExplorerContract(t, topology, page)
+}
+
+func TestExplorerCompactAllGroupDisclosureCoversMaximumMultibyteIDs(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := service.Init(root, "compact group disclosure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := domain.GraphDefinition{APIVersion: domain.GraphAPIVersion, Kind: domain.GraphKind, Metadata: domain.GraphMetadata{Name: "compact disclosure"}}
+	for index := 0; index < domain.MaxGraphGroups; index++ {
+		groupID := fmt.Sprintf("组-%03d-%s", index, strings.Repeat("界", 52))
+		nodeID := fmt.Sprintf("node-%03d", index)
+		graph.Spec.Groups = append(graph.Spec.Groups, domain.GroupDefinition{ID: groupID, Title: groupID, Kind: "work-unit", SummaryNodeID: nodeID, CollapsedByDefault: true})
+		graph.Spec.Nodes = append(graph.Spec.Nodes, domain.NodeDefinition{ID: nodeID, Kind: "milestone", Title: nodeID, GroupID: groupID, Outcomes: []domain.Outcome{{ID: "done", Class: "success"}}})
+	}
+	raw, _ := json.Marshal(graph)
+	graphPath := filepath.Join(root, "groups.json")
+	if err := os.WriteFile(graphPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "graph", "governor"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(ui.Handler(svc))
+	defer server.Close()
+
+	var expanded ui.TopologyPage
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/topology?groupState=expanded&limit=500", http.StatusOK), &expanded); err != nil {
+		t.Fatal(err)
+	}
+	if len(expanded.ExpandedGroupIDs) != domain.MaxGraphGroups || len(expanded.Nodes) != domain.MaxGraphGroups {
+		t.Fatalf("compact expand-all did not cover every legal group: groups=%d nodes=%d", len(expanded.ExpandedGroupIDs), len(expanded.Nodes))
+	}
+	firstGroup := url.QueryEscape(graph.Spec.Groups[0].ID)
+	var exception ui.TopologyPage
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/topology?groupState=expanded&collapsed="+firstGroup+"&limit=500", http.StatusOK), &exception); err != nil {
+		t.Fatal(err)
+	}
+	if len(exception.ExpandedGroupIDs) != domain.MaxGraphGroups-1 || len(exception.Nodes) != domain.MaxGraphGroups-1 {
+		t.Fatalf("per-group exception did not override compact disclosure: expanded=%d nodes=%d", len(exception.ExpandedGroupIDs), len(exception.Nodes))
+	}
+	var collapsed ui.TopologyPage
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/topology?groupState=collapsed&limit=500", http.StatusOK), &collapsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(collapsed.ExpandedGroupIDs) != 0 || len(collapsed.Nodes) != 0 || len(collapsed.Groups) != domain.MaxGraphGroups {
+		t.Fatalf("compact collapse-all lost groups or exposed nodes: groups=%d nodes=%d expanded=%d", len(collapsed.Groups), len(collapsed.Nodes), len(collapsed.ExpandedGroupIDs))
+	}
+	validateExplorerContract(t, expanded, exception, collapsed)
+}
+
+func TestExplorerGroupStateIsOpaqueAndReadSurfacesAreByteNonmutating(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := service.Init(root, "opaque group state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := domain.GraphDefinition{
+		APIVersion: domain.GraphAPIVersion, Kind: domain.GraphKind, Metadata: domain.GraphMetadata{Name: "opaque groups"},
+		Spec: domain.GraphSpec{
+			Groups: []domain.GroupDefinition{
+				{ID: "first,group", Title: "First", Kind: "work-unit", SummaryNodeID: "first", CollapsedByDefault: true},
+				{ID: "second", Title: "Second", Kind: "work-unit", SummaryNodeID: "second", CollapsedByDefault: true},
+			},
+			Nodes: []domain.NodeDefinition{
+				{ID: "first", Kind: "milestone", Title: "First", GroupID: "first,group", Outcomes: []domain.Outcome{{ID: "done", Class: "success"}}},
+				{ID: "second", Kind: "milestone", Title: "Second", GroupID: "second", Outcomes: []domain.Outcome{{ID: "done", Class: "success"}}},
+			},
+			Edges: []domain.EdgeDefinition{{ID: "first-second", From: "first", To: "second", When: domain.Predicate{Outcome: "done"}}},
+		},
+	}
+	raw, _ := json.Marshal(graph)
+	graphPath := filepath.Join(root, "opaque.json")
+	if err := os.WriteFile(graphPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "graph", "governor"); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotTreeBytes(t, root)
+	server := httptest.NewServer(ui.Handler(svc))
+	defer server.Close()
+
+	var expanded ui.TopologyPage
+	endpoint := server.URL + "/api/v1/topology?mode=summary&expanded=first%2Cgroup&expanded=second"
+	if err := json.Unmarshal(getBody(t, endpoint, http.StatusOK), &expanded); err != nil {
+		t.Fatal(err)
+	}
+	if len(expanded.ExpandedGroupIDs) != 2 || len(expanded.Nodes) != 2 || len(expanded.Lanes) != 1 || expanded.Lanes[0].ID != "work-units" {
+		t.Fatalf("opaque repeated group state or lanes were lost: %#v", expanded)
+	}
+	var collapsed ui.TopologyPage
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/topology?mode=summary", http.StatusOK), &collapsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(collapsed.AggregateEdges) != 1 {
+		t.Fatalf("expected one recoverable aggregate edge: %#v", collapsed.AggregateEdges)
+	}
+	ref := url.QueryEscape(collapsed.AggregateEdges[0].InspectRef)
+	_ = getBody(t, server.URL+"/api/v1/group-edges?ref="+ref, http.StatusOK)
+	after := snapshotTreeBytes(t, root)
+	if mismatch := firstSnapshotMismatch(before, after); mismatch != "" {
+		t.Fatalf("read-only group surfaces changed protected bytes: %s", mismatch)
 	}
 }
 
@@ -419,7 +745,7 @@ func TestHistoryBeforeCursorsRoundTripWithoutOverlap(t *testing.T) {
 }
 
 func TestExplorerResponsesMatchPublishedSchema(t *testing.T) {
-	schemaRaw, err := os.ReadFile("../../schemas/ui-api-v1beta1.schema.json")
+	schemaRaw, err := os.ReadFile("../../schemas/ui-api-v1beta2.schema.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -515,4 +841,79 @@ func getBody(t *testing.T, url string, status int) []byte {
 		t.Fatalf("response exceeds bounded API envelope: %d", len(body))
 	}
 	return body
+}
+
+func snapshotTreeBytes(t *testing.T, root string) map[string][32]byte {
+	t.Helper()
+	result := map[string][32]byte{}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		result[relative] = sha256.Sum256(raw)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func firstSnapshotMismatch(before, after map[string][32]byte) string {
+	for path, digest := range before {
+		if after[path] != digest {
+			return path
+		}
+	}
+	for path := range after {
+		if _, ok := before[path]; !ok {
+			return path
+		}
+	}
+	return ""
+}
+
+func validateExplorerContract(t *testing.T, values ...any) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "schemas", "ui-api-v1beta2.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	if err := compiler.AddResource("urn:dagrail:ui-api-v1beta2", document); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile("urn:dagrail:ui-api-v1beta2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range values {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var instance any
+		if err := json.Unmarshal(encoded, &instance); err != nil {
+			t.Fatal(err)
+		}
+		if err := schema.Validate(instance); err != nil {
+			t.Fatalf("grouped Explorer response violates v1beta2: %v\n%s", err, encoded)
+		}
+	}
 }

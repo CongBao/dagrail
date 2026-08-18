@@ -214,6 +214,15 @@ vocabulary, repository paths, and cutover policy are not shipped as DAGrail cont
 - keep all new evidence schemas digest-bound by the public compatibility contract and
   release qualification, while retaining the six-tool MCP boundary.
 
+## v0.24.0 — Hierarchical project DAG
+
+- add explicit nested Graph groups and two-phase group GraphPatch operations without
+  changing Node lifecycle or dependency authority;
+- derive deterministic lifecycle/health rollups, membership provenance, generic lanes,
+  and exact collapsed-edge evidence from one GraphRevision and journal head;
+- make the read-only Explorer open on a clear collapsed Project DAG while preserving the
+  complete Execution Detail view and URL-restorable, accessible expansion.
+
 ## Post-v0.23 field-validation backlog
 
 These are repository-neutral observations from the first live writer cutover. They are

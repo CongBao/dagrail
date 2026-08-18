@@ -93,6 +93,7 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 		"CODE_OF_CONDUCT.md", "CONTRIBUTING.md", "COMPATIBILITY.md", "CONTEXT.md",
 		"CHANGELOG.md", "docs/api.md", "docs/tutorial.md", "docs/release.md", "docs/readiness.md", "docs/migration.md",
 		"docs/qualification.md", "docs/recovery.md", "schemas/compatibility-contract-v1beta1.schema.json",
+		"schemas/graph-v1alpha1.schema.json", "schemas/graph-patch-v1alpha1.schema.json", "schemas/ui-api-v1beta2.schema.json",
 		"schemas/lifecycle-migration-v1alpha1.schema.json", "schemas/lifecycle-migration-v1beta1.schema.json", "schemas/authority-adoption-v1alpha1.schema.json", "schemas/authority-rotation-v1alpha1.schema.json", "schemas/authority-relocation-v1alpha1.schema.json", "schemas/lifecycle-projection-v1alpha1.schema.json",
 		"schemas/git-artifact-closure-v1alpha1.schema.json", "schemas/git-integration-scope-v1alpha1.schema.json",
 		"internal/compatibility/beta-window.json",
@@ -167,7 +168,7 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 
 func publishedSchemaSurfaces(report contract.Report) []contract.DocumentedSurface {
 	return []contract.DocumentedSurface{
-		report.CommandCatalog, report.CLIError, report.DecisionRecord, report.Installation, report.HistoricalMatrix, report.Readiness,
+		report.GraphPatch, report.CommandCatalog, report.CLIError, report.DecisionRecord, report.Installation, report.HistoricalMatrix, report.Readiness,
 		report.UI, report.Security, report.JournalVerification,
 		report.PluginConformance, report.Support, report.Recovery, report.AuthorityAdoption, report.AuthorityRotation, report.AuthorityRelocation,
 		report.GitArtifactClosure, report.GitIntegrationScope,

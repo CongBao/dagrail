@@ -10,6 +10,7 @@ coverage.out
 coverage.html
 *.prof
 *.trace
+.playwright-cli/
 
 # DAGrail runtime state: project.yaml is the only repository-safe marker
 .dagrail/*

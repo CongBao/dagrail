@@ -15,11 +15,13 @@ digests, context budgets, and command inventory implemented by the current binar
   additive unless a new API version is selected.
 - Stable provider contracts remain source-compatible. Additions use new optional
   interfaces or types; existing Go interfaces do not gain required methods.
-- Explorer v1beta1 response/error fields are governed by the schema path and exact
-  digest in `dagrail contract`; fields are additive and its documented deep-link query
-  keys remain accepted. The Explorer remains loopback-only and has no mutation route.
+- Explorer v1beta1 remains the retained flat response contract. Explorer v1beta2 adds
+  hierarchical group summaries, lanes, collapsed-edge refs, and repeated group-state
+  query keys under a new schema path/digest in `dagrail contract`. Both remain
+  loopback-only and expose no mutation route.
 - Graph Definition v1alpha1 remains importable. A future graph format uses another
-  `apiVersion` rather than silently changing existing semantics.
+  `apiVersion` rather than silently changing existing semantics. Additive `groups` and
+  `node.groupId` declarations do not alter Node lifecycle or dependency authority.
 - Graph capability discovery is bound to the exact Graph schema path and digest in the
   compatibility contract. Consumers must not infer missing capabilities from one
   adapter, harness, prompt, or example.
@@ -74,7 +76,7 @@ digests, context budgets, and command inventory implemented by the current binar
   additive in-version; the four broad error classes and their exit codes remain stable
   through the beta line. Completion is generated from the catalog, not an independent
   authority. Installation diagnostics remain path-free and omit raw host output.
-- HistoricalBinaryMatrix v1alpha1 closes the v0.10.0–v0.23.0 input window by exact commit.
+- HistoricalBinaryMatrix v1alpha1 closes the v0.10.0–v0.23.1 input window by exact commit.
 - LifecycleMigration v1alpha1/v1beta1 keep v0.22 Effect payloads readable. The additive
   `adapterVersion`/`adapterSchemaHash` fields are an optional pair on imported history;
   current writers emit both, while an unbound nonterminal Effect cannot be reconciled

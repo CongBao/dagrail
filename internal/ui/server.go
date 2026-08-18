@@ -29,6 +29,7 @@ type NodeView struct {
 	Kind      string `json:"kind"`
 	Role      string `json:"role,omitempty"`
 	Parent    string `json:"parent,omitempty"`
+	GroupID   string `json:"groupId,omitempty"`
 	Status    string `json:"status"`
 	Readiness string `json:"readiness,omitempty"`
 	Outcome   string `json:"outcome,omitempty"`
@@ -161,7 +162,7 @@ func buildSnapshot(svc *service.Service) (Snapshot, error) {
 		result.Edges = append(result.Edges, state.Graph.Spec.Edges...)
 		for _, node := range state.Graph.Spec.Nodes {
 			runtime := state.Nodes[node.ID]
-			result.Nodes = append(result.Nodes, NodeView{ID: node.ID, Title: node.Title, Kind: node.Kind, Role: node.Role, Parent: node.Parent, Status: runtime.Status, Outcome: runtime.Outcome})
+			result.Nodes = append(result.Nodes, NodeView{ID: node.ID, Title: node.Title, Kind: node.Kind, Role: node.Role, Parent: node.Parent, GroupID: node.GroupID, Status: runtime.Status, Outcome: runtime.Outcome})
 		}
 	}
 	for _, attempt := range state.Attempts {

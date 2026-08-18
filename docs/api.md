@@ -12,8 +12,10 @@ digest of every governed JSON report schema.
 
 The Graph entry also publishes its exact schema path/digest and a sorted closed
 capability list. Consumers must use that entry to discover resource capacities,
-resource requests, dynamic graph changes, and lifecycle migration support; an adapter
-omission or prompt example is not evidence that the capability is absent.
+resource requests, hierarchical subgraphs, dynamic graph changes, and lifecycle
+migration support. The separate GraphPatch entry binds the closed patch schema used by
+preview/apply; an adapter omission or prompt example is not evidence that a capability
+is absent.
 
 The beta line is additive unless a surface selects a new `apiVersion`. Automation
 should select API versions and schema digests, never human wording or JSON key order.
@@ -193,11 +195,11 @@ generic provider invocation output alone never advances a Node.
 
 ## JSON schemas
 
-Published schemas live in `schemas/`. Current governed reports include lifecycle
-migration/projection, Git artifact closure/integration scope, the Explorer UI
-API, security audit, journal verification, plugin conformance, support report, recovery
-rehearsal, explicit legacy-authority adoption, authority rotation/relocation, release qualification,
-and the compatibility contract itself. Reports use
+Published schemas live in `schemas/`. Current governed reports include Graph and
+GraphPatch, lifecycle migration/projection, Git artifact closure/integration scope, the
+Explorer UI API, security audit, journal verification, plugin conformance, support
+report, recovery rehearsal, explicit legacy-authority adoption, authority
+rotation/relocation, release qualification, and the compatibility contract itself. Reports use
 closed objects so misspelled or silently added fields fail validation. ReleaseManifest
 v1beta1 and ReleaseVerification v1alpha1 bind the complete distribution set separately
 from source qualification.
