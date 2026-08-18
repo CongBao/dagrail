@@ -234,6 +234,11 @@ vocabulary, repository paths, and cutover policy are not shipped as DAGrail cont
 - keep the README and public repository metadata focused on product purpose, supported
   harnesses, verified installation, and the shortest executable first workflow.
 
+### v0.25.1 maintenance patch
+
+- keep the cross-platform missing-secret inspection proof portable when the damaged
+  precondition is already present, and move the release publisher to Node 24.
+
 ## Post-v0.23 field-validation backlog
 
 These are repository-neutral observations from the first live writer cutover. They are

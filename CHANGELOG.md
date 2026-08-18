@@ -2,6 +2,15 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.25.1 — 2026-08-18
+
+### Fixed
+
+- the missing action-secret fail-closed test now accepts an already-absent secret as the
+  intended damaged precondition, closing the Windows CI portability gap without weakening
+  the subsequent no-mutation assertions;
+- the release publisher now uses the commit-pinned Node 24 `action-gh-release` v3 runtime.
+
 ## 0.25.0 — 2026-08-18
 
 ### Changed

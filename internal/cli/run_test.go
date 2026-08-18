@@ -217,7 +217,7 @@ func TestMissingActionSecretReadSurfacesFailClosedWithoutMutation(t *testing.T) 
 		t.Fatalf("decode operations ref before damage: %v %s", err, contextRaw)
 	}
 	secretPath := filepath.Join(svc.Project.DataDir, "action-secret")
-	if err := os.Remove(secretPath); err != nil {
+	if err := os.Remove(secretPath); err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
 	before := protectedProjectSnapshot(t, root, svc.Project.DataDir)
@@ -267,6 +267,9 @@ func TestMissingActionSecretReadSurfacesFailClosedWithoutMutation(t *testing.T) 
 				t.Fatalf("operations inspection mutated damaged secret state: %v", changedSnapshotPaths(before, after))
 			}
 		})
+		if test.skip {
+			continue
+		}
 		if err := os.Remove(secretPath); err != nil {
 			t.Fatal(err)
 		}
