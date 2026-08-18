@@ -1072,21 +1072,22 @@ func validAuthorityDigest(value string) bool {
 }
 
 func decodeBackup(data []byte) (BackupEnvelope, error) {
-	if len(data) > 256*1024*1024 {
+	if len(data) > MaxPortableJournalBytes {
 		return BackupEnvelope{}, fmt.Errorf("backup exceeds 256 MiB limit")
 	}
-	if err := domain.ValidateAuthorityJSON(data); err != nil {
+	// A portable backup aggregates independently bounded journal segments, so
+	// its total value count may legitimately exceed the single-authority-
+	// document limit. The byte cap keeps this scan linear and bounded; all
+	// other authority JSON guards remain active, and ValidateSegments below
+	// revalidates every contained segment. Each counted JSON value consumes at
+	// least one input byte, so len(data) admits every valid bounded aggregate
+	// without introducing an unbounded work factor.
+	if err := domain.ValidateAuthorityJSONWithLimits(data, domain.MaxAuthorityDepth+2, len(data)); err != nil {
 		return BackupEnvelope{}, err
 	}
-	var envelope BackupEnvelope
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&envelope); err != nil {
-		return envelope, err
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return envelope, fmt.Errorf("backup has trailing content")
+	envelope, err := decodeBackupEnvelope(data)
+	if err != nil {
+		return BackupEnvelope{}, err
 	}
 	if envelope.APIVersion != BackupAPIVersion || envelope.Kind != "JournalBackup" || envelope.Project.ProjectID == "" || envelope.Digest == "" {
 		return envelope, fmt.Errorf("invalid DAGrail backup envelope")
@@ -1098,10 +1099,98 @@ func decodeBackup(data []byte) (BackupEnvelope, error) {
 	if envelope.Digest != expected {
 		return envelope, fmt.Errorf("backup digest mismatch")
 	}
-	if err := journal.ValidateSegments(envelope.Project.ProjectID, envelope.Segments); err != nil {
-		return envelope, err
+	return envelope, nil
+}
+
+func decodeBackupEnvelope(data []byte) (BackupEnvelope, error) {
+	var envelope BackupEnvelope
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return envelope, fmt.Errorf("backup envelope must be a JSON object")
+	}
+	segmentProjectID := ""
+	previousHash := ""
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return envelope, err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return envelope, fmt.Errorf("backup envelope contains a non-string key")
+		}
+		switch key {
+		case "apiVersion":
+			err = decoder.Decode(&envelope.APIVersion)
+		case "kind":
+			err = decoder.Decode(&envelope.Kind)
+		case "project":
+			var raw json.RawMessage
+			if err = decoder.Decode(&raw); err == nil {
+				err = decodeStrictAuthorityJSON(raw, &envelope.Project)
+			}
+		case "createdAt":
+			err = decoder.Decode(&envelope.CreatedAt)
+		case "segments":
+			err = decodeBackupSegments(decoder, &envelope, &segmentProjectID, &previousHash)
+		case "digest":
+			err = decoder.Decode(&envelope.Digest)
+		default:
+			return envelope, fmt.Errorf("backup envelope contains unknown field %q", key)
+		}
+		if err != nil {
+			return envelope, fmt.Errorf("decode backup field %s: %w", key, err)
+		}
+	}
+	closing, err := decoder.Token()
+	if err != nil || closing != json.Delim('}') {
+		return envelope, fmt.Errorf("backup envelope has an invalid terminator")
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return envelope, fmt.Errorf("backup has trailing content")
+	}
+	if segmentProjectID != "" && envelope.Project.ProjectID != segmentProjectID {
+		return envelope, fmt.Errorf("backup project %s does not match journal project %s", envelope.Project.ProjectID, segmentProjectID)
 	}
 	return envelope, nil
+}
+
+func decodeBackupSegments(decoder *json.Decoder, envelope *BackupEnvelope, segmentProjectID, previousHash *string) error {
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('[') {
+		return fmt.Errorf("backup segments must be an array")
+	}
+	for decoder.More() {
+		if len(envelope.Segments) >= journal.MaxSegmentCount {
+			return fmt.Errorf("journal exceeds %d segments", journal.MaxSegmentCount)
+		}
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			return err
+		}
+		var segment journal.Segment
+		if err := decodeStrictAuthorityJSON(raw, &segment); err != nil {
+			return fmt.Errorf("decode journal segment %d: %w", len(envelope.Segments)+1, err)
+		}
+		if len(envelope.Segments) == 0 {
+			if segment.ProjectID == "" {
+				return fmt.Errorf("journal segment project ID is required")
+			}
+			*segmentProjectID = segment.ProjectID
+		}
+		hash, err := journal.ValidateSegment(*segmentProjectID, uint64(len(envelope.Segments)+1), *previousHash, segment)
+		if err != nil {
+			return err
+		}
+		envelope.Segments = append(envelope.Segments, segment)
+		*previousHash = hash
+	}
+	closing, err := decoder.Token()
+	if err != nil || closing != json.Delim(']') {
+		return fmt.Errorf("backup segments have an invalid terminator")
+	}
+	return nil
 }
 
 func backupDigest(envelope BackupEnvelope) (string, error) {

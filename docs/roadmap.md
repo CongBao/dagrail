@@ -239,6 +239,13 @@ vocabulary, repository paths, and cutover policy are not shipped as DAGrail cont
 - keep the cross-platform missing-secret inspection proof portable when the damaged
   precondition is already present, and move the release publisher to Node 24.
 
+### v0.25.2 maintenance patch
+
+- close the portable-backup producer/verifier contract for large journals by applying
+  the 256 MiB envelope bound to aggregate value scanning while retaining every
+  per-segment authority, canonicalization, digest, and hash-chain guard; stream-validate
+  each segment before retention and keep wrapper depth separate from segment depth.
+
 ## Post-v0.23 field-validation backlog
 
 These are repository-neutral observations from the first live writer cutover. They are

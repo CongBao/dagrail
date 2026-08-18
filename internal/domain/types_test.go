@@ -57,6 +57,25 @@ func TestAuthorityJSONRejectsDuplicateKeysAndExcessiveNesting(t *testing.T) {
 	}
 }
 
+func TestAuthorityJSONAggregateValueLimitRetainsOtherGuards(t *testing.T) {
+	raw := json.RawMessage(`[0,0,0]`)
+	if err := ValidateAuthorityJSONWithValueLimit(raw, 3); err == nil || !strings.Contains(err.Error(), "values") {
+		t.Fatalf("aggregate value limit was not enforced: %v", err)
+	}
+	if err := ValidateAuthorityJSONWithValueLimit(raw, 4); err != nil {
+		t.Fatalf("valid aggregate was rejected at its exact value count: %v", err)
+	}
+	if err := ValidateAuthorityJSONWithValueLimit(json.RawMessage(`{"value":1,"value":2}`), 100); err == nil || !strings.Contains(err.Error(), "duplicate key") {
+		t.Fatalf("raised aggregate limit bypassed duplicate-key protection: %v", err)
+	}
+	if err := ValidateAuthorityJSONWithValueLimit(raw, 0); err == nil || !strings.Contains(err.Error(), "positive") {
+		t.Fatalf("invalid aggregate limit was accepted: %v", err)
+	}
+	if err := ValidateAuthorityJSONWithLimits(raw, -1, 100); err == nil || !strings.Contains(err.Error(), "non-negative") {
+		t.Fatalf("invalid aggregate depth limit was accepted: %v", err)
+	}
+}
+
 func TestPredicateFactRequiresKeyAndValue(t *testing.T) {
 	source := NodeDefinition{ID: "source", Outcomes: []Outcome{{ID: "ok", Class: "success"}}}
 	if err := validatePredicate(Predicate{Decision: &ValueMatch{}}, source); err == nil {

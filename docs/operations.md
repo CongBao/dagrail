@@ -110,6 +110,13 @@ only an empty journal or an exact prefix of the backup, never overwrites a diver
 segment, requires the destination data root's local authority claim, and automatically
 rebuilds SQLite. Re-running the same restore is idempotent. An empty data root reached
 only through a copied locator has no claim and cannot revive the backup's writable UUID.
+Portable backups are byte-bounded at 256 MiB. Their envelope may aggregate more values
+than a single authority document because each contained journal segment retains its
+own value, size, canonical-JSON, schema, and hash-chain validation; a backup produced by
+one DAGrail release is therefore always accepted by that release's verifier when its
+bytes are unchanged. Verification decodes and validates segments incrementally before
+retaining them, and the envelope wrapper has a separate two-level depth allowance, so
+neither hostile array cardinality nor container nesting weakens the per-segment limits.
 Claims are bound to the canonical data path, so copying the complete project runtime
 directory to another `DAGRAIL_HOME` also remains read-only. Pre-v0.22 stores use the
 explicit exact-head `recovery adopt-legacy-authority` command documented in the recovery

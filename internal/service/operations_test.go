@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CongBao/dagrail/internal/domain"
 	"github.com/CongBao/dagrail/internal/journal"
 	"github.com/CongBao/dagrail/internal/project"
 	"github.com/CongBao/dagrail/internal/projection"
@@ -194,6 +195,100 @@ func TestBackupRestoreStatusAndBoundedHistory(t *testing.T) {
 	state, err := svc.State()
 	if err != nil || state.Nodes["done"].Status != "terminal" {
 		t.Fatalf("restored state mismatch: %+v %v", state.Nodes["done"], err)
+	}
+}
+
+func TestCreatedLargeBackupCanBeVerifiedBySameRuntime(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := Init(root, "large-backup-contract")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Each segment remains below the authority value limit. The portable
+	// backup legitimately aggregates enough independently verified segments to
+	// exceed that single-document limit without approaching the 256 MiB backup
+	// byte limit.
+	valuesPerSegment := domain.MaxAuthorityValues/2 + 1_000
+	dependencyCut := strings.Repeat(`"node",`, valuesPerSegment-1) + `"node"`
+	for index := 0; index < 2; index++ {
+		key := fmt.Sprintf("large-backup/%d", index)
+		now := svc.Now().UTC().Format(time.RFC3339Nano)
+		payload := json.RawMessage(fmt.Sprintf(`{"id":"large-backup-%d","sourceType":"project","sourceId":"project","status":"open","classification":"unknown","attemptBudget":2,"attempts":0,"dependencyCut":[%s],"openedAt":"%s","updatedAt":"%s"}`, index, dependencyCut, now, now))
+		if _, err := svc.Journal.Append(journal.Command{ID: uuid.NewString(), Kind: "test.large-backup", ActorRole: "test", IdempotencyKey: key}, []journal.Event{{Type: "incident.opened", Payload: payload}}, svc.Now().UTC()); err != nil {
+			t.Fatalf("append independently bounded segment %d: %v", index, err)
+		}
+	}
+
+	backup, created, err := svc.CreateBackup()
+	if err != nil {
+		t.Fatalf("create large portable backup: %v", err)
+	}
+	if err := domain.ValidateAuthorityJSON(backup); err == nil || !strings.Contains(err.Error(), "values") {
+		t.Fatalf("fixture did not cross the single-document value limit: %v", err)
+	}
+	verified, err := svc.VerifyBackup(backup)
+	if err != nil {
+		t.Fatalf("same runtime rejected its own valid backup: %v", err)
+	}
+	if !verified.Valid || verified.ProjectID != created.ProjectID || verified.Segments != created.Segments || verified.HeadSequence != created.HeadSequence || verified.HeadHash != created.HeadHash || verified.Digest != created.Digest {
+		t.Fatalf("verified report differs from create report: created=%+v verified=%+v", created, verified)
+	}
+}
+
+func TestBackupWrapperPreservesMaximumLegalSegmentDepth(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := Init(root, "maximum-depth-backup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := svc.Now().UTC().Format(time.RFC3339Nano)
+	padding := strings.Repeat(`{"x":`, 60) + `0` + strings.Repeat(`}`, 60)
+	payload := json.RawMessage(fmt.Sprintf(`{"id":"maximum-depth","sourceType":"project","sourceId":"project","status":"open","classification":"unknown","attemptBudget":2,"attempts":0,"openedAt":"%s","updatedAt":"%s","padding":%s}`, now, now, padding))
+	if err := domain.ValidateAuthorityJSON(payload); err != nil {
+		t.Fatalf("maximum-depth payload is not independently legal: %v", err)
+	}
+	if _, err := svc.Journal.Append(journal.Command{ID: uuid.NewString(), Kind: "test.maximum-depth", ActorRole: "test", IdempotencyKey: "maximum-depth"}, []journal.Event{{Type: "incident.opened", Payload: payload}}, svc.Now().UTC()); err != nil {
+		t.Fatalf("writer rejected maximum-depth legal segment: %v", err)
+	}
+
+	backup, created, err := svc.CreateBackup()
+	if err != nil {
+		t.Fatalf("create maximum-depth backup: %v", err)
+	}
+	verified, err := svc.VerifyBackup(backup)
+	if err != nil || verified.Digest != created.Digest {
+		t.Fatalf("backup wrapper consumed the segment depth budget: %+v %v", verified, err)
+	}
+	entries, err := os.ReadDir(filepath.Join(svc.Project.DataDir, "journal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".json") {
+			if err := os.Remove(filepath.Join(svc.Project.DataDir, "journal", entry.Name())); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	restored, err := svc.RestoreBackup(backup)
+	if err != nil || restored.Digest != created.Digest || restored.HeadHash != created.HeadHash {
+		t.Fatalf("restore rejected maximum-depth legal segment: %+v %v", restored, err)
+	}
+}
+
+func TestBackupRejectsMalformedSegmentBeforeTypedSliceAmplification(t *testing.T) {
+	var raw strings.Builder
+	raw.Grow(3*journal.MaxSegmentCount + 512)
+	raw.WriteString(`{"apiVersion":"dagrail.io/v1alpha1","kind":"JournalBackup","project":{"apiVersion":"dagrail.io/v1alpha1","kind":"Project","projectId":"11111111-1111-4111-8111-111111111111","name":"hostile","providers":[]},"createdAt":"2026-01-01T00:00:00Z","segments":[`)
+	for index := 0; index < journal.MaxSegmentCount; index++ {
+		raw.WriteString(`{},`)
+	}
+	raw.WriteString(`{}],"digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}`)
+	if _, err := decodeBackup([]byte(raw.String())); err == nil || !strings.Contains(err.Error(), "journal segment project ID is required") {
+		t.Fatalf("malformed segment array was not rejected at its first entry: %v", err)
 	}
 }
 

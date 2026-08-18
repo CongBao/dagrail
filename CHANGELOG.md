@@ -2,6 +2,22 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.25.2 — 2026-08-19
+
+### Fixed
+
+- portable backup verification now accepts unchanged backups created by the same
+  release when a large journal legitimately aggregates more than one million JSON
+  values; the 256 MiB envelope cap and every per-segment authority, canonicalization,
+  digest, and hash-chain check remain enforced;
+- backup segments are decoded and chain-validated one at a time before entering the
+  retained slice, preventing small malformed arrays from amplifying into large typed
+  allocations, while the envelope's two wrapper levels no longer consume a legal
+  segment's independent depth budget;
+- public CLI and service regressions cover the large-project producer/verifier closure,
+  while the default one-million-value guard remains unchanged for ordinary authority
+  documents.
+
 ## 0.25.1 — 2026-08-18
 
 ### Fixed

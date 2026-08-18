@@ -531,22 +531,45 @@ func validateGroupedPredicateFields(predicate Predicate, bounded func(string, st
 }
 
 func ValidateAuthorityJSON(raw json.RawMessage) error {
+	return ValidateAuthorityJSONWithLimits(raw, MaxAuthorityDepth, MaxAuthorityValues)
+}
+
+// ValidateAuthorityJSONWithValueLimit applies the authority JSON grammar with
+// a caller-owned aggregate value limit. Most authority documents must use
+// ValidateAuthorityJSON. Bounded containers that aggregate independently
+// validated authority records may raise only this limit while retaining the
+// shared depth, duplicate-key, string, key, and integer checks.
+func ValidateAuthorityJSONWithValueLimit(raw json.RawMessage, maxValues int) error {
+	return ValidateAuthorityJSONWithLimits(raw, MaxAuthorityDepth, maxValues)
+}
+
+// ValidateAuthorityJSONWithLimits is reserved for bounded aggregate
+// containers whose wrapper depth and value budget are defined by their own
+// closed contract. Nested authority records must still be revalidated with
+// ValidateAuthorityJSON before they are accepted or persisted.
+func ValidateAuthorityJSONWithLimits(raw json.RawMessage, maxDepth, maxValues int) error {
+	if maxDepth < 0 {
+		return fmt.Errorf("authority JSON depth limit must be non-negative")
+	}
+	if maxValues <= 0 {
+		return fmt.Errorf("authority JSON value limit must be positive")
+	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	limit := new(big.Int).SetInt64(9_007_199_254_740_991)
 	values := 0
 	var walk func(int) error
 	walk = func(depth int) error {
-		if depth > MaxAuthorityDepth {
-			return fmt.Errorf("authority JSON nesting exceeds %d levels", MaxAuthorityDepth)
+		if depth > maxDepth {
+			return fmt.Errorf("authority JSON nesting exceeds %d levels", maxDepth)
 		}
 		token, err := decoder.Token()
 		if err != nil {
 			return fmt.Errorf("invalid JSON: %w", err)
 		}
 		values++
-		if values > MaxAuthorityValues {
-			return fmt.Errorf("authority JSON exceeds %d values", MaxAuthorityValues)
+		if values > maxValues {
+			return fmt.Errorf("authority JSON exceeds %d values", maxValues)
 		}
 		switch typed := token.(type) {
 		case json.Delim:

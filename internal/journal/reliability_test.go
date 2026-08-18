@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CongBao/dagrail/internal/domain"
 	"github.com/CongBao/dagrail/internal/project"
 )
 
@@ -243,6 +244,38 @@ func TestLongJournalMaintainsSequenceHashChainAndIdempotency(t *testing.T) {
 	last, created, err := appendReliabilityEvent(store, "long-255")
 	if err != nil || created || last.Sequence != count {
 		t.Fatalf("long-journal retry was not stable: %#v %t %v", last, created, err)
+	}
+}
+
+func TestAppendRejectsAggregateSegmentBeyondAuthorityValueLimit(t *testing.T) {
+	store, err := openClaimed(t, t.TempDir(), reliabilityProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The payload itself is legal, but the enclosing command/event/segment
+	// pushes the complete durable authority record over the value bound.
+	values := domain.MaxAuthorityValues - 8
+	payload := json.RawMessage(`{"items":[` + strings.Repeat("0,", values-1) + `0]}`)
+	if err := domain.ValidateAuthorityJSON(payload); err != nil {
+		t.Fatalf("fixture payload must be independently legal: %v", err)
+	}
+	command := Command{ID: "oversized-values", Kind: "test", IdempotencyKey: "oversized-values"}
+	events := []Event{{Type: "test", SchemaVersion: CurrentEventSchemaVersion, Payload: payload}}
+	unsigned := unsignedSegment{SchemaVersion: CurrentSegmentSchemaVersion, Sequence: 1, ProjectID: reliabilityProjectID, Command: command, Events: events, CommittedAt: time.Unix(1, 0).UTC().Format(time.RFC3339Nano)}
+	hash, err := computeHash(unsigned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	segment := Segment{SchemaVersion: unsigned.SchemaVersion, Sequence: unsigned.Sequence, ProjectID: unsigned.ProjectID, Command: unsigned.Command, Events: unsigned.Events, CommittedAt: unsigned.CommittedAt, SegmentHash: hash}
+	if err := ValidateSegments(reliabilityProjectID, []Segment{segment}); err == nil || !strings.Contains(err.Error(), "values") {
+		t.Fatalf("portable verifier accepted a segment its reader would reject: %v", err)
+	}
+	if _, err := store.Append(command, []Event{{Type: "test", Payload: payload}}, time.Unix(1, 0)); err == nil || !strings.Contains(err.Error(), "values") {
+		t.Fatalf("writer accepted a segment its reader would reject: %v", err)
+	}
+	segments, err := store.ReadAll()
+	if err != nil || len(segments) != 0 {
+		t.Fatalf("rejected segment changed journal authority: %#v %v", segments, err)
 	}
 }
 

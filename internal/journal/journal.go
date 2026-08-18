@@ -346,8 +346,8 @@ func (s *Store) appendSegmentWithSchemaUnlocked(segmentSchema int, command Comma
 	if err != nil {
 		return Segment{}, false, err
 	}
-	if len(canonical) > MaxSegmentBytes {
-		return Segment{}, false, fmt.Errorf("journal segment exceeds %d bytes", MaxSegmentBytes)
+	if err := validateCanonicalSegmentBounds(canonical); err != nil {
+		return Segment{}, false, err
 	}
 	name := fmt.Sprintf("%012d-%s.json", sequence, hash)
 	if err := s.injectFault("before-temp-create"); err != nil {
@@ -698,21 +698,56 @@ func ValidateSegments(projectID string, segments []Segment) error {
 	}
 	previous := ""
 	for index, segment := range segments {
-		if segment.Sequence != uint64(index+1) || segment.ProjectID != projectID || segment.PreviousHash != previous {
-			return fmt.Errorf("journal chain mismatch at sequence %d", segment.Sequence)
-		}
-		if err := validateStoredEvents(segment.SchemaVersion, segment.Events); err != nil {
-			return fmt.Errorf("journal compatibility error at sequence %d: %w", segment.Sequence, err)
-		}
-		unsigned := unsignedSegment{SchemaVersion: segment.SchemaVersion, Sequence: segment.Sequence, ProjectID: segment.ProjectID, PreviousHash: segment.PreviousHash, Command: segment.Command, Events: segment.Events, CommittedAt: segment.CommittedAt}
-		hash, err := computeHash(unsigned)
+		hash, err := ValidateSegment(projectID, uint64(index+1), previous, segment)
 		if err != nil {
 			return err
 		}
-		if segment.SegmentHash != hash {
-			return fmt.Errorf("journal hash mismatch at sequence %d", segment.Sequence)
-		}
 		previous = hash
+	}
+	return nil
+}
+
+// ValidateSegment verifies one in-memory segment against its exact chain
+// position without retaining any other segment. Aggregate containers use it to
+// reject malformed entries before growing a typed segment slice.
+func ValidateSegment(projectID string, expectedSequence uint64, previousHash string, segment Segment) (string, error) {
+	if segment.Sequence != expectedSequence || segment.ProjectID != projectID || segment.PreviousHash != previousHash {
+		return "", fmt.Errorf("journal chain mismatch at sequence %d", segment.Sequence)
+	}
+	data, err := json.Marshal(segment)
+	if err != nil {
+		return "", fmt.Errorf("encode journal segment at sequence %d: %w", segment.Sequence, err)
+	}
+	canonical, err := jcs.Transform(data)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize journal segment at sequence %d: %w", segment.Sequence, err)
+	}
+	if err := validateCanonicalSegmentBounds(canonical); err != nil {
+		return "", fmt.Errorf("journal segment at sequence %d: %w", segment.Sequence, err)
+	}
+	if err := validateStoredCommand(segment.SchemaVersion, segment.Command); err != nil {
+		return "", fmt.Errorf("journal compatibility error at sequence %d: %w", segment.Sequence, err)
+	}
+	if err := validateStoredEvents(segment.SchemaVersion, segment.Events); err != nil {
+		return "", fmt.Errorf("journal compatibility error at sequence %d: %w", segment.Sequence, err)
+	}
+	unsigned := unsignedSegment{SchemaVersion: segment.SchemaVersion, Sequence: segment.Sequence, ProjectID: segment.ProjectID, PreviousHash: segment.PreviousHash, Command: segment.Command, Events: segment.Events, CommittedAt: segment.CommittedAt}
+	hash, err := computeHash(unsigned)
+	if err != nil {
+		return "", err
+	}
+	if segment.SegmentHash != hash {
+		return "", fmt.Errorf("journal hash mismatch at sequence %d", segment.Sequence)
+	}
+	return hash, nil
+}
+
+func validateCanonicalSegmentBounds(canonical []byte) error {
+	if len(canonical) > MaxSegmentBytes {
+		return fmt.Errorf("journal segment exceeds %d bytes", MaxSegmentBytes)
+	}
+	if err := domain.ValidateAuthorityJSON(canonical); err != nil {
+		return fmt.Errorf("journal segment authority JSON: %w", err)
 	}
 	return nil
 }
