@@ -42,6 +42,28 @@ func TestREADMEQuickStartRunsFromAnEmptyProject(t *testing.T) {
 	runReadmeCommand(t, "action", "apply", "--root", root, "--ref", checkpointRef, "--input", `{"summary":"durable checkpoint"}`, "--idempotency-key", "checkpoint-1")
 }
 
+func TestREADMERemainsProductFirstAndBounded(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := bytes.Count(raw, []byte{'\n'}); lines > 120 {
+		t.Fatalf("README grew beyond the concise product surface: %d lines", lines)
+	}
+	text := string(raw)
+	for _, required := range []string{
+		"lightweight control plane", "## How it works", "## Install",
+		"OpenAI Codex", "Claude Code", "GitHub Copilot CLI", "## Quick start",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("README omits product-first section %q", required)
+		}
+	}
+	if strings.Contains(text, "## 0.") {
+		t.Fatal("README contains release history; use CHANGELOG.md")
+	}
+}
+
 func TestCLIContextSupportsMaximumMCPRoleIDAtMinimumBudget(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "project")
 	if err := os.Mkdir(root, 0o700); err != nil {

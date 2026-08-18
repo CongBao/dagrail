@@ -32,10 +32,11 @@ review transition manually.
    `reuse_execution`, then perform the new semantic judgment separately.
 6. Apply only the returned `review.resolve` or `decision.record` action with one declared
    outcome and digest-only evidence refs. Do not merge, dispatch, close another Role's
-   resources, or perform the receiving controller's lifecycle action. If the apply
-   result is unknown after a crash, timeout, or lost response, a successor may replay
-   only the saved original ref, same RFC 8785 canonical JSON input value, and idempotency key to retrieve the same
-   idempotent result; never reuse that ref for a changed verdict or new intent.
+   resources, or perform the receiving controller's lifecycle action. If the apply call
+   crashes, times out, or loses its result, persist the pending action's original ref,
+   RFC 8785 canonical JSON input value, and idempotency key together. A successor session
+   may replay only that canonical-equivalent triple to retrieve the same result; never
+   reuse that ref for a changed verdict or new intent.
 7. Call `dag_pre_wait` before becoming passive and report any unresolved item outside
    this review Role to the controller by bounded count/target; do not expand unrelated
    paginated blocker or dependency-cut detail.

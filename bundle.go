@@ -11,3 +11,10 @@ import "embed"
 //
 //go:embed all:.agents all:.claude-plugin all:.codex-plugin all:.github/plugin all:.plugin all:assets all:hooks all:skills
 var PluginFS embed.FS
+
+// SchemaFS is the exact public contract schema set linked into the binary.
+// Contract digests are derived from these bytes instead of being copied into
+// Go source, removing a manual drift surface from every schema change.
+//
+//go:embed schemas/*.json
+var SchemaFS embed.FS

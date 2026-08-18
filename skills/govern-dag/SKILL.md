@@ -26,12 +26,12 @@ or `dagrail pre-wait` command, never a hand-built transition.
    the listed escalation boundaries still do.
 3. Advance work only through current controller-issued action refs. Preserve one stable
    idempotency key per intended action. Do not copy refs, leases, hashes, or Attempt IDs
-   between Roles, Nodes, projects, or sessions. The sole exception is recovery of an
-   action whose result is unknown because the call crashed, timed out, or lost its
-   response: persist that pending action's original ref, RFC 8785 canonical JSON input value, and idempotency
-   key together, and let a successor session replay that canonical-equivalent triple only to retrieve
-   the original idempotent result. Never pair the old ref with changed input, a new key,
-   a different Role/Node/project, or a new intent.
+   between Roles, Nodes, projects, or sessions. One recovery exception exists: when a
+   call crashes, times out, or loses its result, persist the pending action's original
+   ref, RFC 8785 canonical JSON input value, and idempotency key together. A successor
+   session may replay only that canonical-equivalent triple to retrieve the same result.
+   Never pair the saved ref with changed input, a new key, another Role/Node/project, or
+   a new intent.
 4. Keep semantic responsibilities in their typed Nodes. A task produces work, a review
    resolves approve/return, a decision records a closed human/LLM choice, a gate invokes
    its policy provider, and an effect owns the external saga. The control Role does not
@@ -46,8 +46,8 @@ or `dagrail pre-wait` command, never a hand-built transition.
    canonical request digest are unchanged. Missing legacy metadata or a same-ID adapter
    upgrade is a real blocker, not a reason to force reconciliation. Prefer native
    observation; otherwise provide only verified typed evidence. Transport acceptance,
-   session creation,
-   recipient-visible delivery, acceptance, completion, and DAG outcome are distinct.
+   session creation, recipient-visible delivery, acceptance, completion, and DAG
+   outcome are distinct.
 7. Follow `decision:`, `evidence-package:`, and `reuse-decision:` refs. A
    `reuse_execution` result permits policy reevaluation without rerunning the protected
    execution core; it is not approval.
@@ -74,9 +74,9 @@ import. Keep source-specific conversion code and vocabulary outside DAGrail.
 Authority adoption, rotation, and relocation are operator recovery transactions, not
 orchestrator actions. Freeze lifecycle writes and require an approved exact source head,
 backup, locator identity, reason, and idempotency key. Allocate a new key only for the
-first call of a genuinely new intent; after a crash, timeout, or unknown result, reuse
-the original key and every bound field exactly. If a replacement authority
-was already established under the wrong local runtime, use only the documented
+first call of a genuinely new intent. After a crash, timeout, or unknown result, reuse
+the original key and every bound field exactly. If a replacement authority was already
+established under the wrong local runtime, use the documented
 `recovery relocate-authority` continuation; never repeat adoption or edit/copy anchors,
 claims, journals, locators, or SQLite to simulate reattachment. After relocation, keep
 cutover false until Graph/history bootstrap and parity checks pass.

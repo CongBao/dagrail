@@ -6,12 +6,23 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/CongBao/dagrail/internal/compatibility"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
+
+func TestContractSourceDoesNotCopySchemaDigests(t *testing.T) {
+	raw, err := os.ReadFile("contract.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if regexp.MustCompile(`SchemaSHA256:\s*"sha256:[a-f0-9]{64}"`).Match(raw) {
+		t.Fatal("contract source contains a manually copied schema digest")
+	}
+}
 
 func TestBetaContractIsDeterministicAndNamesExactlySixMCPTools(t *testing.T) {
 	first, second := Current(), Current()

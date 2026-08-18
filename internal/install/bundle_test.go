@@ -112,6 +112,43 @@ func TestLinkedPluginBundleRequiresEverySkillAndHostHook(t *testing.T) {
 	}
 }
 
+func TestBundledSkillsShareTheClosedRuntimeSafetyContract(t *testing.T) {
+	files, _, _, err := linkedPluginBundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := map[string]string{}
+	for _, file := range files {
+		byPath[file.Path] = string(file.Data)
+	}
+	for _, skill := range []string{"govern-dag", "execute-dag-node", "review-dag-node"} {
+		body := byPath["plugins/dagrail/skills/"+skill+"/SKILL.md"]
+		if lines := strings.Count(body, "\n"); lines > 100 {
+			t.Fatalf("%s skill exceeds the bounded prompt surface: %d lines", skill, lines)
+		}
+		for _, required := range []string{
+			"dagrail doctor install", "dagrail context", "dag_pre_wait",
+			"pending action's original", "RFC 8785 canonical JSON input value", "idempotency key",
+			"successor", "canonical-equivalent triple",
+		} {
+			if !strings.Contains(body, required) {
+				t.Fatalf("%s skill omits runtime safety invariant %q", skill, required)
+			}
+		}
+		if !strings.Contains(body, "does not prove") && !strings.Contains(body, "not proof") {
+			t.Fatalf("%s skill treats discovery as runtime activation", skill)
+		}
+		if !strings.Contains(body, "hand-") && !strings.Contains(body, "manually") {
+			t.Fatalf("%s skill omits the manual-transition prohibition", skill)
+		}
+		for _, forbidden := range []string{"tropical", "M1-S", "OpenSpec"} {
+			if strings.Contains(strings.ToLower(body), strings.ToLower(forbidden)) {
+				t.Fatalf("%s skill contains project-specific vocabulary %q", skill, forbidden)
+			}
+		}
+	}
+}
+
 func TestLinkedPluginBundleResolvesBrandAssets(t *testing.T) {
 	files, _, _, err := linkedPluginBundle()
 	if err != nil {

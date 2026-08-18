@@ -1,6 +1,11 @@
 package contract
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+
+	dagbundle "github.com/CongBao/dagrail"
 	"github.com/CongBao/dagrail/internal/commandcatalog"
 	"github.com/CongBao/dagrail/internal/compatibility"
 	"github.com/CongBao/dagrail/internal/gitartifact"
@@ -87,6 +92,22 @@ type Report struct {
 	Promises                   []string                 `json:"compatibilityPromises"`
 }
 
+func schemaDigest(path string) string {
+	raw, err := dagbundle.SchemaFS.ReadFile(path)
+	if err != nil {
+		panic(fmt.Sprintf("embedded public schema %s: %v", path, err))
+	}
+	digest := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(digest[:])
+}
+
+func documentedSurface(apiVersion, stability, schemaPath string) DocumentedSurface {
+	return DocumentedSurface{
+		APIVersion: apiVersion, Stability: stability, SchemaPath: schemaPath,
+		SchemaSHA256: schemaDigest(schemaPath),
+	}
+}
+
 func Current() Report {
 	return Report{
 		APIVersion: "dagrail.io/v1beta1",
@@ -97,154 +118,35 @@ func Current() Report {
 			APIVersion:   "dagrail.io/v1alpha1",
 			Stability:    "additive",
 			SchemaPath:   "schemas/graph-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:f8916758141af9be1bead54702eb03eb23add6ab3f5c452edf4e43b65a5c1f66",
+			SchemaSHA256: schemaDigest("schemas/graph-v1alpha1.schema.json"),
 			Capabilities: []string{"dynamic-graph", "hierarchical-subgraphs", "historical-lifecycle-import", "lifecycle-projection", "positive-predicate-ast", "resource-capacities", "resource-requests", "role-leases"},
 		},
-		GraphPatch: DocumentedSurface{
-			APIVersion: "dagrail.io/v1alpha1", Stability: "additive-two-phase-change",
-			SchemaPath:   "schemas/graph-patch-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:6bf72510e816b7597114418cd9ba887acc09b24fd7bef27f8880dca89396b26e",
-		},
-		CLI: VersionedSurface{APIVersion: "dagrail.io/cli/v1beta1", Stability: "additive"},
-		CommandCatalog: DocumentedSurface{
-			APIVersion:   commandcatalog.APIVersion,
-			Stability:    "additive-machine-discovery",
-			SchemaPath:   "schemas/command-catalog-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:1d9b40770dca0a7bdd382de612f866609bc454f631f6fbc23aecbbf610bc792d",
-		},
-		CLIError: DocumentedSurface{
-			APIVersion:   "dagrail.io/cli-error/v1alpha1",
-			Stability:    "additive-opt-in-errors",
-			SchemaPath:   "schemas/cli-error-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:ce7c541fa46c92182cbeef29a181efec5f6fd70081d9a0048e1839d2eb531ff1",
-		},
-		DecisionRecord: DocumentedSurface{
-			APIVersion:   "dagrail.io/decision-record/v1alpha1",
-			Stability:    "additive-journal-authority",
-			SchemaPath:   "schemas/decision-record-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:976d23474541ed2ad4715bcebd4da7b01d2664d6d10282d1d835ab0c15fb8fb0",
-		},
-		Installation: DocumentedSurface{
-			APIVersion:   install.InstallationDiagnosticAPIVersion,
-			Stability:    "additive-local-diagnostic",
-			SchemaPath:   "schemas/installation-diagnostic-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:d4580e50ff9b9f1f219dc46d9d49b7ff71a1554734ab7410ef46b1a70cdea884",
-		},
-		HistoricalMatrix: DocumentedSurface{
-			APIVersion:   compatibility.APIVersion,
-			Stability:    "closed-beta-window",
-			SchemaPath:   "schemas/historical-binary-matrix-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:8dc7d7d5dc4479539aae02c8be3e47310162659506745e9b24d708c29f542536",
-		},
-		Readiness: DocumentedSurface{
-			APIVersion:   "dagrail.io/readiness-decision/v1alpha1",
-			Stability:    "additive-structural-decision",
-			SchemaPath:   "schemas/readiness-decision-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:652cf2651fda95f639be310b0ffaccb7865a150ea79bd8356d4a91695a70a9dc",
-		},
-		UI: DocumentedSurface{
-			APIVersion:   "dagrail.io/ui/v1beta2",
-			Stability:    "additive-read-only",
-			SchemaPath:   "schemas/ui-api-v1beta2.schema.json",
-			SchemaSHA256: "sha256:d5a94ce72281e53ab61375037792f9f2f985191fa287a3727880ee15545ab8bc",
-		},
-		Security: DocumentedSurface{
-			APIVersion:   "dagrail.io/security/v1alpha1",
-			Stability:    "additive-local-audit",
-			SchemaPath:   "schemas/security-audit-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:134f80395106519ded01e9bb1c7ac518e3bc36fd415c106610d453e8a6b8597a",
-		},
-		JournalVerification: DocumentedSurface{
-			APIVersion:   "dagrail.io/journal-verification/v1alpha1",
-			Stability:    "additive-read-only",
-			SchemaPath:   "schemas/journal-verification-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:2a05bc82ce706e9744745fc2aee3a32f52498dc47971dc4131a416983c0782c4",
-		},
-		PluginConformance: DocumentedSurface{
-			APIVersion:   install.PluginConformanceAPIVersion,
-			Stability:    "additive-local-diagnostic",
-			SchemaPath:   "schemas/plugin-conformance-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:ea770c501e2764bf266ce89f554c8816f57d39ffd38a4c968119eb1999020e47",
-		},
-		Support: DocumentedSurface{
-			APIVersion:   service.SupportAPIVersion,
-			Stability:    "additive-shareable-diagnostic",
-			SchemaPath:   "schemas/support-report-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:d8cbae42d6387e8e0d63eea11c7b2980d9518498a03845ff8f8a05afc4dc9806",
-		},
-		Recovery: DocumentedSurface{
-			APIVersion:   service.RecoveryAPIVersion,
-			Stability:    "additive-read-only-rehearsal",
-			SchemaPath:   "schemas/recovery-rehearsal-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:8a465d234f701ee98247117021f92657f603161aeb16f00a3ae3c1537e58b514",
-		},
-		AuthorityAdoption: DocumentedSurface{
-			APIVersion:   service.AuthorityAdoptionAPIVersion,
-			Stability:    "alpha-fresh-identity-migration",
-			SchemaPath:   "schemas/authority-adoption-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:d01a2416b7176a5261d93396cf3ea73d13f545b56ab216bdb351ba8a1bb49d04",
-		},
-		AuthorityRotation: DocumentedSurface{
-			APIVersion:   service.AuthorityRotationAPIVersion,
-			Stability:    "alpha-non-destructive-recovery",
-			SchemaPath:   "schemas/authority-rotation-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:a8785ac0e39ccbf99cf4eec8921f122fda7e9839312a4783b563676f2dfbe41f",
-		},
-		AuthorityRelocation: DocumentedSurface{
-			APIVersion:   service.AuthorityRelocationAPIVersion,
-			Stability:    "alpha-path-bound-recovery",
-			SchemaPath:   "schemas/authority-relocation-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:1f3b05a67b3b71c5c042a7e8f35e77e44befb5b542bc66505bb94fc58dedb969",
-		},
-		GitArtifactClosure: DocumentedSurface{
-			APIVersion:   gitartifact.ClosureAPIVersion,
-			Stability:    "alpha-read-only-git-evidence",
-			SchemaPath:   "schemas/git-artifact-closure-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:b7adb1dad09ddf0cb255ad3b150b90e4f275a30348d69231557d668f31b0d06d",
-		},
-		GitIntegrationScope: DocumentedSurface{
-			APIVersion:   gitartifact.ScopeAPIVersion,
-			Stability:    "alpha-read-only-git-evidence",
-			SchemaPath:   "schemas/git-integration-scope-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:8f854e364fe33de5babdb20eb927faee209cedf5403347834d6ab0b5e0d2ec29",
-		},
-		ReleaseQualification: DocumentedSurface{
-			APIVersion:   "dagrail.io/release-qualification/v1alpha1",
-			Stability:    "additive-structural-candidate",
-			SchemaPath:   "schemas/release-qualification-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:6a7d06ede063f82112389f0f801a8a756088175fb4c93a7527bda55fce9c5ea9",
-		},
-		ReleaseManifest: DocumentedSurface{
-			APIVersion:   dagrelease.ManifestAPIVersion,
-			Stability:    "additive-distribution-contract",
-			SchemaPath:   "schemas/release-manifest-v1beta1.schema.json",
-			SchemaSHA256: "sha256:cb04a29967fbe1a150c0dbc1f9d780cc5d7f494680a5d1eae173728ea4c9980f",
-		},
-		ReleaseVerification: DocumentedSurface{
-			APIVersion:   dagrelease.VerificationAPIVersion,
-			Stability:    "additive-offline-verification",
-			SchemaPath:   "schemas/release-verification-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:9a23a60cdef7b2444f5deb0ed802935b1f2052aea3156582eb3e0244989cb283",
-		},
-		LifecycleMigrationV1Alpha1: DocumentedSurface{
-			APIVersion:   service.LifecycleMigrationAPIVersion,
-			Stability:    "alpha-operator-import-compatible",
-			SchemaPath:   "schemas/lifecycle-migration-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:448a8f24810af5bb285881cceb24fecb6656a31cf61f0ae33a0ac08ecbcad093",
-		},
-		LifecycleMigration: DocumentedSurface{
-			APIVersion:   service.LifecycleMigrationBundleAPIVersion,
-			Stability:    "alpha-operator-import",
-			SchemaPath:   "schemas/lifecycle-migration-v1beta1.schema.json",
-			SchemaSHA256: "sha256:c25a88b91b7d99f8fbf23a0e00e027cc53d88710a2106f6dc0afdf6b0eb1f761",
-		},
-		LifecycleProjection: DocumentedSurface{
-			APIVersion:   service.LifecycleProjectionAPIVersion,
-			Stability:    "alpha-rebuildable-projection",
-			SchemaPath:   "schemas/lifecycle-projection-v1alpha1.schema.json",
-			SchemaSHA256: "sha256:b79c3eb4ba919baa57d27191cc2336e31644a66ec8c0533ff66e0acd3965a03c",
-		},
-		Provider: VersionedSurface{APIVersion: sdk.APIVersion, Stability: "source-compatible"},
+		GraphPatch:                 documentedSurface("dagrail.io/v1alpha1", "additive-two-phase-change", "schemas/graph-patch-v1alpha1.schema.json"),
+		CLI:                        VersionedSurface{APIVersion: "dagrail.io/cli/v1beta1", Stability: "additive"},
+		CommandCatalog:             documentedSurface(commandcatalog.APIVersion, "additive-machine-discovery", "schemas/command-catalog-v1alpha1.schema.json"),
+		CLIError:                   documentedSurface("dagrail.io/cli-error/v1alpha1", "additive-opt-in-errors", "schemas/cli-error-v1alpha1.schema.json"),
+		DecisionRecord:             documentedSurface("dagrail.io/decision-record/v1alpha1", "additive-journal-authority", "schemas/decision-record-v1alpha1.schema.json"),
+		Installation:               documentedSurface(install.InstallationDiagnosticAPIVersion, "additive-local-diagnostic", "schemas/installation-diagnostic-v1alpha1.schema.json"),
+		HistoricalMatrix:           documentedSurface(compatibility.APIVersion, "closed-beta-window", "schemas/historical-binary-matrix-v1alpha1.schema.json"),
+		Readiness:                  documentedSurface("dagrail.io/readiness-decision/v1alpha1", "additive-structural-decision", "schemas/readiness-decision-v1alpha1.schema.json"),
+		UI:                         documentedSurface("dagrail.io/ui/v1beta2", "additive-read-only", "schemas/ui-api-v1beta2.schema.json"),
+		Security:                   documentedSurface("dagrail.io/security/v1alpha1", "additive-local-audit", "schemas/security-audit-v1alpha1.schema.json"),
+		JournalVerification:        documentedSurface("dagrail.io/journal-verification/v1alpha1", "additive-read-only", "schemas/journal-verification-v1alpha1.schema.json"),
+		PluginConformance:          documentedSurface(install.PluginConformanceAPIVersion, "additive-local-diagnostic", "schemas/plugin-conformance-v1alpha1.schema.json"),
+		Support:                    documentedSurface(service.SupportAPIVersion, "additive-shareable-diagnostic", "schemas/support-report-v1alpha1.schema.json"),
+		Recovery:                   documentedSurface(service.RecoveryAPIVersion, "additive-read-only-rehearsal", "schemas/recovery-rehearsal-v1alpha1.schema.json"),
+		AuthorityAdoption:          documentedSurface(service.AuthorityAdoptionAPIVersion, "alpha-fresh-identity-migration", "schemas/authority-adoption-v1alpha1.schema.json"),
+		AuthorityRotation:          documentedSurface(service.AuthorityRotationAPIVersion, "alpha-non-destructive-recovery", "schemas/authority-rotation-v1alpha1.schema.json"),
+		AuthorityRelocation:        documentedSurface(service.AuthorityRelocationAPIVersion, "alpha-path-bound-recovery", "schemas/authority-relocation-v1alpha1.schema.json"),
+		GitArtifactClosure:         documentedSurface(gitartifact.ClosureAPIVersion, "alpha-read-only-git-evidence", "schemas/git-artifact-closure-v1alpha1.schema.json"),
+		GitIntegrationScope:        documentedSurface(gitartifact.ScopeAPIVersion, "alpha-read-only-git-evidence", "schemas/git-integration-scope-v1alpha1.schema.json"),
+		ReleaseQualification:       documentedSurface("dagrail.io/release-qualification/v1alpha1", "additive-structural-candidate", "schemas/release-qualification-v1alpha1.schema.json"),
+		ReleaseManifest:            documentedSurface(dagrelease.ManifestAPIVersion, "additive-distribution-contract", "schemas/release-manifest-v1beta1.schema.json"),
+		ReleaseVerification:        documentedSurface(dagrelease.VerificationAPIVersion, "additive-offline-verification", "schemas/release-verification-v1alpha1.schema.json"),
+		LifecycleMigrationV1Alpha1: documentedSurface(service.LifecycleMigrationAPIVersion, "alpha-operator-import-compatible", "schemas/lifecycle-migration-v1alpha1.schema.json"),
+		LifecycleMigration:         documentedSurface(service.LifecycleMigrationBundleAPIVersion, "alpha-operator-import", "schemas/lifecycle-migration-v1beta1.schema.json"),
+		LifecycleProjection:        documentedSurface(service.LifecycleProjectionAPIVersion, "alpha-rebuildable-projection", "schemas/lifecycle-projection-v1alpha1.schema.json"),
+		Provider:                   VersionedSurface{APIVersion: sdk.APIVersion, Stability: "source-compatible"},
 		Journal: JournalContract{
 			ReadableSegmentSchemas: []int{journal.LegacySegmentSchemaVersion, journal.PreviousSegmentSchemaVersion, journal.CurrentSegmentSchemaVersion, journal.AuthorityFenceSchemaVersion},
 			WriteSegmentSchema:     journal.CurrentSegmentSchemaVersion,
@@ -273,7 +175,7 @@ func Current() Report {
 			"command discovery and completion are generated from one bounded catalog",
 			"opt-in CLI error envelopes keep stable broad exit classes and preserve interruption",
 			"host plugin commands are output-bounded, time-bounded, and cancellation-aware",
-			"the v0.10.0 through v0.23.1 beta binaries are immutable inputs to the current upgrade and rollback matrix",
+			"the v0.10.0 through v0.24.0 beta binaries are immutable inputs to the current upgrade and rollback matrix",
 			"readiness can declare external-validation readiness but cannot infer production validation or 1.0 readiness",
 			"the loopback explorer rejects non-loopback Host values and cross-port Origin values without exposing CORS access",
 			"SQLite remains disposable and rebuildable from the verified journal",

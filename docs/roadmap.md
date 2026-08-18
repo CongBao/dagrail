@@ -223,6 +223,17 @@ vocabulary, repository paths, and cutover policy are not shipped as DAGrail cont
 - make the read-only Explorer open on a clear collapsed Project DAG while preserving the
   complete Execution Detail view and URL-restorable, accessible expansion.
 
+## v0.25.0 — Entropy control and release hardening
+
+- derive compatibility digests from the exact embedded public schemas instead of
+  maintaining a second hand-copied digest table;
+- keep the three bundled agent skills independently usable while enforcing one tested
+  MCP/CLI, bounded-context, pre-wait, and exact unknown-result retry contract;
+- separate maximum-size projection algorithm tests from journal/HTTP integration
+  fixtures so cross-platform race qualification stays complete and predictably bounded;
+- keep the README and public repository metadata focused on product purpose, supported
+  harnesses, verified installation, and the shortest executable first workflow.
+
 ## Post-v0.23 field-validation backlog
 
 These are repository-neutral observations from the first live writer cutover. They are

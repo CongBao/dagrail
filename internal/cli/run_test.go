@@ -198,6 +198,12 @@ func TestMissingActionSecretReadSurfacesFailClosedWithoutMutation(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Establish the writable signing material explicitly. Context may fit without
+	// emitting a signed action on some platforms, so its existence is not a
+	// reliable precondition for this missing-secret test.
+	if _, err := svc.ListActions("worker", "task"); err != nil {
+		t.Fatal(err)
+	}
 	contextRaw, err := svc.Context("worker", "worker", "task", 512)
 	if err != nil {
 		t.Fatal(err)

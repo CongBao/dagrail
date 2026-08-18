@@ -461,7 +461,10 @@ func TestExplorerDenseAggregateEdgeIndexIsBoundedAndRecoverable(t *testing.T) {
 		APIVersion: domain.GraphAPIVersion, Kind: domain.GraphKind,
 		Metadata: domain.GraphMetadata{Name: "dense aggregate edges"},
 	}
-	const groupCount = 135
+	// Keep the public HTTP/pagination contract integrated without rebuilding a
+	// 9k-edge journal under every race-detector run. The maximum-size algorithm
+	// boundary is exercised directly in api_internal_test.go.
+	const groupCount = 20
 	for index := 0; index < groupCount; index++ {
 		groupID := fmt.Sprintf("group-%03d", index)
 		nodeID := fmt.Sprintf("node-%03d", index)
@@ -497,61 +500,12 @@ func TestExplorerDenseAggregateEdgeIndexIsBoundedAndRecoverable(t *testing.T) {
 	if err := json.Unmarshal(getBody(t, endpoint, http.StatusOK), &page); err != nil {
 		t.Fatal(err)
 	}
-	if page.Page.Total != wantEdges || page.Page.Cursor != 100 || len(page.AggregateEdges) != 100 || page.Page.NextCursor == nil || *page.Page.NextCursor != 200 {
+	wantTail := wantEdges - 100
+	if page.Page.Total != wantEdges || page.Page.Cursor != 100 || len(page.AggregateEdges) != wantTail || page.Page.NextCursor != nil || page.Page.Truncated {
 		t.Fatalf("dense aggregate edge continuation is incomplete: %#v", page)
 	}
 	_ = getBody(t, endpoint+"&groupState=expanded", http.StatusNotFound)
 	validateExplorerContract(t, topology, page)
-}
-
-func TestExplorerCompactAllGroupDisclosureCoversMaximumMultibyteIDs(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
-	svc, err := service.Init(root, "compact group disclosure")
-	if err != nil {
-		t.Fatal(err)
-	}
-	graph := domain.GraphDefinition{APIVersion: domain.GraphAPIVersion, Kind: domain.GraphKind, Metadata: domain.GraphMetadata{Name: "compact disclosure"}}
-	for index := 0; index < domain.MaxGraphGroups; index++ {
-		groupID := fmt.Sprintf("组-%03d-%s", index, strings.Repeat("界", 52))
-		nodeID := fmt.Sprintf("node-%03d", index)
-		graph.Spec.Groups = append(graph.Spec.Groups, domain.GroupDefinition{ID: groupID, Title: groupID, Kind: "work-unit", SummaryNodeID: nodeID, CollapsedByDefault: true})
-		graph.Spec.Nodes = append(graph.Spec.Nodes, domain.NodeDefinition{ID: nodeID, Kind: "milestone", Title: nodeID, GroupID: groupID, Outcomes: []domain.Outcome{{ID: "done", Class: "success"}}})
-	}
-	raw, _ := json.Marshal(graph)
-	graphPath := filepath.Join(root, "groups.json")
-	if err := os.WriteFile(graphPath, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.ImportGraph(graphPath, "graph", "governor"); err != nil {
-		t.Fatal(err)
-	}
-	server := httptest.NewServer(ui.Handler(svc))
-	defer server.Close()
-
-	var expanded ui.TopologyPage
-	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/topology?groupState=expanded&limit=500", http.StatusOK), &expanded); err != nil {
-		t.Fatal(err)
-	}
-	if len(expanded.ExpandedGroupIDs) != domain.MaxGraphGroups || len(expanded.Nodes) != domain.MaxGraphGroups {
-		t.Fatalf("compact expand-all did not cover every legal group: groups=%d nodes=%d", len(expanded.ExpandedGroupIDs), len(expanded.Nodes))
-	}
-	firstGroup := url.QueryEscape(graph.Spec.Groups[0].ID)
-	var exception ui.TopologyPage
-	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/topology?groupState=expanded&collapsed="+firstGroup+"&limit=500", http.StatusOK), &exception); err != nil {
-		t.Fatal(err)
-	}
-	if len(exception.ExpandedGroupIDs) != domain.MaxGraphGroups-1 || len(exception.Nodes) != domain.MaxGraphGroups-1 {
-		t.Fatalf("per-group exception did not override compact disclosure: expanded=%d nodes=%d", len(exception.ExpandedGroupIDs), len(exception.Nodes))
-	}
-	var collapsed ui.TopologyPage
-	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/topology?groupState=collapsed&limit=500", http.StatusOK), &collapsed); err != nil {
-		t.Fatal(err)
-	}
-	if len(collapsed.ExpandedGroupIDs) != 0 || len(collapsed.Nodes) != 0 || len(collapsed.Groups) != domain.MaxGraphGroups {
-		t.Fatalf("compact collapse-all lost groups or exposed nodes: groups=%d nodes=%d expanded=%d", len(collapsed.Groups), len(collapsed.Nodes), len(collapsed.ExpandedGroupIDs))
-	}
-	validateExplorerContract(t, expanded, exception, collapsed)
 }
 
 func TestExplorerGroupStateIsOpaqueAndReadSurfacesAreByteNonmutating(t *testing.T) {

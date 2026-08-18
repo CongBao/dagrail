@@ -2,6 +2,27 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.25.0 — 2026-08-18
+
+### Changed
+
+- public contract schema digests are now derived from the exact schemas embedded in the
+  release binary, removing the manual digest-copy step from every schema change;
+- bundled governance, execution, and review skills share an executable safety contract
+  for MCP activation checks, CLI fallback, bounded pre-wait, and the sole exact
+  cross-session retry exception;
+- the README now leads with the product problem, architecture, supported harnesses, and
+  verified one-command install while keeping the source-independent quick start short;
+- GitHub artifact upload and build-provenance actions use commit-pinned Node 24 releases.
+
+### Fixed
+
+- the missing action-secret read-surface test now establishes its writable precondition
+  explicitly on every supported OS before testing fail-closed inspection;
+- maximum grouped-topology and dense aggregate-edge algorithm checks use direct immutable
+  State fixtures, while smaller HTTP integration tests retain endpoint/schema coverage;
+  this preserves the 256-group and 9,045-edge evidence without timing out macOS race CI.
+
 ## 0.24.0 — 2026-08-18
 
 ### Added

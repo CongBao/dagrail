@@ -76,7 +76,7 @@ digests, context budgets, and command inventory implemented by the current binar
   additive in-version; the four broad error classes and their exit codes remain stable
   through the beta line. Completion is generated from the catalog, not an independent
   authority. Installation diagnostics remain path-free and omit raw host output.
-- HistoricalBinaryMatrix v1alpha1 closes the v0.10.0–v0.23.1 input window by exact commit.
+- HistoricalBinaryMatrix v1alpha1 closes the v0.10.0–v0.24.0 input window by exact commit.
 - LifecycleMigration v1alpha1/v1beta1 keep v0.22 Effect payloads readable. The additive
   `adapterVersion`/`adapterSchemaHash` fields are an optional pair on imported history;
   current writers emit both, while an unbound nonterminal Effect cannot be reconciled

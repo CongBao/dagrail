@@ -23,10 +23,10 @@ as appropriate. Never replace a missing tool with a hand-authored lifecycle enve
    with `dag_inspect` only when the bounded package is insufficient.
 3. Apply only the current `allowedActions[].ref` with a stable idempotency key. Never
    construct a transition, outcome envelope, hash, or resource ID yourself. If an apply
-   call crashes, times out, or returns no definitive result, preserve its original ref,
-   same RFC 8785 canonical JSON input value, and idempotency key as one pending-action record. A replacement session
-   may replay only that canonical-equivalent triple to retrieve the idempotent result; it must not use
-   the old ref for changed input, a new key, or new work.
+   call crashes, times out, or loses its result, persist the pending action's original
+   ref, RFC 8785 canonical JSON input value, and idempotency key together. A successor
+   session may replay only that canonical-equivalent triple to retrieve the same result.
+   Never use the saved ref for changed input, a new key, or new work.
 4. Start with `node.start` or continue the current Attempt. After material progress and
    before yielding, apply `attempt.checkpoint` with a replacement-ready summary and
    digest-only evidence refs. Exclude prompts, secrets, transcripts, and artifact bodies.
