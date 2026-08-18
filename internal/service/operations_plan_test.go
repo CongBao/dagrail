@@ -346,7 +346,7 @@ func TestPreWaitBoundsTenThousandReadyNodesAndPaginatesDetail(t *testing.T) {
 	if page.Total != 10000 || len(page.Items) != preWaitPageLimit || !strings.HasPrefix(page.NextRef, "pre-wait-page:") || page.Items[0].Category != "readyNode" || page.JournalHead == "" || !strings.HasPrefix(page.InventoryDigest, "sha256:") {
 		t.Fatalf("large pre-wait detail is not paginated: %#v", page)
 	}
-	if elapsed := time.Since(started); elapsed > 5*time.Second {
+	if elapsed := time.Since(started); elapsed > 5*time.Second*time.Duration(raceTestMultiplier) {
 		t.Fatalf("large pre-wait audit and first page took %s", elapsed)
 	}
 }
@@ -849,7 +849,7 @@ func TestProjectAllowedActionsIndexesAuthorizedNodesEffectsAndResourcesOnce(t *t
 	if len(actions) != size*6 {
 		t.Fatalf("indexed operations returned %d actions, want %d", len(actions), size*6)
 	}
-	if elapsed := time.Since(started); elapsed > 2*time.Second {
+	if elapsed := time.Since(started); elapsed > 2*time.Second*time.Duration(raceTestMultiplier) {
 		t.Fatalf("authorized action planning appears to rescan Nodes/Effects/Resources: %s", elapsed)
 	}
 }

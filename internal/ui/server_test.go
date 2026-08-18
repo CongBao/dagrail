@@ -279,7 +279,7 @@ func TestExplorerLargeGraphUsesDeterministicPagesAndTopologyCaps(t *testing.T) {
 	if len(focused.Nodes) != 5 || len(focused.Edges) != 4 || focused.Page.Truncated {
 		t.Fatalf("focused neighborhood mismatch: nodes=%d edges=%d page=%+v", len(focused.Nodes), len(focused.Edges), focused.Page)
 	}
-	if elapsed := time.Since(started); elapsed > 5*time.Second {
+	if elapsed := time.Since(started); elapsed > 5*time.Second*time.Duration(raceTestMultiplier) {
 		t.Fatalf("large explorer API gate exceeded 5s: %v", elapsed)
 	}
 }

@@ -2,6 +2,17 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.23.1 — 2026-08-18
+
+### Fixed
+
+- the Git closure process-count fixture now builds its 64-commit history in one
+  deterministic `fast-import` transaction instead of relying on repeated loose-object
+  publication during a loaded CI run;
+- large-graph wall-clock regression gates retain their ordinary-build thresholds while
+  allowing a fixed race-detector multiplier, so instrumentation and shared-runner load
+  do not misclassify linear algorithms as quadratic regressions.
+
 ## 0.23.0 — 2026-08-18
 
 ### Added

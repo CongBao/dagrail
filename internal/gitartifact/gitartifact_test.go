@@ -467,19 +467,29 @@ func TestVerifyUsesFixedGitProcessesAndPropagatesCancellation(t *testing.T) {
 	}
 	repository := t.TempDir()
 	gitTest(t, repository, "init")
-	gitTest(t, repository, "config", "user.name", "DAGrail Test")
-	gitTest(t, repository, "config", "user.email", "test@example.invalid")
 	manifest := ClosureManifest{APIVersion: ClosureAPIVersion, Kind: ClosureKind, Refs: []RefExpectation{{Name: "refs/heads/proof"}}}
+	var stream strings.Builder
 	for index := 0; index < 64; index++ {
-		if err := os.WriteFile(filepath.Join(repository, "value.txt"), []byte(fmt.Sprintf("%d\n", index)), 0o600); err != nil {
-			t.Fatal(err)
+		blobMark, commitMark := index*2+1, index*2+2
+		value := fmt.Sprintf("%d\n", index)
+		message := fmt.Sprintf("commit %d\n", index)
+		fmt.Fprintf(&stream, "blob\nmark :%d\ndata %d\n%s", blobMark, len(value), value)
+		fmt.Fprintf(&stream, "commit refs/heads/work\nmark :%d\ncommitter DAGrail Test <test@example.invalid> %d +0000\ndata %d\n%s", commitMark, index, len(message), message)
+		if index > 0 {
+			fmt.Fprintf(&stream, "from :%d\n", commitMark-2)
 		}
-		gitTest(t, repository, "add", "value.txt")
-		gitTest(t, repository, "commit", "-m", fmt.Sprintf("commit %d", index))
-		commit := gitTest(t, repository, "rev-parse", "HEAD")
+		fmt.Fprintf(&stream, "M 100644 :%d value.txt\n\n", blobMark)
+	}
+	stream.WriteString("done\n")
+	gitTestInput(t, repository, stream.String(), "fast-import", "--quiet")
+	commits := strings.Fields(gitTest(t, repository, "rev-list", "--reverse", "refs/heads/work"))
+	if len(commits) != 64 {
+		t.Fatalf("fast-import created %d commits, want 64", len(commits))
+	}
+	for index, commit := range commits {
 		manifest.Objects = append(manifest.Objects, ObjectExpectation{Name: fmt.Sprintf("commit-%02d", index), OID: commit, Type: "commit", Tree: gitTest(t, repository, "show", "-s", "--format=%T", commit), Parents: strings.Fields(gitTest(t, repository, "show", "-s", "--format=%P", commit)), RetainedBy: []string{"refs/heads/proof"}})
 	}
-	head := gitTest(t, repository, "rev-parse", "HEAD")
+	head := commits[len(commits)-1]
 	gitTest(t, repository, "update-ref", "refs/heads/proof", head)
 	manifest.Refs[0].OID = head
 
