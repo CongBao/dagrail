@@ -28,7 +28,7 @@ candidate still reports production adoption gaps explicitly.
 | Disaster recovery | exact-prefix restore, legacy upcast, stale/deleted projection, independent rebuild | identical state and logical projection fingerprints without live mutation |
 | Release artifacts | missing/extra/mutated files, duplicate/unsorted checksums, unsafe archives, invalid SPDX, identity drift | one closed 12-payload manifest and schema-valid offline verification |
 | Operator automation | unknown commands, cancellation, oversized errors, catalog/completion drift, missing harnesses | schema-valid bounded errors/catalogs, stable exit classes, cancellation, and path-free installation checks |
-| Historical binaries | pinned v0.10–v0.22 source commits plus current candidate | every binary builds; adjacent runtime upgrade/rollback/re-forward works; current recovers a v0.10 journal and the v0.22 replacement-relocation path |
+| Historical binaries | pinned v0.10–v0.26.0 source commits plus current candidate | every binary builds; adjacent runtime upgrade/rollback/re-forward works; current recovers a v0.10 journal and the v0.22 replacement-relocation path |
 | Validation-subject boundary | ADR, migration contract, reducer allowlist, and self-contained public schema | repository-neutral conversion remains external and native lifecycle event surfaces stay closed; independent cold review checks semantic coupling that structural qualification cannot prove |
 | Localhost browser boundary | DNS-rebinding Host and cross-port localhost Origin | 421/403 rejection, no CORS, same-origin resource/opener policy, read-only routes unchanged |
 
@@ -37,12 +37,13 @@ generates SPDX inventories through the pinned release action, aggregates the art
 and runs the same manifest generator/verifier used by tag publication. This rehearsal
 does not publish, attest, or claim that a user installed the resulting artifacts.
 
-The rename is the logical commit point. A returned error after rename is deliberately
-ambiguous: callers reconcile by replaying the journal and repeating the stable
-idempotency key. Directory durability cannot be perfectly simulated across power loss;
-POSIX and Windows builds both use native containing-directory flushes and surface every
-flush error. Platform-native tests exercise those paths; cross-compilation alone is not
-treated as directory-durability evidence.
+The atomic namespace publication is the logical commit point. A returned error after
+publication is deliberately ambiguous: callers reconcile by replaying the journal and
+repeating the stable idempotency key. Directory durability cannot be perfectly
+simulated across power loss; POSIX uses containing-directory fsync, while Windows uses
+write-through namespace moves and directory identity revalidation because directory
+`FlushFileBuffers` is not a supported portable contract. Platform-native tests exercise
+those paths; cross-compilation alone is not treated as directory-durability evidence.
 
 ## Run locally
 
@@ -108,7 +109,7 @@ reports drift if that independently active source advances later.
 
 The `historical-binary-compatibility` CI and tag-release job uses a full Git history and
 the closed manifest in `internal/compatibility/beta-window.json`. Unlike reducer-only
-fixtures, it compiles and executes each real v0.10.0–v0.25.3 source snapshot. The test is
+fixtures, it compiles and executes each real v0.10.0–v0.26.0 source snapshot. The test is
 behind the `historical` build tag so normal unit loops remain fast:
 
 ```sh

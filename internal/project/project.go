@@ -912,7 +912,7 @@ func writeAtomicExact(path string, data []byte, mode os.FileMode) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	if err := os.Link(temporaryName, path); err != nil {
+	if err := publishPathExclusive(temporaryName, path); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			existing, readErr := os.ReadFile(path)
 			if readErr == nil && bytes.Equal(existing, data) {
@@ -953,6 +953,36 @@ func writeAtomicReplace(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return syncDirectoryChain(filepath.Dir(path))
+}
+
+// PublishPathExclusive atomically publishes a same-volume staged path without
+// replacing an existing destination. Callers must still call SyncDirectory on
+// the containing directory after the publication point. Windows performs the
+// namespace move with MOVEFILE_WRITE_THROUGH; POSIX callers close durability
+// with the containing-directory fsync.
+func PublishPathExclusive(source, destination string) error {
+	return publishPathExclusive(source, destination)
+}
+
+// PublishPathAtomic moves a same-volume staged path into place. The caller
+// owns any no-replacement invariant and must still call SyncDirectory after
+// the publication point. Windows makes the move write-through.
+func PublishPathAtomic(source, destination string) error {
+	return publishPathAtomic(source, destination)
+}
+
+// PublishDirectoryExclusive atomically publishes a staged directory without
+// replacing a populated destination. It exists separately from
+// PublishPathExclusive because POSIX hard links cannot target directories.
+func PublishDirectoryExclusive(source, destination string) error {
+	return publishDirectoryExclusive(source, destination)
+}
+
+// ReplacePathAtomic atomically replaces a same-volume destination. Callers
+// must still call SyncDirectory on the containing directory. Windows uses
+// MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH.
+func ReplacePathAtomic(source, destination string) error {
+	return replaceFileAtomic(source, destination)
 }
 
 func ensureDurableDirectory(path string) error {
@@ -1027,7 +1057,7 @@ func ensureDurableDirectoryWithin(path, boundary string) error {
 	}
 	for _, component := range strings.Split(filepath.Clean(relative), string(filepath.Separator)) {
 		next := filepath.Join(current, component)
-		if err := os.Mkdir(next, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		if err := createDirectoryEntry(next, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 			return err
 		}
 		info, err := os.Lstat(next)

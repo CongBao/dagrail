@@ -19,9 +19,10 @@ validity, published schema digests, plugin metadata versions, the linked closed 
 CI/release gate declarations, and commit-pinned workflow actions. `--project PATH` adds
 inspection-only security and recovery evidence from a real DAGrail project.
 
-The tag workflow also rebuilds the pinned v0.10–v0.22 beta binaries and the tag
-candidate. Publication depends on adjacent runtime upgrade/rollback/re-forward tests
-and candidate recovery of a v0.10-created journal. `dagrail readiness --source .` must
+The tag workflow also rebuilds the pinned v0.10–v0.26.0 beta binaries and the tag
+candidate. Publication depends on adjacent runtime upgrade/rollback/re-forward tests,
+candidate recovery of a v0.10-created journal, and a native Windows full-test job at
+the exact tag SHA. `dagrail readiness --source .` must
 still report `ready_for_external_validation`; it is not accepted as production adoption
 evidence and does not authorize a 1.0 tag by itself.
 
@@ -51,7 +52,8 @@ verify the GitHub provenance attestation through their separately trusted GitHub
 Tags matching `v*` run tests, race detection, vet, bounded fuzz targets, dependency and
 license checks, six static builds, reproducibility comparison, deterministic archives,
 checksums, a closed release manifest, SPDX SBOM generation, and GitHub build-provenance
-attestations. Publication depends on all qualification, security, and build jobs.
+attestations. Publication depends on qualification, security, historical compatibility,
+native Windows full tests, and all build jobs at the exact tag SHA.
 
 The tag version must exactly match `internal/version/version.go`. Release archives
 contain only the executable, LICENSE, and README; the executable carries the verified

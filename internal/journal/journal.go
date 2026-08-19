@@ -442,7 +442,7 @@ func (s *Store) appendSegmentWithSchemaUnlocked(segmentSchema int, command Comma
 	if err := s.injectFault("before-rename"); err != nil {
 		return Segment{}, false, err
 	}
-	if err := os.Rename(tmpName, filepath.Join(s.dir, name)); err != nil {
+	if err := project.PublishPathAtomic(tmpName, filepath.Join(s.dir, name)); err != nil {
 		return Segment{}, false, err
 	}
 	if err := s.injectFault("after-rename"); err != nil {
@@ -719,7 +719,7 @@ func writeExclusiveAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(name, path); err != nil {
+	if err := project.PublishPathExclusive(name, path); err != nil {
 		return err
 	}
 	return syncDirectory(filepath.Dir(path))
@@ -1128,7 +1128,7 @@ func (s *Store) RestoreSegments(segments []Segment) error {
 				_ = os.Remove(tmpName)
 				return err
 			}
-			if err := os.Rename(tmpName, filepath.Join(s.dir, name)); err != nil {
+			if err := project.PublishPathAtomic(tmpName, filepath.Join(s.dir, name)); err != nil {
 				_ = os.Remove(tmpName)
 				return err
 			}

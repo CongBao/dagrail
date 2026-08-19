@@ -1308,7 +1308,7 @@ func (s *Service) actionSecret() ([]byte, error) {
 		if err := file.Close(); err != nil {
 			return err
 		}
-		if err := os.Rename(tmp, path); err != nil {
+		if err := project.PublishPathAtomic(tmp, path); err != nil {
 			return err
 		}
 		if err := project.SyncDirectory(s.Project.DataDir); err != nil {

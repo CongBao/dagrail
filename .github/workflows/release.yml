@@ -10,6 +10,23 @@ permissions:
   attestations: write
 
 jobs:
+  windows-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.6'
+          cache: true
+      - name: Verify Windows runtime behavior
+        run: go test ./...
+        env:
+          CGO_ENABLED: '0'
+      - name: Build Windows runtime
+        run: go build -trimpath ./cmd/dagrail
+        env:
+          CGO_ENABLED: '0'
+
   qualification:
     runs-on: ubuntu-latest
     steps:
@@ -147,7 +164,7 @@ jobs:
             dagrail_${{ matrix.goos }}_${{ matrix.goarch }}.spdx.json
 
   publish:
-    needs: [build, qualification, security, historical-binary-compatibility]
+    needs: [build, qualification, security, historical-binary-compatibility, windows-test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

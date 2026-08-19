@@ -10,6 +10,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/CongBao/dagrail/internal/version"
 	"github.com/gowebpki/jcs"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -30,7 +31,7 @@ func Probe(ctx context.Context, executable, defaultRoot string) (ProbeReport, er
 	if defaultRoot != "" {
 		args = append(args, "--root", defaultRoot)
 	}
-	client := mcp.NewClient(&mcp.Implementation{Name: "dagrail-probe", Version: "v0.26.0"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "dagrail-probe", Version: "v" + version.Version}, nil)
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: exec.CommandContext(ctx, executable, args...)}, nil)
 	if err != nil {
 		return ProbeReport{}, fmt.Errorf("initialize fresh DAGrail MCP process: %w", err)

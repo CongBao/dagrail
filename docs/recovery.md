@@ -160,12 +160,14 @@ parity before any cutover. This command is only the public continuation of an al
 established replacement saga; it cannot revive a legacy UUID, rebind an existing UUID,
 or recover an unavailable source authority.
 
-Journal, claim, lineage, anchor, and locator publication flush their containing
-directories. Directory creation proceeds one component at a time and flushes each new
-directory plus its containing parent. A fresh retry rechecks the deepest visible
-component and its parent before continuing, without traversing unrelated system-owned
-ancestors to the volume root. Windows uses native directory handles and
-`FlushFileBuffers` rather than treating directory sync as a no-op. A returned durability
+Journal, claim, lineage, anchor, and locator publication closes the platform's durable
+namespace boundary. Directory creation proceeds one component at a time and confirms
+each new directory plus its containing parent. A fresh retry rechecks the deepest
+visible component and its parent before continuing, without traversing unrelated
+system-owned ancestors to the volume root. POSIX uses containing-directory fsync.
+Windows publishes files and directories with `MoveFileEx(..., MOVEFILE_WRITE_THROUGH)`
+and opens directory handles only to revalidate identity; Windows does not define
+`FlushFileBuffers` as a portable directory-handle operation. A returned durability
 error therefore remains a failed operation until an exact retry reconfirms the same
 bytes and namespace entries.
 

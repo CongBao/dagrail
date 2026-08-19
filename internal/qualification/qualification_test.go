@@ -108,6 +108,24 @@ func TestWorkflowYAMLRequiresExactlyOneDocument(t *testing.T) {
 	}
 }
 
+func TestReleaseWorkflowRequiresExactSHAWindowsAdmission(t *testing.T) {
+	raw, err := os.ReadFile("../../.github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !releaseWorkflowRequiresWindowsTest(raw) {
+		t.Fatal("release publication is not gated by a Windows full-test job")
+	}
+	withoutAdmission := []byte(strings.Replace(string(raw), ", windows-test]", "]", 1))
+	if releaseWorkflowRequiresWindowsTest(withoutAdmission) {
+		t.Fatal("release publication accepted a detached Windows test")
+	}
+	wrongRunner := []byte(strings.Replace(string(raw), "runs-on: windows-latest", "runs-on: ubuntu-latest", 1))
+	if releaseWorkflowRequiresWindowsTest(wrongRunner) {
+		t.Fatal("release publication accepted a non-Windows substitute")
+	}
+}
+
 func TestValidationSubjectBoundaryRejectsRemoteSchemaDefinitions(t *testing.T) {
 	if onlyLocalSchemaRefs(map[string]any{"$ref": "https://example.invalid/project-schema.json"}) {
 		t.Fatal("validation-subject boundary accepted a remote project schema")

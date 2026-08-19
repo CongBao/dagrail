@@ -15,6 +15,7 @@ import (
 
 	"github.com/CongBao/dagrail/internal/domain"
 	"github.com/CongBao/dagrail/internal/journal"
+	"github.com/CongBao/dagrail/internal/project"
 	"github.com/CongBao/dagrail/internal/version"
 	"github.com/gowebpki/jcs"
 )
@@ -109,19 +110,10 @@ func (s *Store) SealCheckpoint(state domain.State, segments []journal.Segment) e
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(name, path); err != nil {
+	if err := project.ReplacePathAtomic(name, path); err != nil {
 		return err
 	}
-	directory, err := os.Open(dataDir)
-	if err != nil {
-		return err
-	}
-	err = directory.Sync()
-	closeErr := directory.Close()
-	if err != nil {
-		return err
-	}
-	return closeErr
+	return project.SyncDirectory(dataDir)
 }
 
 // VerifyCheckpoint proves that the sealed cache metadata, projected state, and

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/CongBao/dagrail/internal/project"
 	"github.com/CongBao/dagrail/internal/version"
 	"github.com/google/uuid"
 )
@@ -352,17 +353,17 @@ func publishExecutable(source, destination string) error {
 }
 
 func replaceFile(source, destination string) error {
-	if err := os.Rename(source, destination); err == nil {
+	if err := project.ReplacePathAtomic(source, destination); err == nil {
 		return syncDirectory(filepath.Dir(destination))
 	} else if _, statErr := os.Stat(destination); os.IsNotExist(statErr) {
 		return fmt.Errorf("publish runtime: %w", err)
 	}
 	swap := destination + ".swap-" + uuid.NewString()
-	if err := os.Rename(destination, swap); err != nil {
+	if err := project.ReplacePathAtomic(destination, swap); err != nil {
 		return fmt.Errorf("stage existing runtime: %w", err)
 	}
-	if err := os.Rename(source, destination); err != nil {
-		_ = os.Rename(swap, destination)
+	if err := project.ReplacePathAtomic(source, destination); err != nil {
+		_ = project.ReplacePathAtomic(swap, destination)
 		return fmt.Errorf("publish runtime: %w", err)
 	}
 	if err := os.Remove(swap); err != nil {
@@ -508,15 +509,7 @@ func validHexDigest(value string) bool {
 }
 
 func syncDirectory(path string) error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-	directory, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
+	return project.SyncDirectory(path)
 }
 
 type boundedBuffer struct {

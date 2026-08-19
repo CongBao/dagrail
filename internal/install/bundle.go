@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	rootbundle "github.com/CongBao/dagrail"
+	"github.com/CongBao/dagrail/internal/project"
 	"github.com/CongBao/dagrail/internal/version"
 	"gopkg.in/yaml.v3"
 )
@@ -97,7 +98,7 @@ func MaterializePluginBundle() (BundleResult, error) {
 	if err := verifyMaterializedBundle(temporary, files); err != nil {
 		return BundleResult{}, err
 	}
-	if err := os.Rename(temporary, target); err != nil {
+	if err := project.PublishDirectoryExclusive(temporary, target); err != nil {
 		if info, statErr := os.Lstat(target); statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return BundleResult{}, fmt.Errorf("publish plugin bundle: %w", err)
 		}

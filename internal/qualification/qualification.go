@@ -132,7 +132,7 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 	ci, ciErr := readSourceFile(root, ".github/workflows/ci.yml")
 	release, releaseErr := readSourceFile(root, ".github/workflows/release.yml")
 	ciOK := ciErr == nil && validYAMLDocument(ci) && containsAll(string(ci), []string{"go test ./...", "go test -race ./...", "go vet ./...", "-fuzz", "FuzzReleaseMetadataInputs", "release-artifact-rehearsal", "sbom-action@", "file: stage/dagrail", "upload-artifact: 'false'", "upload-release-assets: 'false'", "release manifest", "release verify", "govulncheck@", "go-licenses/v2@", "{goos: windows, goarch: arm64", "{goos: darwin, goarch: arm64", "{goos: linux, goarch: arm64"})
-	releaseOK := releaseErr == nil && validYAMLDocument(release) && containsAll(string(release), []string{"Build twice and compare", "sbom-action@", "file: stage-a/dagrail", "upload-artifact: 'false'", "upload-release-assets: 'false'", "attest-build-provenance@", "checksums.txt", "release manifest", "release verify", "release-manifest.json", "FuzzReleaseMetadataInputs", "go test -race ./...", "qualify release"})
+	releaseOK := releaseErr == nil && validYAMLDocument(release) && releaseWorkflowRequiresWindowsTest(release) && containsAll(string(release), []string{"Build twice and compare", "sbom-action@", "file: stage-a/dagrail", "upload-artifact: 'false'", "upload-release-assets: 'false'", "attest-build-provenance@", "checksums.txt", "release manifest", "release verify", "release-manifest.json", "FuzzReleaseMetadataInputs", "go test -race ./...", "qualify release"})
 	add("ci-workflow", ciOK, chooseCode(ciOK, "continuous_gates_declared", "continuous_gate_missing"))
 	add("release-workflow", releaseOK, chooseCode(releaseOK, "tag_gates_declared", "release_gate_missing"))
 	pinsOK := ciErr == nil && releaseErr == nil && actionsPinned(string(ci)) && actionsPinned(string(release))
@@ -164,6 +164,41 @@ func Run(sourceRoot, projectRoot string) (Report, error) {
 		}
 	}
 	return report, nil
+}
+
+func releaseWorkflowRequiresWindowsTest(raw []byte) bool {
+	var workflow struct {
+		Jobs map[string]struct {
+			RunsOn string   `yaml:"runs-on"`
+			Needs  []string `yaml:"needs"`
+			Steps  []struct {
+				Run string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(raw, &workflow); err != nil {
+		return false
+	}
+	windowsJob, ok := workflow.Jobs["windows-test"]
+	if !ok || windowsJob.RunsOn != "windows-latest" {
+		return false
+	}
+	hasFullTest := false
+	for _, step := range windowsJob.Steps {
+		if strings.Contains(step.Run, "go test ./...") {
+			hasFullTest = true
+			break
+		}
+	}
+	if !hasFullTest {
+		return false
+	}
+	for _, dependency := range workflow.Jobs["publish"].Needs {
+		if dependency == "windows-test" {
+			return true
+		}
+	}
+	return false
 }
 
 func publishedSchemaSurfaces(report contract.Report) []contract.DocumentedSurface {

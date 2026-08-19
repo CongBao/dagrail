@@ -2,6 +2,20 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.26.1 — 2026-08-19
+
+### Fixed
+
+- Windows project initialization and journal publication now use write-through
+  namespace moves instead of requesting an unsupported writable directory flush, so
+  standard user-owned runtime directories remain durable without failing `Access is
+  denied`;
+- journal segments, action secrets, snapshot checkpoints, plugin bundles, and runtime
+  replacement share the same platform-aware atomic publication boundary;
+- tag publication now depends on a native Windows full-test job at the exact release
+  SHA, preventing a Linux-qualified release from publishing while repository Windows
+  CI is failing.
+
 ## 0.26.0 — 2026-08-19
 
 ### Added
