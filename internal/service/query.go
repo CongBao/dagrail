@@ -256,7 +256,8 @@ func BoundedGraphImpact(impact GraphImpact) GraphImpact {
 		AddedNodeCount: len(impact.AddedNodes), UpdatedNodeCount: len(impact.UpdatedNodes), RemovedNodeCount: len(impact.RemovedNodes),
 		AddedEdgeCount: len(impact.AddedEdges), RemovedEdgeCount: len(impact.RemovedEdges), AddedRoleCount: len(impact.AddedRoles),
 		UpdatedRoleCount: len(impact.UpdatedRoles), RemovedRoleCount: len(impact.RemovedRoles), AddedGroupCount: len(impact.AddedGroups),
-		UpdatedGroupCount: len(impact.UpdatedGroups), RemovedGroupCount: len(impact.RemovedGroups), MovedNodeCount: len(impact.MovedNodes), DependencyCutCount: len(impact.DependencyCut),
+		UpdatedGroupCount: len(impact.UpdatedGroups), RemovedGroupCount: len(impact.RemovedGroups), AddedLaneCount: len(impact.AddedLanes),
+		UpdatedLaneCount: len(impact.UpdatedLanes), RemovedLaneCount: len(impact.RemovedLanes), MovedNodeCount: len(impact.MovedNodes), DependencyCutCount: len(impact.DependencyCut),
 		ImpactDigest: "sha256:" + hex.EncodeToString(sum[:]), Truncated: true}
 }
 

@@ -279,6 +279,33 @@ func TestGraphValidatesHierarchicalGroupsAndSummaryMembership(t *testing.T) {
 	})
 }
 
+func TestGraphValidatesExplicitLaneDeclarationsAndReferences(t *testing.T) {
+	graph := GraphDefinition{APIVersion: GraphAPIVersion, Kind: GraphKind, Metadata: GraphMetadata{Name: "lanes"}, Spec: GraphSpec{
+		Lanes:  []LaneDefinition{{ID: "delivery", Title: "Delivery", Order: 10}},
+		Groups: []GroupDefinition{{ID: "work", Title: "Work", Kind: "work-unit", LaneID: "delivery"}},
+		Nodes:  []NodeDefinition{{ID: "task", Kind: "milestone", Title: "Task", GroupID: "work", LaneID: "delivery", Outcomes: []Outcome{{ID: "done", Class: "success"}}}},
+	}}
+	if err := ValidateGraph(graph); err != nil {
+		t.Fatalf("valid explicit lanes were rejected: %v", err)
+	}
+	invalid := graph
+	invalid.Spec.Nodes = append([]NodeDefinition{}, graph.Spec.Nodes...)
+	invalid.Spec.Nodes[0].LaneID = "missing"
+	if err := ValidateGraph(invalid); err == nil || !strings.Contains(err.Error(), "unknown lane") {
+		t.Fatalf("unknown node lane was accepted: %v", err)
+	}
+	invalid = graph
+	invalid.Spec.Lanes = []LaneDefinition{{ID: "delivery", Title: "Delivery"}, {ID: "delivery", Title: "Duplicate"}}
+	if err := ValidateGraph(invalid); err == nil || !strings.Contains(err.Error(), "unique") {
+		t.Fatalf("duplicate lane was accepted: %v", err)
+	}
+	invalid = graph
+	invalid.Spec.Lanes = []LaneDefinition{{ID: strings.Repeat("x", MaxLaneIDRunes+1), Title: "Too long"}}
+	if err := ValidateGraph(invalid); err == nil || !strings.Contains(err.Error(), "lane ID exceeds") {
+		t.Fatalf("oversized lane ID was accepted: %v", err)
+	}
+}
+
 func TestSensitiveMaterialIsRejectedEvenUnderInnocuousFieldNames(t *testing.T) {
 	cases := []json.RawMessage{
 		json.RawMessage(`{"endpoint":"https://user:password@example.com/path"}`),

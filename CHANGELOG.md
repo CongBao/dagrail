@@ -2,6 +2,33 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.25.3 — 2026-08-19
+
+### Added
+
+- Graph v1alpha1 and GraphPatch now support generic, explicitly ordered `lanes`, plus
+  `laneId` on groups and Nodes; built-in lanes remain backward-compatible defaults and
+  expanded group members inherit their nearest declared group lane;
+- the Explorer exposes a lightweight `/api/v1/head` observation and a shared verified
+  snapshot cache, so concurrent views replay one journal prefix instead of independently
+  reducing the same large authority.
+
+### Changed
+
+- Project DAG uses a stable layered layout with bounded fan-out rows, routed aggregate
+  edges, complete cursor retrieval, readable-fit scaling, full title tooltips, and an
+  interactive minimap with edges and viewport;
+- automatic refresh is off by default, with explicit 30/60-second options that pause
+  during interaction; request cancellation, stale-snapshot retention, connection state,
+  and direct skeleton-first Node inspection replace the fixed overlapping 15-second loop.
+
+### Fixed
+
+- the summary caption distinguishes global Nodes from expanded internal Nodes and the UI
+  retrieves all aggregate-edge pages instead of silently drawing only the first 100;
+- Timeline, Operations, compatibility snapshot, overview, topology, and Node detail now
+  share one exact in-memory snapshot while all Explorer surfaces remain byte-nonmutating.
+
 ## 0.25.2 — 2026-08-19
 
 ### Fixed

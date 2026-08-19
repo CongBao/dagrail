@@ -4,6 +4,7 @@
   "title": "DAGrail read-only Explorer API v1beta2 responses",
   "description": "Response and error envelopes for the bounded /api/v1 Explorer endpoints, including hierarchical group summaries and recoverable aggregate edges. The legacy /api/v1/snapshot compatibility route is not part of this versioned schema.",
   "oneOf": [
+    {"$ref": "#/$defs/head"},
     {"$ref": "#/$defs/overview"},
     {"$ref": "#/$defs/nodePage"},
     {"$ref": "#/$defs/topologyPage"},
@@ -15,6 +16,22 @@
     {"$ref": "#/$defs/error"}
   ],
   "$defs": {
+    "head": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "readOnly", "headSequence", "headHash", "snapshotAvailable", "changed"],
+      "properties": {
+        "apiVersion": {"const": "dagrail.io/ui/v1beta2"},
+        "readOnly": {"const": true},
+        "headSequence": {"type": "integer", "minimum": 0},
+        "headHash": {"type": "string"},
+        "snapshotSequence": {"type": "integer", "minimum": 0},
+        "snapshotHash": {"type": "string"},
+        "snapshotAt": {"type": "string", "format": "date-time"},
+        "snapshotAvailable": {"type": "boolean"},
+        "changed": {"type": "boolean"}
+      }
+    },
     "project": {
       "type": "object",
       "additionalProperties": false,
@@ -39,13 +56,15 @@
     "overview": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["apiVersion", "readOnly", "project", "headSequence", "counts", "frontier", "facets"],
+      "required": ["apiVersion", "readOnly", "project", "headSequence", "headHash", "snapshotAt", "counts", "frontier", "facets"],
       "properties": {
         "apiVersion": {"const": "dagrail.io/ui/v1beta2"},
         "readOnly": {"const": true},
         "project": {"$ref": "#/$defs/project"},
         "graphRevision": {"type": "string"},
         "headSequence": {"type": "integer", "minimum": 0},
+        "headHash": {"type": "string"},
+        "snapshotAt": {"type": "string", "format": "date-time"},
         "counts": {"$ref": "#/$defs/counts"},
         "frontier": {"$ref": "#/$defs/frontier"},
         "facets": {
@@ -78,7 +97,7 @@
       "required": ["id", "title", "kind", "status"],
       "properties": {
         "id": {"type": "string"}, "title": {"type": "string"}, "kind": {"type": "string"},
-        "role": {"type": "string"}, "parent": {"type": "string"}, "groupId": {"type": "string"}, "status": {"type": "string"},
+        "role": {"type": "string"}, "parent": {"type": "string"}, "groupId": {"type": "string"}, "laneId": {"type": "string"}, "status": {"type": "string"},
         "readiness": {"type": "string"}, "outcome": {"type": "string"}
       }
     },
@@ -108,7 +127,7 @@
       "required": ["id", "title", "kind", "collapsedByDefault", "visible", "expanded", "breadcrumbs", "childGroupIds", "lifecycleStatus", "healthStatus", "displayStatus", "nodeCount", "directNodeCount", "readyNodeCount", "activeNodeCount", "attemptCount", "activeAttemptCount", "currentCycle", "openIncidentCount", "uncertainEffectCount", "unclosedResourceCount", "membershipDigest"],
       "properties": {
         "id": {"type": "string"}, "title": {"type": "string"}, "kind": {"type": "string"},
-        "parentGroupId": {"type": "string"}, "summaryNodeId": {"type": "string"},
+        "laneId": {"type": "string"}, "parentGroupId": {"type": "string"}, "summaryNodeId": {"type": "string"},
         "collapsedByDefault": {"type": "boolean"}, "visible": {"type": "boolean"}, "expanded": {"type": "boolean"},
         "breadcrumbs": {"type": "array", "items": {"type": "string"}},
         "childGroupIds": {"type": "array", "items": {"type": "string"}},
@@ -198,7 +217,7 @@
       "required": ["id", "title", "kind", "outcomes", "retryBudget", "resources", "inputBytes"],
       "properties": {
         "id": {"type": "string"}, "title": {"type": "string"}, "kind": {"type": "string"},
-        "role": {"type": "string"}, "objective": {"type": "string"}, "parent": {"type": "string"}, "groupId": {"type": "string"},
+        "role": {"type": "string"}, "objective": {"type": "string"}, "parent": {"type": "string"}, "groupId": {"type": "string"}, "laneId": {"type": "string"},
         "supersedes": {"type": "string"}, "outcomes": {"type": "array", "items": {"$ref": "#/$defs/outcome"}},
         "retryBudget": {"type": "integer", "minimum": 0}, "resources": {"type": "array", "items": {"$ref": "#/$defs/resourceRequest"}},
         "inputBytes": {"type": "integer", "minimum": 0}, "inputSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}

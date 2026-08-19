@@ -91,3 +91,47 @@ func TestGraphPatchAddsUpdatesAndRemovesGroupsWithClosedImpact(t *testing.T) {
 		t.Fatalf("groups were not removed cleanly: groups=%v err=%v", state.Graph.Spec.Groups, err)
 	}
 }
+
+func TestGraphPatchAddsUpdatesAndSafelyRemovesLanes(t *testing.T) {
+	svc, root := governanceService(t, `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"lane patch"},"spec":{"roles":[{"id":"governor","capabilities":["graph.change"]}],"groups":[{"id":"work","title":"Work","kind":"work-unit"}],"nodes":[{"id":"done","kind":"milestone","title":"Done","groupId":"work","outcomes":[{"id":"reached","class":"success"}]}],"edges":[]}}`)
+	if _, err := svc.BindRole("governor", "codex", "governor-session", time.Hour, false, "bind-governor"); err != nil {
+		t.Fatal(err)
+	}
+	patchPath := filepath.Join(root, "lanes.json")
+	patch := `{"apiVersion":"dagrail.io/v1alpha1","kind":"GraphPatch","operations":[{"op":"addLane","lane":{"id":"delivery","title":"Delivery","order":25}},{"op":"updateGroup","group":{"id":"work","title":"Work","kind":"work-unit","laneId":"delivery"}},{"op":"updateLane","lane":{"id":"delivery","title":"Product delivery","order":20}}]}`
+	if err := os.WriteFile(patchPath, []byte(patch), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := svc.PreviewGraphChange(patchPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.AddedLanes) != 1 || len(preview.UpdatedLanes) != 1 || len(preview.UpdatedGroups) != 1 || len(preview.DependencyCut) != 0 {
+		t.Fatalf("lane-only impact changed execution topology: %+v", preview)
+	}
+	if _, err := svc.ApplyGraphChange(patchPath, preview.Token, "lanes", "governor"); err != nil {
+		t.Fatal(err)
+	}
+	removePath := filepath.Join(root, "remove-lane.json")
+	if err := os.WriteFile(removePath, []byte(`{"apiVersion":"dagrail.io/v1alpha1","kind":"GraphPatch","operations":[{"op":"removeLane","laneId":"delivery"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.PreviewGraphChange(removePath); err == nil {
+		t.Fatal("referenced lane was removed")
+	}
+	clearPath := filepath.Join(root, "clear-lane.json")
+	clear := `{"apiVersion":"dagrail.io/v1alpha1","kind":"GraphPatch","operations":[{"op":"updateGroup","group":{"id":"work","title":"Work","kind":"work-unit"}},{"op":"removeLane","laneId":"delivery"}]}`
+	if err := os.WriteFile(clearPath, []byte(clear), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clearPreview, err := svc.PreviewGraphChange(clearPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(clearPreview.RemovedLanes) != 1 {
+		t.Fatalf("lane removal impact missing: %+v", clearPreview)
+	}
+	if _, err := svc.ApplyGraphChange(clearPath, clearPreview.Token, "clear-lane", "governor"); err != nil {
+		t.Fatal(err)
+	}
+}

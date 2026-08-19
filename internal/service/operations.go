@@ -139,6 +139,37 @@ type HistoryPage struct {
 	Entries    []HistoryEntry `json:"entries"`
 }
 
+// InspectionSnapshot is a compact, verified journal projection for read-only
+// consumers that need several views of one exact authority head. History keeps
+// only bounded segment metadata, never event payloads, so callers do not need
+// to retain a second full journal copy.
+type InspectionSnapshot struct {
+	State   domain.State
+	History []HistoryEntry
+}
+
+func (s *Service) InspectionSnapshotContext(ctx context.Context) (InspectionSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return InspectionSnapshot{}, err
+	}
+	state, segments, err := s.load()
+	if err != nil {
+		return InspectionSnapshot{}, err
+	}
+	history := make([]HistoryEntry, 0, len(segments))
+	for _, segment := range segments {
+		if err := ctx.Err(); err != nil {
+			return InspectionSnapshot{}, err
+		}
+		eventTypes := make([]string, 0, len(segment.Events))
+		for _, event := range segment.Events {
+			eventTypes = append(eventTypes, event.Type)
+		}
+		history = append(history, HistoryEntry{Sequence: segment.Sequence, CommandKind: segment.Command.Kind, ActorRole: segment.Command.ActorRole, EventTypes: eventTypes, CommittedAt: segment.CommittedAt, SegmentHash: segment.SegmentHash})
+	}
+	return InspectionSnapshot{State: state, History: history}, nil
+}
+
 type OperationalStatus struct {
 	ProjectID         string          `json:"projectId"`
 	GraphRevision     string          `json:"graphRevision,omitempty"`
@@ -1316,4 +1347,10 @@ func operationalStatusFromStateContext(ctx context.Context, state domain.State, 
 	sort.Strings(result.OverdueIncidents)
 	sort.Strings(result.ExpiredRoleLeases)
 	return result, nil
+}
+
+// OperationalStatusFromStateContext derives status from an already verified
+// snapshot and never reopens the journal.
+func (s *Service) OperationalStatusFromStateContext(ctx context.Context, state domain.State) (OperationalStatus, error) {
+	return operationalStatusFromStateContext(ctx, state, s.Now().UTC())
 }

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/CongBao/dagrail/internal/domain"
 	"github.com/CongBao/dagrail/internal/grouping"
@@ -34,9 +35,23 @@ type ExplorerOverview struct {
 	Project       map[string]string   `json:"project"`
 	GraphRevision string              `json:"graphRevision,omitempty"`
 	HeadSequence  uint64              `json:"headSequence"`
+	HeadHash      string              `json:"headHash"`
+	SnapshotAt    string              `json:"snapshotAt"`
 	Counts        map[string]int      `json:"counts"`
 	Frontier      FrontierSummary     `json:"frontier"`
 	Facets        map[string][]string `json:"facets"`
+}
+
+type ExplorerHead struct {
+	APIVersion        string `json:"apiVersion"`
+	ReadOnly          bool   `json:"readOnly"`
+	HeadSequence      uint64 `json:"headSequence"`
+	HeadHash          string `json:"headHash"`
+	SnapshotSequence  uint64 `json:"snapshotSequence,omitempty"`
+	SnapshotHash      string `json:"snapshotHash,omitempty"`
+	SnapshotAt        string `json:"snapshotAt,omitempty"`
+	SnapshotAvailable bool   `json:"snapshotAvailable"`
+	Changed           bool   `json:"changed"`
 }
 
 type FrontierSummary struct {
@@ -125,6 +140,7 @@ type NodeContractView struct {
 	Objective   string                   `json:"objective,omitempty"`
 	Parent      string                   `json:"parent,omitempty"`
 	GroupID     string                   `json:"groupId,omitempty"`
+	LaneID      string                   `json:"laneId,omitempty"`
 	Supersedes  string                   `json:"supersedes,omitempty"`
 	Outcomes    []domain.Outcome         `json:"outcomes"`
 	RetryBudget int                      `json:"retryBudget"`
@@ -236,12 +252,38 @@ type nodeFilter struct {
 	Role   string
 }
 
-func registerExplorerAPI(mux *http.ServeMux, svc *service.Service) {
-	mux.HandleFunc("/api/v1/overview", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
+func registerExplorerAPI(mux *http.ServeMux, svc *service.Service, cache *explorerCache) {
+	mux.HandleFunc("/api/v1/head", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
 		if err := requireQuery(r, nil); err != nil {
 			return err
 		}
-		value, err := buildOverview(svc)
+		head, snapshot, err := cache.head(r.Context())
+		if err != nil {
+			return err
+		}
+		value := ExplorerHead{APIVersion: explorerAPIVersion, ReadOnly: true, HeadSequence: head.Sequence, HeadHash: head.Hash, Changed: true}
+		if snapshot != nil {
+			value.SnapshotAvailable = true
+			value.SnapshotSequence = snapshot.State.HeadSequence
+			value.SnapshotHash = snapshot.State.HeadHash
+			value.SnapshotAt = snapshot.LoadedAt.Format(time.RFC3339Nano)
+			value.Changed = snapshot.Head != head
+		}
+		return writeAPIResult(w, value, nil)
+	}))
+	mux.HandleFunc("/api/v1/overview", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
+		if err := requireQuery(r, map[string]bool{"refresh": true}); err != nil {
+			return err
+		}
+		refresh, err := queryInt(r, "refresh", 0, 0, 1)
+		if err != nil {
+			return err
+		}
+		state, loadedAt, err := cache.state(r.Context(), refresh == 1)
+		if err != nil {
+			return err
+		}
+		value, err := buildOverview(svc, state, loadedAt)
 		return writeAPIResult(w, value, err)
 	}))
 	mux.HandleFunc("/api/v1/nodes", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
@@ -257,7 +299,11 @@ func registerExplorerAPI(mux *http.ServeMux, svc *service.Service) {
 		if err != nil {
 			return err
 		}
-		value, err := buildNodePage(svc, filter, cursor, limit)
+		state, _, err := cache.state(r.Context(), false)
+		if err != nil {
+			return err
+		}
+		value, err := buildNodePage(state, filter, cursor, limit)
 		return writeAPIResult(w, value, err)
 	}))
 	mux.HandleFunc("/api/v1/topology", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
@@ -293,7 +339,11 @@ func registerExplorerAPI(mux *http.ServeMux, svc *service.Service) {
 		if err != nil {
 			return err
 		}
-		value, err := buildTopology(svc, filter, focus, depth, limit, mode, groupState, expanded, collapsed)
+		state, _, err := cache.state(r.Context(), false)
+		if err != nil {
+			return err
+		}
+		value, err := buildTopology(state, filter, focus, depth, limit, mode, groupState, expanded, collapsed)
 		return writeAPIResult(w, value, err)
 	}))
 	mux.HandleFunc("/api/v1/node", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
@@ -304,7 +354,11 @@ func registerExplorerAPI(mux *http.ServeMux, svc *service.Service) {
 		if err != nil || nodeID == "" {
 			return clientError(http.StatusBadRequest, "node id is required")
 		}
-		value, err := buildNodeDetail(svc, nodeID)
+		state, _, err := cache.state(r.Context(), false)
+		if err != nil {
+			return err
+		}
+		value, err := buildNodeDetail(state, nodeID)
 		return writeAPIResult(w, value, err)
 	}))
 	mux.HandleFunc("/api/v1/group-edges", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
@@ -335,7 +389,11 @@ func registerExplorerAPI(mux *http.ServeMux, svc *service.Service) {
 		if err != nil {
 			return err
 		}
-		value, err := buildGroupEdgePage(svc, ref, cursor, limit, groupState, expanded, collapsed)
+		state, _, err := cache.state(r.Context(), false)
+		if err != nil {
+			return err
+		}
+		value, err := buildGroupEdgePage(state, ref, cursor, limit, groupState, expanded, collapsed)
 		return writeAPIResult(w, value, err)
 	}))
 	mux.HandleFunc("/api/v1/aggregate-edges", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
@@ -366,7 +424,11 @@ func registerExplorerAPI(mux *http.ServeMux, svc *service.Service) {
 		if err != nil {
 			return err
 		}
-		value, err := buildAggregateEdgePage(svc, ref, cursor, limit, groupState, expanded, collapsed)
+		state, _, err := cache.state(r.Context(), false)
+		if err != nil {
+			return err
+		}
+		value, err := buildAggregateEdgePage(state, ref, cursor, limit, groupState, expanded, collapsed)
 		return writeAPIResult(w, value, err)
 	}))
 	mux.HandleFunc("/api/v1/history", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
@@ -381,7 +443,11 @@ func registerExplorerAPI(mux *http.ServeMux, svc *service.Service) {
 		if err != nil {
 			return err
 		}
-		value, err := buildHistory(svc, before, present, limit)
+		snapshot, err := cache.snapshotFor(r.Context(), false)
+		if err != nil {
+			return err
+		}
+		value, err := buildHistory(snapshot.State, snapshot.History, before, present, limit)
 		return writeAPIResult(w, value, err)
 	}))
 	mux.HandleFunc("/api/v1/operations", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
@@ -392,7 +458,11 @@ func registerExplorerAPI(mux *http.ServeMux, svc *service.Service) {
 		if err != nil {
 			return err
 		}
-		value, err := buildOperations(svc, limit)
+		state, _, err := cache.state(r.Context(), false)
+		if err != nil {
+			return err
+		}
+		value, err := buildOperations(state, limit)
 		return writeAPIResult(w, value, err)
 	}))
 }
@@ -466,11 +536,7 @@ func writeAPIError(w http.ResponseWriter, status int, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"apiVersion": explorerAPIVersion, "error": message, "status": status})
 }
 
-func buildOverview(svc *service.Service) (ExplorerOverview, error) {
-	state, err := svc.State()
-	if err != nil {
-		return ExplorerOverview{}, err
-	}
+func buildOverview(svc *service.Service, state domain.State, loadedAt time.Time) (ExplorerOverview, error) {
 	frontier := domain.ComputeFrontier(state)
 	ready := append([]string{}, frontier.Ready...)
 	if len(ready) > 100 {
@@ -503,17 +569,13 @@ func buildOverview(svc *service.Service) (ExplorerOverview, error) {
 	return ExplorerOverview{
 		APIVersion: explorerAPIVersion, ReadOnly: true,
 		Project:       map[string]string{"id": svc.Project.Config.ProjectID, "name": svc.Project.Config.Name},
-		GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Counts: counts,
+		GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, HeadHash: state.HeadHash, SnapshotAt: loadedAt.Format(time.RFC3339Nano), Counts: counts,
 		Frontier: FrontierSummary{Ready: ready, ReadyCount: len(frontier.Ready), ReadyTruncated: len(ready) < len(frontier.Ready), BlockedCount: len(frontier.Blocked), ResourceBlocked: len(frontier.ResourceBlocked), DependencyCuts: len(frontier.DependencyCuts)},
 		Facets:   map[string][]string{"statuses": {"ready", "blocked", "attention", "accepted", "returned", "completed", "unreachable", "resource-blocked", "planned", "active", "terminal", "superseded", "skipped"}, "kinds": kinds, "roles": roles},
 	}, nil
 }
 
-func buildNodePage(svc *service.Service, filter nodeFilter, cursor, limit int) (NodePage, error) {
-	state, err := svc.State()
-	if err != nil {
-		return NodePage{}, err
-	}
+func buildNodePage(state domain.State, filter nodeFilter, cursor, limit int) (NodePage, error) {
 	views := filteredNodeViews(state, filter)
 	if cursor > len(views) {
 		return NodePage{}, clientError(http.StatusBadRequest, "node cursor exceeds filtered result")
@@ -530,11 +592,7 @@ func buildNodePage(svc *service.Service, filter nodeFilter, cursor, limit int) (
 	return NodePage{APIVersion: explorerAPIVersion, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Page: page, Nodes: views[cursor:end]}, nil
 }
 
-func buildTopology(svc *service.Service, filter nodeFilter, focus string, depth, limit int, mode, groupState string, expandedIDs, collapsedIDs []string) (TopologyPage, error) {
-	state, err := svc.State()
-	if err != nil {
-		return TopologyPage{}, err
-	}
+func buildTopology(state domain.State, filter nodeFilter, focus string, depth, limit int, mode, groupState string, expandedIDs, collapsedIDs []string) (TopologyPage, error) {
 	if mode == "" {
 		mode = "detail"
 		if state.Graph != nil && len(state.Graph.Spec.Groups) > 0 {
@@ -687,11 +745,7 @@ func filterLanes(lanes []grouping.Lane, groups []GroupView, nodes []NodeView) []
 	return result
 }
 
-func buildGroupEdgePage(svc *service.Service, ref string, cursor, limit int, groupState string, expandedIDs, collapsedIDs []string) (GroupEdgePage, error) {
-	state, err := svc.State()
-	if err != nil {
-		return GroupEdgePage{}, err
-	}
+func buildGroupEdgePage(state domain.State, ref string, cursor, limit int, groupState string, expandedIDs, collapsedIDs []string) (GroupEdgePage, error) {
 	if state.Graph == nil {
 		return GroupEdgePage{}, clientError(http.StatusNotFound, "group edge ref is unavailable")
 	}
@@ -724,11 +778,7 @@ func buildGroupEdgePage(svc *service.Service, ref string, cursor, limit int, gro
 	return GroupEdgePage{}, clientError(http.StatusNotFound, "group edge ref is stale or unknown")
 }
 
-func buildAggregateEdgePage(svc *service.Service, ref string, cursor, limit int, groupState string, expandedIDs, collapsedIDs []string) (AggregateEdgePage, error) {
-	state, err := svc.State()
-	if err != nil {
-		return AggregateEdgePage{}, err
-	}
+func buildAggregateEdgePage(state domain.State, ref string, cursor, limit int, groupState string, expandedIDs, collapsedIDs []string) (AggregateEdgePage, error) {
 	if state.Graph == nil {
 		return AggregateEdgePage{}, clientError(http.StatusNotFound, "aggregate edge index ref is unavailable")
 	}
@@ -813,16 +863,12 @@ func aggregateEdgeIndexRef(projection grouping.Projection) string {
 	return "aggregate-edges:" + hex.EncodeToString(digest[:])
 }
 
-func buildNodeDetail(svc *service.Service, nodeID string) (NodeDetail, error) {
-	state, err := svc.State()
-	if err != nil {
-		return NodeDetail{}, err
-	}
+func buildNodeDetail(state domain.State, nodeID string) (NodeDetail, error) {
 	node, ok := state.NodeDefinition(nodeID)
 	if !ok {
 		return NodeDetail{}, clientError(http.StatusNotFound, "unknown node")
 	}
-	contract := NodeContractView{ID: node.ID, Title: node.Title, Kind: node.Kind, Role: node.Role, Objective: node.Objective, Parent: node.Parent, GroupID: node.GroupID, Supersedes: node.Supersedes, Outcomes: append([]domain.Outcome{}, node.Outcomes...), RetryBudget: node.RetryBudget, Resources: append([]domain.ResourceRequest{}, node.Resources...), InputBytes: len(node.Inputs)}
+	contract := NodeContractView{ID: node.ID, Title: node.Title, Kind: node.Kind, Role: node.Role, Objective: node.Objective, Parent: node.Parent, GroupID: node.GroupID, LaneID: node.LaneID, Supersedes: node.Supersedes, Outcomes: append([]domain.Outcome{}, node.Outcomes...), RetryBudget: node.RetryBudget, Resources: append([]domain.ResourceRequest{}, node.Resources...), InputBytes: len(node.Inputs)}
 	if len(node.Inputs) > 0 {
 		digest := sha256.Sum256(node.Inputs)
 		contract.InputSHA256 = "sha256:" + hex.EncodeToString(digest[:])
@@ -932,11 +978,7 @@ func capLast[T any](items []T, limit int, truncated map[string]bool, key string)
 	return items[len(items)-limit:]
 }
 
-func buildHistory(svc *service.Service, before uint64, present bool, limit int) (HistoryResponse, error) {
-	state, err := svc.State()
-	if err != nil {
-		return HistoryResponse{}, err
-	}
+func buildHistory(state domain.State, history []service.HistoryEntry, before uint64, present bool, limit int) (HistoryResponse, error) {
 	if !present {
 		before = state.HeadSequence + 1
 	}
@@ -950,10 +992,9 @@ func buildHistory(svc *service.Service, before uint64, present bool, limit int) 
 	}
 	page := service.HistoryPage{After: start, NextCursor: start, Entries: []service.HistoryEntry{}}
 	if end > start {
-		page, err = svc.History(start, int(end-start))
-		if err != nil {
-			return HistoryResponse{}, err
-		}
+		page.Entries = append(page.Entries, history[int(start):int(end)]...)
+		page.NextCursor = page.Entries[len(page.Entries)-1].Sequence
+		page.Truncated = end < uint64(len(history))
 	}
 	response := HistoryResponse{APIVersion: explorerAPIVersion, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Before: before, Page: page}
 	if start > 0 {
@@ -970,11 +1011,7 @@ func buildHistory(svc *service.Service, before uint64, present bool, limit int) 
 	return response, nil
 }
 
-func buildOperations(svc *service.Service, limit int) (OperationsResponse, error) {
-	state, err := svc.State()
-	if err != nil {
-		return OperationsResponse{}, err
-	}
+func buildOperations(state domain.State, limit int) (OperationsResponse, error) {
 	result := OperationsResponse{APIVersion: explorerAPIVersion, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Limit: limit, Counts: map[string]int{"attempts": len(state.Attempts), "leases": len(state.Leases), "incidents": len(state.Incidents), "resources": len(state.Resources), "effects": len(state.Effects)}, Truncated: map[string]bool{}, Attempts: []domain.Attempt{}, Leases: []domain.RoleLease{}, Incidents: []domain.Incident{}, Resources: []ResourceView{}, Effects: []EffectView{}}
 	for _, value := range state.Attempts {
 		result.Attempts = append(result.Attempts, value)
@@ -1043,7 +1080,7 @@ func allNodeViews(state domain.State) []NodeView {
 	if state.Graph != nil {
 		for _, node := range state.Graph.Spec.Nodes {
 			runtime := state.Nodes[node.ID]
-			result = append(result, NodeView{ID: node.ID, Title: node.Title, Kind: node.Kind, Role: node.Role, Parent: node.Parent, GroupID: node.GroupID, Status: runtime.Status, Readiness: readiness[node.ID], Outcome: runtime.Outcome})
+			result = append(result, NodeView{ID: node.ID, Title: node.Title, Kind: node.Kind, Role: node.Role, Parent: node.Parent, GroupID: node.GroupID, LaneID: node.LaneID, Status: runtime.Status, Readiness: readiness[node.ID], Outcome: runtime.Outcome})
 		}
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })

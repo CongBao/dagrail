@@ -16,7 +16,9 @@ against another malicious process running as the same OS user.
 ## Views and deep links
 
 - **Project DAG** is the default for a grouped Graph. It renders every visible group in
-  fixed generic lanes while keeping collapsed internal Nodes outside the render cap.
+  stable topological layers and declared generic lanes while keeping collapsed internal
+  Nodes outside the render cap. Graphs may declare ordered `spec.lanes` and assign
+  `group.laneId` or `node.laneId`; otherwise the backward-compatible built-in lanes apply.
 - **Execution Detail** retains the exact flat Node topology. Selecting a Node focuses its
   deterministic one-to-four-hop neighborhood.
 - **Nodes** searches ID, title, kind, Role, and parent, with status/kind/Role filters and
@@ -25,9 +27,16 @@ against another malicious process running as the same OS user.
 - **Operations** summarizes attempts, Role leases, incidents, resources, and receipt
   states without returning effect requests or raw receipts.
 
-The Node inspector is a modal read surface: background controls become inert, keyboard
-focus remains inside the inspector across automatic refreshes, and closing returns to
+The Node inspector opens immediately with a skeleton and loads only that Node. It is a
+modal read surface: background controls become inert, keyboard focus remains inside the
+inspector, and closing returns to
 the same Node in the current view when it is still present.
+
+Automatic refresh is disabled by default. The header offers explicit 30- and 60-second
+polling; polling pauses while a request, drawer, input, or hidden tab is active and first
+checks the lightweight journal head. Refresh and navigation requests are cancellable and
+deduplicated. A failed refresh retains the last verified snapshot and reports its time
+and disconnected/stale state instead of clearing the page.
 
 The URL preserves `view`, `node`, `group`, compact `groupState=expanded|collapsed`,
 repeated per-group `expanded`/`collapsed` exceptions, `q`, `status`, `kind`, `role`,
@@ -40,6 +49,7 @@ same summary/detail state and inspector while that foreground server runs.
 
 | Endpoint | Bound |
 | --- | --- |
+| `/api/v1/head` | current tail identity plus cached-snapshot identity; no full replay |
 | `/api/v1/overview` | 100 ready IDs plus aggregate counts |
 | `/api/v1/nodes` | 200 Nodes per page |
 | `/api/v1/topology` | all matching top-level groups; 500 expanded/detail Nodes and 100 aggregate-edge summaries maximum; UI requests 200 Nodes |
@@ -66,8 +76,11 @@ Decision rows expose only identity, closed outcome, source, provider identity, a
 resource rows expose typed closure state but never the closure receipt body.
 
 Topology is an operational map, not a graph editor. Project DAG rollups, health,
-membership digests, fixed lanes, and collapsed edges come from one GraphRevision/head;
-dense aggregate indexes remain recoverable through the aggregate-edge ref and exact source
-edge IDs through each group-edge ref. A focused Execution Detail
+membership digests, declared lanes, and collapsed edges come from one GraphRevision/head.
+The browser follows every aggregate-edge cursor before drawing the summary; dense indexes
+remain recoverable through the aggregate-edge ref and exact source edge IDs through each
+group-edge ref. All views reuse one verified/reduced snapshot. An enabled head poll reports
+when that prefix is stale and advances it with one shared replay; manual Refresh forces the
+same verification explicitly. A focused Execution Detail
 response orders the focus first, then increasing hop distance and stable Node ID, so
 truncation never removes the selected Node.

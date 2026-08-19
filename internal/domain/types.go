@@ -29,6 +29,9 @@ const (
 	MaxGroupTitleRunes      = 256
 	MaxGroupDepth           = 8
 	MaxGroupedRefRunes      = 256
+	MaxGraphLanes           = 64
+	MaxLaneIDRunes          = 64
+	MaxLaneTitleRunes       = 128
 )
 
 type GraphDefinition struct {
@@ -47,6 +50,7 @@ type GraphMetadata struct {
 type GraphSpec struct {
 	Roles              []RoleDefinition   `json:"roles" yaml:"roles"`
 	Groups             []GroupDefinition  `json:"groups,omitempty" yaml:"groups,omitempty"`
+	Lanes              []LaneDefinition   `json:"lanes,omitempty" yaml:"lanes,omitempty"`
 	Nodes              []NodeDefinition   `json:"nodes" yaml:"nodes"`
 	Edges              []EdgeDefinition   `json:"edges,omitempty" yaml:"edges,omitempty"`
 	ResourceCapacities []ResourceCapacity `json:"resourceCapacities,omitempty" yaml:"resourceCapacities,omitempty"`
@@ -60,6 +64,13 @@ type GroupDefinition struct {
 	ParentGroupID      string `json:"parentGroupId,omitempty" yaml:"parentGroupId,omitempty"`
 	SummaryNodeID      string `json:"summaryNodeId,omitempty" yaml:"summaryNodeId,omitempty"`
 	CollapsedByDefault bool   `json:"collapsedByDefault,omitempty" yaml:"collapsedByDefault,omitempty"`
+	LaneID             string `json:"laneId,omitempty" yaml:"laneId,omitempty"`
+}
+
+type LaneDefinition struct {
+	ID    string `json:"id" yaml:"id"`
+	Title string `json:"title" yaml:"title"`
+	Order int    `json:"order,omitempty" yaml:"order,omitempty"`
 }
 
 type ResourceCapacity struct {
@@ -107,6 +118,7 @@ type NodeDefinition struct {
 	Objective    string            `json:"objective,omitempty" yaml:"objective,omitempty"`
 	Parent       string            `json:"parent,omitempty" yaml:"parent,omitempty"`
 	GroupID      string            `json:"groupId,omitempty" yaml:"groupId,omitempty"`
+	LaneID       string            `json:"laneId,omitempty" yaml:"laneId,omitempty"`
 	Supersedes   string            `json:"supersedes,omitempty" yaml:"supersedes,omitempty"`
 	Inputs       json.RawMessage   `json:"inputs,omitempty" yaml:"-"`
 	Outcomes     []Outcome         `json:"outcomes" yaml:"outcomes"`
@@ -168,6 +180,11 @@ var builtinGroupKinds = map[string]bool{
 	"external": true, "governance": true, "custom": true,
 }
 
+var builtinLaneIDs = map[string]bool{
+	"work-units": true, "milestones-gates": true, "external-actions": true,
+	"global-governance": true, "ungrouped": true,
+}
+
 func IsBuiltinNodeKind(kind string) bool { return builtinKinds[kind] }
 
 func ValidateGraph(g GraphDefinition) error {
@@ -213,6 +230,29 @@ func ValidateGraph(g GraphDefinition) error {
 		}
 		providerIDs[provider.ID] = true
 	}
+	lanes := map[string]bool{}
+	for laneID := range builtinLaneIDs {
+		lanes[laneID] = true
+	}
+	if len(g.Spec.Lanes) > MaxGraphLanes {
+		return fmt.Errorf("graph lanes exceed %d", MaxGraphLanes)
+	}
+	declaredLanes := map[string]bool{}
+	for _, lane := range g.Spec.Lanes {
+		if lane.ID == "" || declaredLanes[lane.ID] {
+			return fmt.Errorf("lane IDs must be non-empty and unique: %q", lane.ID)
+		}
+		if utf8.RuneCountInString(lane.ID) > MaxLaneIDRunes {
+			return fmt.Errorf("lane ID exceeds %d characters: %q", MaxLaneIDRunes, lane.ID)
+		}
+		if strings.TrimSpace(lane.Title) == "" || utf8.RuneCountInString(lane.Title) > MaxLaneTitleRunes {
+			return fmt.Errorf("lane %s title must be non-empty and at most %d characters", lane.ID, MaxLaneTitleRunes)
+		}
+		if lane.Order < -1000 || lane.Order > 1000 {
+			return fmt.Errorf("lane %s order must be between -1000 and 1000", lane.ID)
+		}
+		declaredLanes[lane.ID], lanes[lane.ID] = true, true
+	}
 	groups := map[string]GroupDefinition{}
 	groupParents := map[string]string{}
 	if len(g.Spec.Groups) > MaxGraphGroups {
@@ -236,6 +276,9 @@ func ValidateGraph(g GraphDefinition) error {
 		}
 		if !builtinGroupKinds[group.Kind] {
 			return fmt.Errorf("group %s has invalid kind %q", group.ID, group.Kind)
+		}
+		if group.LaneID != "" && !lanes[group.LaneID] {
+			return fmt.Errorf("group %s references unknown lane %s", group.ID, group.LaneID)
 		}
 		groups[group.ID] = group
 	}
@@ -278,6 +321,9 @@ func ValidateGraph(g GraphDefinition) error {
 		}
 		if node.GroupID != "" && groups[node.GroupID].ID == "" {
 			return fmt.Errorf("node %s references unknown group %s", node.ID, node.GroupID)
+		}
+		if node.LaneID != "" && !lanes[node.LaneID] {
+			return fmt.Errorf("node %s references unknown lane %s", node.ID, node.LaneID)
 		}
 		if (node.Kind == "task" || node.Kind == "review" || node.Kind == "decision" || node.Kind == "gate" || node.Kind == "effect") && node.Role == "" {
 			return fmt.Errorf("node %s kind %s requires a role", node.ID, node.Kind)
@@ -463,7 +509,7 @@ func validateGroupedGraphFields(graph GraphDefinition) error {
 		}
 	}
 	for _, node := range graph.Spec.Nodes {
-		for label, value := range map[string]string{"node ID": node.ID, "node kind": node.Kind, "node role": node.Role, "node parent": node.Parent, "node supersedes": node.Supersedes} {
+		for label, value := range map[string]string{"node ID": node.ID, "node kind": node.Kind, "node role": node.Role, "node parent": node.Parent, "node supersedes": node.Supersedes, "node lane": node.LaneID} {
 			if err := bounded(label, value, MaxGroupedRefRunes); err != nil {
 				return err
 			}

@@ -30,6 +30,7 @@ type NodeView struct {
 	Role      string `json:"role,omitempty"`
 	Parent    string `json:"parent,omitempty"`
 	GroupID   string `json:"groupId,omitempty"`
+	LaneID    string `json:"laneId,omitempty"`
 	Status    string `json:"status"`
 	Readiness string `json:"readiness,omitempty"`
 	Outcome   string `json:"outcome,omitempty"`
@@ -51,6 +52,7 @@ type Snapshot struct {
 
 func Handler(svc *service.Service) http.Handler {
 	mux := http.NewServeMux()
+	cache := newExplorerCache(svc)
 	assets, _ := fs.Sub(staticFiles, "static")
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -74,13 +76,13 @@ func Handler(svc *service.Service) http.Handler {
 		if err := requireQuery(r, nil); err != nil {
 			return err
 		}
-		snapshot, err := buildSnapshot(svc)
+		snapshot, err := buildSnapshot(r.Context(), svc, cache)
 		if err != nil {
 			return err
 		}
 		return writeAPIResult(w, snapshot, nil)
 	}))
-	registerExplorerAPI(mux, svc)
+	registerExplorerAPI(mux, svc, cache)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setSecurityHeaders(w.Header())
 		if !validUIHost(r.Host) {
@@ -136,12 +138,13 @@ func Serve(ctx context.Context, svc *service.Service, address string, open bool,
 	return err
 }
 
-func buildSnapshot(svc *service.Service) (Snapshot, error) {
-	state, err := svc.State()
+func buildSnapshot(ctx context.Context, svc *service.Service, cache *explorerCache) (Snapshot, error) {
+	snapshot, err := cache.snapshotFor(ctx, false)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	status, err := svc.Status()
+	state := snapshot.State
+	status, err := svc.OperationalStatusFromStateContext(ctx, state)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -149,9 +152,10 @@ func buildSnapshot(svc *service.Service) (Snapshot, error) {
 	if state.HeadSequence > 50 {
 		after = state.HeadSequence - 50
 	}
-	history, err := svc.History(after, 50)
-	if err != nil {
-		return Snapshot{}, err
+	history := service.HistoryPage{After: after, NextCursor: after, Entries: []service.HistoryEntry{}, Truncated: false}
+	if state.HeadSequence > after {
+		history.Entries = append(history.Entries, snapshot.History[int(after):]...)
+		history.NextCursor = history.Entries[len(history.Entries)-1].Sequence
 	}
 	result := Snapshot{
 		ReadOnly: true, Project: map[string]string{"id": svc.Project.Config.ProjectID, "name": svc.Project.Config.Name}, Status: status, History: history,
@@ -162,7 +166,7 @@ func buildSnapshot(svc *service.Service) (Snapshot, error) {
 		result.Edges = append(result.Edges, state.Graph.Spec.Edges...)
 		for _, node := range state.Graph.Spec.Nodes {
 			runtime := state.Nodes[node.ID]
-			result.Nodes = append(result.Nodes, NodeView{ID: node.ID, Title: node.Title, Kind: node.Kind, Role: node.Role, Parent: node.Parent, GroupID: node.GroupID, Status: runtime.Status, Outcome: runtime.Outcome})
+			result.Nodes = append(result.Nodes, NodeView{ID: node.ID, Title: node.Title, Kind: node.Kind, Role: node.Role, Parent: node.Parent, GroupID: node.GroupID, LaneID: node.LaneID, Status: runtime.Status, Outcome: runtime.Outcome})
 		}
 	}
 	for _, attempt := range state.Attempts {

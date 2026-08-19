@@ -58,7 +58,7 @@ func TestBetaContractIsDeterministicAndNamesExactlySixMCPTools(t *testing.T) {
 	if got := "sha256:" + fmt.Sprintf("%x", graphDigest); got != first.Graph.SchemaSHA256 {
 		t.Fatalf("graph schema digest drift: contract=%s file=%s", first.Graph.SchemaSHA256, got)
 	}
-	wantCapabilities := []string{"dynamic-graph", "hierarchical-subgraphs", "historical-lifecycle-import", "lifecycle-projection", "positive-predicate-ast", "resource-capacities", "resource-requests", "role-leases"}
+	wantCapabilities := []string{"declared-lanes", "dynamic-graph", "hierarchical-subgraphs", "historical-lifecycle-import", "lifecycle-projection", "positive-predicate-ast", "resource-capacities", "resource-requests", "role-leases"}
 	if !reflect.DeepEqual(first.Graph.Capabilities, wantCapabilities) {
 		t.Fatalf("graph capabilities are not closed and deterministic: %v", first.Graph.Capabilities)
 	}

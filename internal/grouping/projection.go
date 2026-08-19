@@ -36,6 +36,7 @@ type GroupSummary struct {
 	ID                    string   `json:"id"`
 	Title                 string   `json:"title"`
 	Kind                  string   `json:"kind"`
+	LaneID                string   `json:"laneId"`
 	ParentGroupID         string   `json:"parentGroupId,omitempty"`
 	SummaryNodeID         string   `json:"summaryNodeId,omitempty"`
 	CollapsedByDefault    bool     `json:"collapsedByDefault"`
@@ -131,46 +132,61 @@ func Build(state domain.State, expandedOverrides map[string]bool) (Projection, e
 }
 
 func buildLanes(graph domain.GraphDefinition, index groupIndex, visibleGroupIDs, visibleNodeIDs []string) []Lane {
-	lanes := []Lane{
-		{ID: "work-units", Title: "Work units", GroupRefs: []string{}, NodeRefs: []string{}},
-		{ID: "milestones-gates", Title: "Milestones & gates", GroupRefs: []string{}, NodeRefs: []string{}},
-		{ID: "external-actions", Title: "External actions", GroupRefs: []string{}, NodeRefs: []string{}},
-		{ID: "global-governance", Title: "Global governance", GroupRefs: []string{}, NodeRefs: []string{}},
-		{ID: "ungrouped", Title: "Ungrouped", GroupRefs: []string{}, NodeRefs: []string{}},
+	type orderedLane struct {
+		Lane
+		order int
+	}
+	lanes := []orderedLane{
+		{Lane: Lane{ID: "work-units", Title: "Work units", GroupRefs: []string{}, NodeRefs: []string{}}, order: 100},
+		{Lane: Lane{ID: "milestones-gates", Title: "Milestones & gates", GroupRefs: []string{}, NodeRefs: []string{}}, order: 200},
+		{Lane: Lane{ID: "external-actions", Title: "External actions", GroupRefs: []string{}, NodeRefs: []string{}}, order: 300},
+		{Lane: Lane{ID: "global-governance", Title: "Global governance", GroupRefs: []string{}, NodeRefs: []string{}}, order: 400},
+		{Lane: Lane{ID: "ungrouped", Title: "Ungrouped", GroupRefs: []string{}, NodeRefs: []string{}}, order: 1000},
+	}
+	indices := map[string]int{}
+	for i := range lanes {
+		indices[lanes[i].ID] = i
+	}
+	for _, declaration := range graph.Spec.Lanes {
+		if index, exists := indices[declaration.ID]; exists {
+			lanes[index].Title = declaration.Title
+			lanes[index].order = declaration.Order
+			continue
+		}
+		lanes = append(lanes, orderedLane{Lane: Lane{ID: declaration.ID, Title: declaration.Title, GroupRefs: []string{}, NodeRefs: []string{}}, order: declaration.Order})
+		indices[declaration.ID] = len(lanes) - 1
 	}
 	byID := map[string]*Lane{}
 	for i := range lanes {
-		byID[lanes[i].ID] = &lanes[i]
+		byID[lanes[i].ID] = &lanes[i].Lane
 	}
 	for _, groupID := range visibleGroupIDs {
-		group := index.definitions[groupID]
-		laneID := "work-units"
-		switch group.Kind {
-		case "milestone", "gate":
-			laneID = "milestones-gates"
-		case "external":
-			laneID = "external-actions"
-		case "governance":
-			laneID = "global-governance"
-		}
+		laneID := groupLaneID(index, groupID)
 		byID[laneID].GroupRefs = append(byID[laneID].GroupRefs, "group:"+groupID)
 	}
 	visibleNodes := stringSet(visibleNodeIDs)
 	for _, node := range graph.Spec.Nodes {
-		if !visibleNodes[node.ID] || node.GroupID != "" {
+		if !visibleNodes[node.ID] {
 			continue
 		}
-		laneID := "ungrouped"
-		switch node.Kind {
-		case "milestone", "gate", "join":
-			laneID = "milestones-gates"
-		case "effect":
-			laneID = "external-actions"
+		laneID := node.LaneID
+		if laneID == "" && node.GroupID != "" {
+			laneID = groupLaneID(index, node.GroupID)
+		}
+		if laneID == "" {
+			laneID = nodeKindLane(node.Kind)
 		}
 		byID[laneID].NodeRefs = append(byID[laneID].NodeRefs, "node:"+node.ID)
 	}
+	sort.SliceStable(lanes, func(i, j int) bool {
+		if lanes[i].order == lanes[j].order {
+			return lanes[i].ID < lanes[j].ID
+		}
+		return lanes[i].order < lanes[j].order
+	})
 	result := make([]Lane, 0, len(lanes))
-	for _, lane := range lanes {
+	for _, ordered := range lanes {
+		lane := ordered.Lane
 		sort.Strings(lane.GroupRefs)
 		sort.Strings(lane.NodeRefs)
 		if len(lane.GroupRefs)+len(lane.NodeRefs) > 0 {
@@ -178,6 +194,38 @@ func buildLanes(graph domain.GraphDefinition, index groupIndex, visibleGroupIDs,
 		}
 	}
 	return result
+}
+
+func groupLaneID(index groupIndex, groupID string) string {
+	root := index.definitions[groupID]
+	for current := groupID; current != ""; current = index.parents[current] {
+		group := index.definitions[current]
+		root = group
+		if group.LaneID != "" {
+			return group.LaneID
+		}
+	}
+	switch root.Kind {
+	case "milestone", "gate":
+		return "milestones-gates"
+	case "external":
+		return "external-actions"
+	case "governance":
+		return "global-governance"
+	default:
+		return "work-units"
+	}
+}
+
+func nodeKindLane(kind string) string {
+	switch kind {
+	case "milestone", "gate", "join":
+		return "milestones-gates"
+	case "effect":
+		return "external-actions"
+	default:
+		return "ungrouped"
+	}
 }
 
 func buildGroupIndex(graph domain.GraphDefinition, overrides map[string]bool) groupIndex {
@@ -227,7 +275,7 @@ func summarizeGroup(state domain.State, index groupIndex, groupID string, ready,
 	group := index.definitions[groupID]
 	members := index.members[groupID]
 	summary := GroupSummary{
-		ID: group.ID, Title: group.Title, Kind: group.Kind, ParentGroupID: group.ParentGroupID,
+		ID: group.ID, Title: group.Title, Kind: group.Kind, LaneID: groupLaneID(index, groupID), ParentGroupID: group.ParentGroupID,
 		SummaryNodeID: group.SummaryNodeID, CollapsedByDefault: group.CollapsedByDefault,
 		Visible: index.visible[groupID], Expanded: index.visible[groupID] && index.expanded[groupID],
 		Breadcrumbs: breadcrumbs(index, groupID), ChildGroupIDs: append([]string{}, index.children[groupID]...),

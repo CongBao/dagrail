@@ -16,7 +16,7 @@ func TestEmbeddedBetaWindowIsClosedAndSchemaValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if window.CurrentVersion != version.Version || evidence.Historical != 20 || !strings.HasPrefix(evidence.Digest, "sha256:") {
+	if window.CurrentVersion != version.Version || evidence.Historical != 21 || !strings.HasPrefix(evidence.Digest, "sha256:") {
 		t.Fatalf("unexpected compatibility evidence: %#v %#v", window, evidence)
 	}
 	raw, err := json.Marshal(window)
@@ -54,7 +54,7 @@ func TestBetaWindowRejectsMutationAndOmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, mutation := range map[string]string{
-		"wrong candidate": strings.Replace(string(raw), `"currentVersion": "0.25.2"`, `"currentVersion": "1.0.0"`, 1),
+		"wrong candidate": strings.Replace(string(raw), `"currentVersion": "0.25.3"`, `"currentVersion": "1.0.0"`, 1),
 		"duplicate key":   strings.Replace(string(raw), `"kind": "HistoricalBinaryMatrix"`, `"kind": "HistoricalBinaryMatrix", "kind": "HistoricalBinaryMatrix"`, 1),
 		"missing release": strings.Replace(string(raw), `    {"version": "0.22.2", "commit": "b73186b5cf7402f590e99a12b5886eee3d47fd0e"}`, "", 1),
 	} {
@@ -67,7 +67,7 @@ func TestBetaWindowRejectsMutationAndOmission(t *testing.T) {
 }
 
 func TestHistoricalWindowDocumentationMatchesClosedManifest(t *testing.T) {
-	const exactWindow = "v0.10.0–v0.25.1"
+	const exactWindow = "v0.10.0–v0.25.2"
 	for _, path := range []string{"COMPATIBILITY.md", "SECURITY.md", filepath.Join("docs", "qualification.md"), filepath.Join("docs", "readiness.md")} {
 		raw, err := os.ReadFile(filepath.Join("..", "..", path))
 		if err != nil {

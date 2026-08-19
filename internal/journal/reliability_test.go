@@ -67,6 +67,42 @@ func TestAppendFaultMatrixPreservesRenameCommitBoundary(t *testing.T) {
 	}
 }
 
+func TestInspectHeadObservesAppendAndRejectsCorruptTail(t *testing.T) {
+	root := t.TempDir()
+	store, err := openClaimed(t, root, reliabilityProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head, err := store.InspectHead(); err != nil || head != (Head{}) {
+		t.Fatalf("empty head = %#v, %v", head, err)
+	}
+	first, _, err := appendReliabilityEvent(store, "head-first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head, err := store.InspectHead(); err != nil || head.Sequence != 1 || head.Hash != first.SegmentHash {
+		t.Fatalf("first head = %#v, %v", head, err)
+	}
+	second, _, err := appendReliabilityEvent(store, "head-second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head, err := store.InspectHead(); err != nil || head.Sequence != 2 || head.Hash != second.SegmentHash {
+		t.Fatalf("second head = %#v, %v", head, err)
+	}
+	path := filepath.Join(root, "journal", fmt.Sprintf("%012d-%s.json", second.Sequence, second.SegmentHash))
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(raw, ' '), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InspectHead(); err == nil {
+		t.Fatal("non-canonical tail passed cheap head observation")
+	}
+}
+
 func TestProcessCrashBeforeAndAfterRenameIsRecoverable(t *testing.T) {
 	for _, scenario := range []struct {
 		point      string

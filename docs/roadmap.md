@@ -246,6 +246,15 @@ vocabulary, repository paths, and cutover policy are not shipped as DAGrail cont
   per-segment authority, canonicalization, digest, and hash-chain guard; stream-validate
   each segment before retention and keep wrapper depth separate from segment depth.
 
+### v0.25.3 Explorer scale and interaction patch
+
+- share one verified journal snapshot across all read-only Explorer views and observe the
+  tail cheaply before replaying a changed authority;
+- replace overlapping fixed refresh with opt-in polling, cancellable causal requests,
+  stale-snapshot diagnostics, and direct Node detail loading;
+- add generic declared lanes and a stable layered summary that retrieves every aggregate
+  edge page while keeping 920-node/58-group validation project-independent.
+
 ## Post-v0.23 field-validation backlog
 
 These are repository-neutral observations from the first live writer cutover. They are

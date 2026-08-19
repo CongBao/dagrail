@@ -76,6 +76,14 @@ type Segment struct {
 	SegmentHash   string  `json:"segmentHash"`
 }
 
+// Head is a bounded observation of the append-only journal tail. It is intended
+// for cache invalidation and liveness polling after a Store has already completed
+// full authority validation. It never replaces ReadAll for verification.
+type Head struct {
+	Sequence uint64 `json:"sequence"`
+	Hash     string `json:"hash"`
+}
+
 type unsignedSegment struct {
 	SchemaVersion int     `json:"schemaVersion"`
 	Sequence      uint64  `json:"sequence"`
@@ -671,6 +679,105 @@ func writeExclusiveAtomic(path string, data []byte, mode os.FileMode) error {
 func (s *Store) ReadAll() ([]Segment, error) {
 	var result []Segment
 	err := s.WithLock(func() error { var err error; result, err = s.readAllUnlocked(); return err })
+	return result, err
+}
+
+// InspectHead observes the current append-only tail without replaying every
+// segment. The writer lock makes the directory listing and tail read one stable
+// observation. Every filename is still checked for a continuous sequence and a
+// canonical digest-shaped suffix, while the tail's canonical bytes and self-hash
+// are verified. Callers must perform a full ReadAll whenever the returned head
+// differs from their previously verified snapshot.
+func (s *Store) InspectHead() (Head, error) {
+	var result Head
+	err := s.WithLock(func() error {
+		directory, err := os.Open(s.dir)
+		if err != nil {
+			return err
+		}
+		defer directory.Close()
+		names := make([]string, 0)
+		for {
+			entries, readErr := directory.ReadDir(1024)
+			for _, entry := range entries {
+				if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+					continue
+				}
+				if entry.Type()&os.ModeSymlink != 0 {
+					return fmt.Errorf("journal segment %s must not be a symlink", entry.Name())
+				}
+				names = append(names, entry.Name())
+				if len(names) > MaxSegmentCount {
+					return fmt.Errorf("journal exceeds %d segments", MaxSegmentCount)
+				}
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				return readErr
+			}
+		}
+		sort.Strings(names)
+		for index, name := range names {
+			prefix := fmt.Sprintf("%012d-", index+1)
+			digest := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".json")
+			decoded, decodeErr := hex.DecodeString(digest)
+			if !strings.HasPrefix(name, prefix) || len(decoded) != sha256.Size || decodeErr != nil {
+				return fmt.Errorf("journal segment filename is invalid: %s", name)
+			}
+		}
+		if len(names) == 0 {
+			result = Head{}
+			return nil
+		}
+		name := names[len(names)-1]
+		path := filepath.Join(s.dir, name)
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > MaxSegmentBytes {
+			return fmt.Errorf("journal segment %s must be a regular file no larger than %d bytes", name, MaxSegmentBytes)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := domain.ValidateAuthorityJSON(data); err != nil {
+			return fmt.Errorf("decode journal segment %s: %w", name, err)
+		}
+		var segment Segment
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&segment); err != nil {
+			return fmt.Errorf("decode journal segment %s: %w", name, err)
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			return fmt.Errorf("decode journal segment %s: trailing content", name)
+		}
+		canonical, err := jcs.Transform(data)
+		if err != nil || !bytes.Equal(data, canonical) {
+			return fmt.Errorf("journal segment %s is not canonical RFC 8785 JSON", name)
+		}
+		if segment.Sequence != uint64(len(names)) || segment.ProjectID != s.projectID {
+			return fmt.Errorf("journal chain mismatch at %s", name)
+		}
+		unsigned := unsignedSegment{SchemaVersion: segment.SchemaVersion, Sequence: segment.Sequence, ProjectID: segment.ProjectID, PreviousHash: segment.PreviousHash, Command: segment.Command, Events: segment.Events, CommittedAt: segment.CommittedAt}
+		hash, err := computeHash(unsigned)
+		if err != nil {
+			return err
+		}
+		if segment.SegmentHash != hash || name != fmt.Sprintf("%012d-%s.json", segment.Sequence, hash) {
+			return fmt.Errorf("journal hash mismatch at %s", name)
+		}
+		if err := validateStoredCommand(segment.SchemaVersion, segment.Command); err != nil {
+			return fmt.Errorf("journal compatibility error at %s: %w", name, err)
+		}
+		if err := validateStoredEvents(segment.SchemaVersion, segment.Events); err != nil {
+			return fmt.Errorf("journal compatibility error at %s: %w", name, err)
+		}
+		result = Head{Sequence: segment.Sequence, Hash: segment.SegmentHash}
+		return nil
+	})
 	return result, err
 }
 

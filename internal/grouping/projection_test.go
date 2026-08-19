@@ -163,6 +163,39 @@ func TestBuildAssignsVisibleGroupsAndGlobalNodesToGenericLanes(t *testing.T) {
 	}
 }
 
+func TestBuildHonorsExplicitCustomLanesAndGroupInheritance(t *testing.T) {
+	state := groupedState()
+	state.Graph.Spec.Lanes = []domain.LaneDefinition{{ID: "delivery", Title: "Delivery", Order: 25}, {ID: "assurance", Title: "Assurance", Order: 50}}
+	state.Graph.Spec.Groups[1].LaneID = "delivery"
+	state.Graph.Spec.Nodes = append(state.Graph.Spec.Nodes,
+		domain.NodeDefinition{ID: "global-review", Kind: "review", Title: "Global review", LaneID: "assurance", Outcomes: []domain.Outcome{{ID: "approved", Class: "success"}}},
+	)
+	state.Nodes["global-review"] = domain.NodeRuntime{Status: "planned"}
+
+	projection, err := Build(state, map[string]bool{"alpha": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Lane{}
+	order := []string{}
+	for _, lane := range projection.Lanes {
+		got[lane.ID] = lane
+		order = append(order, lane.ID)
+	}
+	if len(order) < 2 || order[0] != "delivery" || order[1] != "assurance" {
+		t.Fatalf("custom lane order is not deterministic: %v", order)
+	}
+	if !reflect.DeepEqual(got["delivery"].GroupRefs, []string{"group:alpha"}) || !reflect.DeepEqual(got["delivery"].NodeRefs, []string{"node:alpha-done", "node:alpha-work"}) {
+		t.Fatalf("expanded group members did not inherit their explicit lane: %#v", got["delivery"])
+	}
+	if !reflect.DeepEqual(got["assurance"].NodeRefs, []string{"node:global-review"}) {
+		t.Fatalf("explicit global node lane was ignored: %#v", got["assurance"])
+	}
+	if groupByID(t, projection, "alpha").LaneID != "delivery" {
+		t.Fatalf("group summary omitted its effective lane: %#v", groupByID(t, projection, "alpha"))
+	}
+}
+
 func groupByID(t *testing.T, projection Projection, id string) GroupSummary {
 	t.Helper()
 	for _, group := range projection.Groups {

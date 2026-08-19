@@ -16,7 +16,16 @@
     </div>
     <div class="header-actions">
       <span class="readonly"><span class="readonly-dot"></span>Read only</span>
+      <span id="connection-status" class="connection-status" data-state="loading">Initializing</span>
+      <span id="last-updated" class="revision">No snapshot yet</span>
       <span id="revision" class="revision">Uninitialized</span>
+      <label class="auto-refresh" for="auto-refresh">Auto
+        <select id="auto-refresh" aria-label="Automatic refresh interval">
+          <option value="0">Off</option>
+          <option value="30">30s</option>
+          <option value="60">60s</option>
+        </select>
+      </label>
       <button id="refresh" class="button primary" type="button">Refresh</button>
     </div>
   </header>
@@ -71,7 +80,7 @@
           <div id="legend" class="legend" aria-label="Node status legend"></div>
           <div id="graph-scroll" class="graph-scroll" tabindex="0">
             <svg id="graph" role="img" aria-label="DAG topology"></svg>
-            <svg id="minimap" class="minimap" role="img" aria-label="Topology minimap"></svg>
+            <svg id="minimap" class="minimap" role="button" tabindex="0" aria-label="Topology minimap; click to navigate"></svg>
           </div>
         </section>
 
@@ -100,6 +109,8 @@
     <div class="drawer-header"><div><span class="eyebrow">NODE INSPECTOR</span><h2 id="drawer-title">Node</h2></div><button id="drawer-close" class="icon-button" type="button" aria-label="Close node inspector">×</button></div>
     <div id="drawer-content" class="drawer-content"></div>
   </aside>
+
+  <div id="loading-status" class="loading-status" role="status" aria-live="polite" hidden>Loading verified snapshot…</div>
 
   <div id="error" role="alert" hidden></div>
   <script src="/assets/app.js" defer></script>

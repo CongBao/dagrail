@@ -112,11 +112,66 @@ func TestReadOnlyUIExposesBoundedSnapshotAndNoWriteRoute(t *testing.T) {
 			t.Fatalf("UI automatic legacy/detail or compact group-state contract %q is missing", contract)
 		}
 	}
+	for _, contract := range []string{"AbortController", "/api/v1/head", "completeAggregateEdges", "showNodeSkeleton", "dagrail.autoRefresh", "snapshotAt", "syncBackgroundInert"} {
+		if !strings.Contains(string(scriptBody), contract) {
+			t.Fatalf("UI large-graph request contract %q is missing", contract)
+		}
+	}
+	for _, contract := range []string{"else{clearError();setConnection('connected','Connected')", "tooltip.textContent=`${node.title||node.id} (${node.id})`"} {
+		if !strings.Contains(string(scriptBody), contract) {
+			t.Fatalf("UI recovery or full-title contract %q is missing", contract)
+		}
+	}
+	if strings.Contains(string(scriptBody), "setInterval") || strings.Contains(string(scriptBody), "15000") {
+		t.Fatal("UI restored the overlapping fixed 15-second refresh loop")
+	}
 }
 
 func TestUIServerRejectsNonLoopbackBinding(t *testing.T) {
 	if err := ui.Serve(context.Background(), nil, "0.0.0.0:0", false, io.Discard); err == nil || !strings.Contains(err.Error(), "loopback") {
 		t.Fatalf("non-loopback binding accepted: %v", err)
+	}
+}
+
+func TestExplorerHeadPollObservesChangeWithoutMaterializingAView(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := service.Init(root, "head poll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graphPath := filepath.Join(root, "graph.json")
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"head"},"spec":{"roles":[{"id":"controller","capabilities":[]}],"nodes":[{"id":"work","kind":"task","role":"controller","title":"Work","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
+	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "head/graph", "controller"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(ui.Handler(svc))
+	defer server.Close()
+	var head ui.ExplorerHead
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/head", http.StatusOK), &head); err != nil {
+		t.Fatal(err)
+	}
+	if head.SnapshotAvailable || !head.Changed || head.HeadSequence == 0 {
+		t.Fatalf("cold head poll claimed a materialized snapshot: %+v", head)
+	}
+	_ = getBody(t, server.URL+"/api/v1/overview", http.StatusOK)
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/head", http.StatusOK), &head); err != nil {
+		t.Fatal(err)
+	}
+	if !head.SnapshotAvailable || head.Changed || head.SnapshotSequence != head.HeadSequence {
+		t.Fatalf("warm head poll lost snapshot identity: %+v", head)
+	}
+	if _, err := svc.BindRole("controller", "test", "session", time.Minute, false, "head/bind"); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/head", http.StatusOK), &head); err != nil {
+		t.Fatal(err)
+	}
+	if !head.Changed || head.HeadSequence <= head.SnapshotSequence {
+		t.Fatalf("head append was not observed cheaply: %+v", head)
 	}
 }
 
@@ -391,6 +446,76 @@ func TestExplorerSummaryTopologyKeepsAllGroupsBeyondInternalNodeCap(t *testing.T
 	validateExplorerContract(t, detail)
 }
 
+func TestExplorerProductScaleSummaryIsCompleteAndBounded(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := service.Init(root, "product-scale explorer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := domain.GraphDefinition{APIVersion: domain.GraphAPIVersion, Kind: domain.GraphKind, Metadata: domain.GraphMetadata{Name: "product scale"}, Spec: domain.GraphSpec{
+		Roles: []domain.RoleDefinition{{ID: "worker", Capabilities: []string{}}, {ID: "global", Capabilities: []string{}}}, Groups: []domain.GroupDefinition{}, Nodes: []domain.NodeDefinition{}, Edges: []domain.EdgeDefinition{},
+	}}
+	groupNode := func(group, node int) string { return fmt.Sprintf("group-%02d-node-%02d", group, node) }
+	for groupIndex := range 58 {
+		nodeCount := 15
+		if groupIndex < 21 {
+			nodeCount++
+		}
+		groupID := fmt.Sprintf("group-%02d", groupIndex)
+		graph.Spec.Groups = append(graph.Spec.Groups, domain.GroupDefinition{ID: groupID, Title: fmt.Sprintf("Work unit %02d", groupIndex), Kind: "work-unit", SummaryNodeID: groupNode(groupIndex, nodeCount-1), CollapsedByDefault: true})
+		for nodeIndex := range nodeCount {
+			graph.Spec.Nodes = append(graph.Spec.Nodes, domain.NodeDefinition{ID: groupNode(groupIndex, nodeIndex), Kind: "task", Role: "worker", Title: fmt.Sprintf("Internal %02d/%02d", groupIndex, nodeIndex), GroupID: groupID, Outcomes: []domain.Outcome{{ID: "done", Class: "success"}}})
+		}
+	}
+	for index := range 29 {
+		graph.Spec.Nodes = append(graph.Spec.Nodes, domain.NodeDefinition{ID: fmt.Sprintf("global-%02d", index), Kind: "gate", Role: "global", Title: fmt.Sprintf("Global gate %02d", index), Outcomes: []domain.Outcome{{ID: "passed", Class: "success"}}})
+	}
+	edgeCount := 0
+	for from := 0; from < 58 && edgeCount < 190; from++ {
+		for to := from + 1; to < 58 && edgeCount < 190; to++ {
+			graph.Spec.Edges = append(graph.Spec.Edges, domain.EdgeDefinition{ID: fmt.Sprintf("aggregate-%03d", edgeCount), From: groupNode(from, 0), To: groupNode(to, 0), When: domain.Predicate{Outcome: "done"}})
+			edgeCount++
+		}
+	}
+	if len(graph.Spec.Nodes) != 920 || len(graph.Spec.Edges) != 190 {
+		t.Fatalf("invalid product-scale fixture: nodes=%d edges=%d", len(graph.Spec.Nodes), len(graph.Spec.Edges))
+	}
+	raw, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "product-scale.json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(path, "product-scale", "governor"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(ui.Handler(svc))
+	defer server.Close()
+	started := time.Now()
+	var topology ui.TopologyPage
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/topology?mode=summary&limit=200", http.StatusOK), &topology); err != nil {
+		t.Fatal(err)
+	}
+	if len(topology.Groups) != 58 || len(topology.Nodes) != 29 || topology.AggregateEdgePage == nil || topology.AggregateEdgePage.Total != 190 || len(topology.AggregateEdges) != 100 || !topology.AggregateEdgePage.Truncated {
+		t.Fatalf("product-scale summary is incomplete: groups=%d nodes=%d aggregate=%d page=%+v", len(topology.Groups), len(topology.Nodes), len(topology.AggregateEdges), topology.AggregateEdgePage)
+	}
+	ref := url.QueryEscape(topology.AggregateEdgeIndexRef)
+	var tail ui.AggregateEdgePage
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/aggregate-edges?ref="+ref+"&cursor=100&limit=100", http.StatusOK), &tail); err != nil {
+		t.Fatal(err)
+	}
+	if len(tail.AggregateEdges) != 90 || tail.Page.Truncated || tail.Page.Total != 190 {
+		t.Fatalf("product-scale aggregate edge continuation is incomplete: %+v", tail.Page)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second*time.Duration(raceTestMultiplier) {
+		t.Fatalf("product-scale summary gate exceeded 5s: %v", elapsed)
+	}
+	validateExplorerContract(t, topology, tail)
+}
+
 func TestExplorerAggregateEdgesAreBoundedAndRecoverable(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
@@ -558,6 +683,9 @@ func TestExplorerGroupStateIsOpaqueAndReadSurfacesAreByteNonmutating(t *testing.
 	}
 	ref := url.QueryEscape(collapsed.AggregateEdges[0].InspectRef)
 	_ = getBody(t, server.URL+"/api/v1/group-edges?ref="+ref, http.StatusOK)
+	for _, path := range []string{"/api/v1/head", "/api/v1/overview", "/api/v1/node?id=first", "/api/v1/history", "/api/v1/operations", "/api/v1/snapshot"} {
+		_ = getBody(t, server.URL+path, http.StatusOK)
+	}
 	after := snapshotTreeBytes(t, root)
 	if mismatch := firstSnapshotMismatch(before, after); mismatch != "" {
 		t.Fatalf("read-only group surfaces changed protected bytes: %s", mismatch)
@@ -747,6 +875,7 @@ func TestExplorerResponsesMatchPublishedSchema(t *testing.T) {
 		path   string
 		status int
 	}{
+		{"/api/v1/head", http.StatusOK},
 		{"/api/v1/overview", http.StatusOK},
 		{"/api/v1/nodes", http.StatusOK},
 		{"/api/v1/topology", http.StatusOK},

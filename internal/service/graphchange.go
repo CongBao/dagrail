@@ -30,10 +30,12 @@ type PatchOperation struct {
 	EdgeID  string                  `json:"edgeId,omitempty" yaml:"edgeId,omitempty"`
 	RoleID  string                  `json:"roleId,omitempty" yaml:"roleId,omitempty"`
 	GroupID string                  `json:"groupId,omitempty" yaml:"groupId,omitempty"`
+	LaneID  string                  `json:"laneId,omitempty" yaml:"laneId,omitempty"`
 	Node    *domain.NodeDefinition  `json:"node,omitempty" yaml:"node,omitempty"`
 	Edge    *domain.EdgeDefinition  `json:"edge,omitempty" yaml:"edge,omitempty"`
 	Role    *domain.RoleDefinition  `json:"role,omitempty" yaml:"role,omitempty"`
 	Group   *domain.GroupDefinition `json:"group,omitempty" yaml:"group,omitempty"`
+	Lane    *domain.LaneDefinition  `json:"lane,omitempty" yaml:"lane,omitempty"`
 }
 
 type GraphImpact struct {
@@ -50,6 +52,9 @@ type GraphImpact struct {
 	AddedGroups        []string `json:"addedGroups,omitempty"`
 	UpdatedGroups      []string `json:"updatedGroups,omitempty"`
 	RemovedGroups      []string `json:"removedGroups,omitempty"`
+	AddedLanes         []string `json:"addedLanes,omitempty"`
+	UpdatedLanes       []string `json:"updatedLanes,omitempty"`
+	RemovedLanes       []string `json:"removedLanes,omitempty"`
 	MovedNodes         []string `json:"movedNodes,omitempty"`
 	DependencyCut      []string `json:"dependencyCut,omitempty"`
 	Token              string   `json:"token,omitempty"`
@@ -65,6 +70,9 @@ type GraphImpact struct {
 	AddedGroupCount    int      `json:"addedGroupCount,omitempty"`
 	UpdatedGroupCount  int      `json:"updatedGroupCount,omitempty"`
 	RemovedGroupCount  int      `json:"removedGroupCount,omitempty"`
+	AddedLaneCount     int      `json:"addedLaneCount,omitempty"`
+	UpdatedLaneCount   int      `json:"updatedLaneCount,omitempty"`
+	RemovedLaneCount   int      `json:"removedLaneCount,omitempty"`
 	MovedNodeCount     int      `json:"movedNodeCount,omitempty"`
 	DependencyCutCount int      `json:"dependencyCutCount,omitempty"`
 	ImpactDigest       string   `json:"impactDigest,omitempty"`
@@ -298,6 +306,42 @@ func applyGraphPatch(state domain.State, patch GraphPatch) (domain.GraphDefiniti
 	changedRoots := map[string]bool{}
 	for _, operation := range patch.Operations {
 		switch operation.Op {
+		case "addLane":
+			if operation.Lane == nil || operation.Lane.ID == "" {
+				return graph, impact, nil, fmt.Errorf("addLane requires lane")
+			}
+			if _, ok := findLane(graph, operation.Lane.ID); ok {
+				return graph, impact, nil, fmt.Errorf("lane %s already exists", operation.Lane.ID)
+			}
+			graph.Spec.Lanes = append(graph.Spec.Lanes, *operation.Lane)
+			impact.AddedLanes = append(impact.AddedLanes, operation.Lane.ID)
+		case "updateLane":
+			if operation.Lane == nil || operation.Lane.ID == "" {
+				return graph, impact, nil, fmt.Errorf("updateLane requires lane")
+			}
+			index, ok := findLane(graph, operation.Lane.ID)
+			if !ok {
+				return graph, impact, nil, fmt.Errorf("unknown lane %s", operation.Lane.ID)
+			}
+			graph.Spec.Lanes[index] = *operation.Lane
+			impact.UpdatedLanes = append(impact.UpdatedLanes, operation.Lane.ID)
+		case "removeLane":
+			index, ok := findLane(graph, operation.LaneID)
+			if !ok {
+				return graph, impact, nil, fmt.Errorf("unknown lane %s", operation.LaneID)
+			}
+			for _, group := range graph.Spec.Groups {
+				if group.LaneID == operation.LaneID {
+					return graph, impact, nil, fmt.Errorf("lane %s is still referenced by group %s", operation.LaneID, group.ID)
+				}
+			}
+			for _, node := range graph.Spec.Nodes {
+				if node.LaneID == operation.LaneID {
+					return graph, impact, nil, fmt.Errorf("lane %s is still referenced by node %s", operation.LaneID, node.ID)
+				}
+			}
+			graph.Spec.Lanes = append(graph.Spec.Lanes[:index], graph.Spec.Lanes[index+1:]...)
+			impact.RemovedLanes = append(impact.RemovedLanes, operation.LaneID)
 		case "addGroup":
 			if operation.Group == nil || operation.Group.ID == "" {
 				return graph, impact, nil, fmt.Errorf("addGroup requires group")
@@ -480,10 +524,19 @@ func applyGraphPatch(state domain.State, patch GraphPatch) (domain.GraphDefiniti
 		return graph, impact, nil, err
 	}
 	impact.DependencyCut = dependencyCut(graph, changedRoots)
-	for _, values := range [][]string{impact.AddedNodes, impact.UpdatedNodes, impact.RemovedNodes, impact.AddedEdges, impact.RemovedEdges, impact.AddedRoles, impact.UpdatedRoles, impact.RemovedRoles, impact.AddedGroups, impact.UpdatedGroups, impact.RemovedGroups, impact.MovedNodes, impact.DependencyCut} {
+	for _, values := range [][]string{impact.AddedNodes, impact.UpdatedNodes, impact.RemovedNodes, impact.AddedEdges, impact.RemovedEdges, impact.AddedRoles, impact.UpdatedRoles, impact.RemovedRoles, impact.AddedGroups, impact.UpdatedGroups, impact.RemovedGroups, impact.AddedLanes, impact.UpdatedLanes, impact.RemovedLanes, impact.MovedNodes, impact.DependencyCut} {
 		sort.Strings(values)
 	}
 	return graph, impact, superseded, nil
+}
+
+func findLane(graph domain.GraphDefinition, id string) (int, bool) {
+	for index, lane := range graph.Spec.Lanes {
+		if lane.ID == id {
+			return index, true
+		}
+	}
+	return 0, false
 }
 
 func findGroup(graph domain.GraphDefinition, id string) (int, bool) {
