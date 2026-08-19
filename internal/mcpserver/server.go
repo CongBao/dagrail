@@ -422,13 +422,33 @@ func graphChangeSchema() *jsonschema.Schema {
 func contextSchema() *jsonschema.Schema {
 	schema := schemaFor[ContextInput]()
 	setMaxLength(schema, "view", 32)
-	schema.Properties["view"].Enum = []any{"orchestrator", "worker", "reviewer"}
+	limits := service.ContextBudgetLimits()
+	views := make([]any, 0, len(limits))
+	maximumBudget := 0
+	for _, limit := range limits {
+		views = append(views, limit.View)
+		if limit.Bytes > maximumBudget {
+			maximumBudget = limit.Bytes
+		}
+		view := any(limit.View)
+		maximum := float64(limit.Bytes)
+		schema.AllOf = append(schema.AllOf, &jsonschema.Schema{
+			If: &jsonschema.Schema{
+				Required:   []string{"view"},
+				Properties: map[string]*jsonschema.Schema{"view": {Const: &view}},
+			},
+			Then: &jsonschema.Schema{
+				Properties: map[string]*jsonschema.Schema{"budget_bytes": {Maximum: &maximum}},
+			},
+		})
+	}
+	schema.Properties["view"].Enum = views
 	setMaxLength(schema, "role_id", 256)
 	setMaxLength(schema, "role_ref", 128)
 	setMaxLength(schema, "node_id", 256)
 	setMaxLength(schema, "node_ref", 128)
 	setMaxLength(schema, "root", 4096)
-	minimum, maximum := float64(512), float64(12288)
+	minimum, maximum := float64(service.MinimumContextBudgetBytes), float64(maximumBudget)
 	schema.Properties["budget_bytes"].Minimum = &minimum
 	schema.Properties["budget_bytes"].Maximum = &maximum
 	return schema

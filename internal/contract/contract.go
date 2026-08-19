@@ -109,6 +109,11 @@ func documentedSurface(apiVersion, stability, schemaPath string) DocumentedSurfa
 }
 
 func Current() Report {
+	limits := service.ContextBudgetLimits()
+	contextBudgets := make([]ContextBudget, 0, len(limits))
+	for _, limit := range limits {
+		contextBudgets = append(contextBudgets, ContextBudget{View: limit.View, Bytes: limit.Bytes})
+	}
 	return Report{
 		APIVersion: "dagrail.io/v1beta1",
 		Kind:       "CompatibilityContract",
@@ -154,12 +159,8 @@ func Current() Report {
 		},
 		Projection: projection.CurrentSchemaVersion,
 		MCP:        mcpserver.ToolContracts(),
-		Contexts: []ContextBudget{
-			{View: "orchestrator", Bytes: 12288},
-			{View: "reviewer", Bytes: 12288},
-			{View: "worker", Bytes: 8192},
-		},
-		Commands: commandcatalog.Names(),
+		Contexts:   contextBudgets,
+		Commands:   commandcatalog.Names(),
 		Promises: []string{
 			"journal history is never rewritten by an upgrade",
 			"the six MCP tool names remain stable through the v0.x beta line",
@@ -175,7 +176,7 @@ func Current() Report {
 			"command discovery and completion are generated from one bounded catalog",
 			"opt-in CLI error envelopes keep stable broad exit classes and preserve interruption",
 			"host plugin commands are output-bounded, time-bounded, and cancellation-aware",
-			"the v0.10.0 through v0.26.0 beta binaries are immutable inputs to the current upgrade and rollback matrix",
+			"the v0.10.0 through v0.26.1 beta binaries are immutable inputs to the current upgrade and rollback matrix",
 			"readiness can declare external-validation readiness but cannot infer production validation or 1.0 readiness",
 			"the loopback explorer rejects non-loopback Host values and cross-port Origin values without exposing CORS access",
 			"SQLite remains disposable and rebuildable from the verified journal",

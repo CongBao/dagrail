@@ -68,6 +68,10 @@ func TestBetaContractIsDeterministicAndNamesExactlySixMCPTools(t *testing.T) {
 			t.Fatalf("tool %d = %#v", index, tool)
 		}
 	}
+	wantContexts := []ContextBudget{{View: "orchestrator", Bytes: 12288}, {View: "reviewer", Bytes: 12288}, {View: "worker", Bytes: 8192}}
+	if !reflect.DeepEqual(first.Contexts, wantContexts) {
+		t.Fatalf("context budgets drifted from the public contract: got=%v want=%v", first.Contexts, wantContexts)
+	}
 }
 
 func TestBetaContractMatchesItsPublishedSchema(t *testing.T) {

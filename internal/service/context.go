@@ -18,15 +18,30 @@ type ContextEnvelope struct {
 	Data        map[string]any `json:"data"`
 }
 
-var contextBudgetByView = map[string]int{
-	"orchestrator": 12288,
-	"worker":       8192,
-	"reviewer":     12288,
+const MinimumContextBudgetBytes = 512
+
+type ContextBudgetLimit struct {
+	View  string
+	Bytes int
+}
+
+var contextBudgetLimits = []ContextBudgetLimit{
+	{View: "orchestrator", Bytes: 12288},
+	{View: "reviewer", Bytes: 12288},
+	{View: "worker", Bytes: 8192},
+}
+
+func ContextBudgetLimits() []ContextBudgetLimit {
+	return append([]ContextBudgetLimit(nil), contextBudgetLimits...)
 }
 
 func ContextBudgetForView(view string) (int, bool) {
-	budget, ok := contextBudgetByView[view]
-	return budget, ok
+	for _, limit := range contextBudgetLimits {
+		if limit.View == view {
+			return limit.Bytes, true
+		}
+	}
+	return 0, false
 }
 
 func (s *Service) Context(view, roleID, nodeID string, budget int) ([]byte, error) {
@@ -48,7 +63,7 @@ func (s *Service) ContextSinceContext(ctx context.Context, view, roleID, nodeID 
 	if budget == 0 {
 		budget = maximum
 	}
-	if budget < 512 {
+	if budget < MinimumContextBudgetBytes {
 		return nil, fmt.Errorf("context budget must be at least 512 bytes")
 	}
 	if budget > maximum {

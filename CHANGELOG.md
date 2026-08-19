@@ -2,6 +2,17 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.26.2 — 2026-08-20
+
+### Fixed
+
+- `dag_context` now advertises the exact byte limit for each view: worker requests
+  are schema-bounded to 8,192 bytes, while orchestrator and reviewer requests retain
+  their 12,288-byte maximum;
+- runtime validation, MCP input schemas, and the compatibility report now derive all
+  context-view budgets from one ordered contract, preventing advertised limits from
+  drifting away from enforced limits.
+
 ## 0.26.1 — 2026-08-19
 
 ### Fixed

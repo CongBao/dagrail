@@ -16,6 +16,7 @@ import (
 	"github.com/CongBao/dagrail/internal/mcpserver"
 	"github.com/CongBao/dagrail/internal/service"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	contractschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 type missingProjectExecutor struct{ calls atomic.Int32 }
@@ -58,6 +59,112 @@ func TestRemoteMCPInitializesWithoutOpeningAProject(t *testing.T) {
 		t.Fatalf("missing project diagnostic was not structured or lazy: calls=%d err=%v result=%s", executor.calls.Load(), err, raw)
 	}
 	_ = session.Close()
+	cancel()
+	<-done
+}
+
+func TestRemoteDagContextSchemaRejectsPerViewBudgetBeforeDispatch(t *testing.T) {
+	executor := &missingProjectExecutor{}
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	server := mcpserver.NewRemote(executor, ".")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- server.Run(ctx, serverTransport) }()
+	client := mcp.NewClient(&mcp.Implementation{Name: "context-budget-schema-test", Version: "1.0.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "dag_context", Arguments: map[string]any{"view": "worker", "budget_bytes": 12000}})
+	if err == nil && (result == nil || !result.IsError) {
+		t.Fatalf("worker budget above 8192 was accepted: result=%+v err=%v", result, err)
+	}
+	if calls := executor.calls.Load(); calls != 0 {
+		t.Fatalf("schema-invalid worker budget reached command dispatch: calls=%d", calls)
+	}
+
+	for _, arguments := range []map[string]any{
+		{"view": "worker", "budget_bytes": 8192},
+		{"view": "orchestrator", "budget_bytes": 12000},
+		{"view": "reviewer", "budget_bytes": 12000},
+	} {
+		_, _ = session.CallTool(ctx, &mcp.CallToolParams{Name: "dag_context", Arguments: arguments})
+	}
+	if calls := executor.calls.Load(); calls != 3 {
+		t.Fatalf("schema-valid per-view budgets did not reach command dispatch: calls=%d", calls)
+	}
+
+	_ = session.Close()
+	cancel()
+	<-done
+}
+
+func TestAdvertisedDagContextSchemaMatchesEveryRuntimeBudget(t *testing.T) {
+	server := mcpserver.NewRemote(&missingProjectExecutor{}, ".")
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- server.Run(ctx, serverTransport) }()
+	client := mcp.NewClient(&mcp.Implementation{Name: "context-budget-contract-test", Version: "1.0.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inputSchema any
+	for _, tool := range tools.Tools {
+		if tool.Name == "dag_context" {
+			inputSchema = tool.InputSchema
+			break
+		}
+	}
+	if inputSchema == nil {
+		t.Fatal("dag_context input schema was not advertised")
+	}
+	raw, err := json.Marshal(inputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	compiler := contractschema.NewCompiler()
+	compiler.DefaultDraft(contractschema.Draft2020)
+	if err := compiler.AddResource("urn:dagrail:dag-context", document); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile("urn:dagrail:dag-context")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, limit := range service.ContextBudgetLimits() {
+		for name, instance := range map[string]map[string]any{
+			"default": {"view": limit.View},
+			"maximum": {"view": limit.View, "budget_bytes": limit.Bytes},
+		} {
+			if err := schema.Validate(instance); err != nil {
+				t.Fatalf("%s %s budget was rejected by advertised schema: %v", limit.View, name, err)
+			}
+		}
+		if err := schema.Validate(map[string]any{"view": limit.View, "budget_bytes": limit.Bytes + 1}); err == nil {
+			t.Fatalf("%s budget above runtime maximum %d was accepted by advertised schema", limit.View, limit.Bytes)
+		}
+	}
+	if err := schema.Validate(map[string]any{"view": "worker", "budget_bytes": service.MinimumContextBudgetBytes - 1}); err == nil {
+		t.Fatal("budget below runtime minimum was accepted by advertised schema")
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
 	cancel()
 	<-done
 }
