@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dagrail.dev/schemas/ui-api-v1beta3.schema.json",
+  "title": "DAGrail Explorer API v1beta3 project-map responses",
+  "oneOf": [
+    {"$ref": "#/$defs/projectMap"},
+    {"$ref": "#/$defs/groupMembers"},
+    {"$ref": "#/$defs/locate"},
+    {"$ref": "#/$defs/aggregateEdgePageResponse"}
+  ],
+  "$defs": {
+    "identity": {"type":"string","minLength":1,"maxLength":4096},
+    "page": {
+      "type":"object","additionalProperties":false,
+      "required":["cursor","limit","total","truncated"],
+      "properties":{"cursor":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":0},"total":{"type":"integer","minimum":0},"nextCursor":{"type":"integer","minimum":0},"truncated":{"type":"boolean"},"backbone":{"type":"boolean"}}
+    },
+    "node": {
+      "type":"object","additionalProperties":false,"required":["id","title","kind","status"],
+      "properties":{"id":{"$ref":"#/$defs/identity"},"title":{"type":"string","maxLength":16384},"kind":{"$ref":"#/$defs/identity"},"role":{"$ref":"#/$defs/identity"},"parent":{"$ref":"#/$defs/identity"},"groupId":{"$ref":"#/$defs/identity"},"laneId":{"$ref":"#/$defs/identity"},"status":{"$ref":"#/$defs/identity"},"readiness":{"$ref":"#/$defs/identity"},"outcome":{"$ref":"#/$defs/identity"}}
+    },
+    "group": {
+      "type":"object","additionalProperties":false,
+      "required":["id","title","kind","laneId","collapsedByDefault","visible","expanded","breadcrumbs","childGroupIds","lifecycleStatus","healthStatus","displayStatus","nodeCount","directNodeCount","readyNodeCount","activeNodeCount","attemptCount","activeAttemptCount","currentCycle","openIncidentCount","uncertainEffectCount","unclosedResourceCount","membershipDigest"],
+      "properties":{
+        "id":{"$ref":"#/$defs/identity"},"title":{"type":"string","maxLength":16384},"kind":{"$ref":"#/$defs/identity"},
+        "laneId":{"$ref":"#/$defs/identity"},"parentGroupId":{"$ref":"#/$defs/identity"},"summaryNodeId":{"$ref":"#/$defs/identity"},
+        "collapsedByDefault":{"type":"boolean"},"visible":{"type":"boolean"},"expanded":{"type":"boolean"},
+        "breadcrumbs":{"type":"array","maxItems":256,"items":{"$ref":"#/$defs/identity"}},
+        "childGroupIds":{"type":"array","maxItems":4096,"items":{"$ref":"#/$defs/identity"}},
+        "lifecycleStatus":{"type":"string"},"healthStatus":{"enum":["clean","attention","blocked"]},"displayStatus":{"type":"string"},
+        "summaryOutcome":{"type":"string"},"summaryOutcomeClass":{"type":"string"},
+        "nodeCount":{"type":"integer","minimum":0},"directNodeCount":{"type":"integer","minimum":0},
+        "readyNodeCount":{"type":"integer","minimum":0},"activeNodeCount":{"type":"integer","minimum":0},
+        "attemptCount":{"type":"integer","minimum":0},"activeAttemptCount":{"type":"integer","minimum":0},
+        "currentCycle":{"type":"integer","minimum":0},"openIncidentCount":{"type":"integer","minimum":0},
+        "uncertainEffectCount":{"type":"integer","minimum":0},"unclosedResourceCount":{"type":"integer","minimum":0},
+        "membershipDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
+        "internalMatchCount":{"type":"integer","minimum":0}
+      }
+    },
+    "lane": {
+      "type":"object","additionalProperties":false,"required":["id","title","groupRefs","nodeRefs"],
+      "properties":{"id":{"$ref":"#/$defs/identity"},"title":{"type":"string","maxLength":4096},"groupRefs":{"type":"array","items":{"$ref":"#/$defs/identity"}},"nodeRefs":{"type":"array","items":{"$ref":"#/$defs/identity"}}}
+    },
+    "aggregateEdge": {
+      "type":"object","additionalProperties":false,"required":["fromRef","toRef","predicateKind","count","edgeDigest","inspectRef"],
+      "properties":{"fromRef":{"$ref":"#/$defs/identity"},"toRef":{"$ref":"#/$defs/identity"},"predicateKind":{"type":"string"},"outcomeClass":{"type":"string"},"count":{"type":"integer","minimum":1},"edgeDigest":{"type":"string"},"inspectRef":{"type":"string"}}
+    },
+    "predicate": {"type":"object"},
+    "edge": {
+      "type":"object","additionalProperties":false,"required":["id","from","to","when"],
+      "properties":{"id":{"$ref":"#/$defs/identity"},"from":{"$ref":"#/$defs/identity"},"to":{"$ref":"#/$defs/identity"},"when":{"$ref":"#/$defs/predicate"}}
+    },
+    "topologyPage": {
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","graphRevision","headSequence","mode","depth","page","nodes","edges"],
+      "properties":{
+        "apiVersion":{"const":"dagrail.io/ui/v1beta3"},"graphRevision":{"type":"string"},"headSequence":{"type":"integer","minimum":0},
+        "mode":{"enum":["summary","detail"]},"focus":{"type":"string"},"depth":{"type":"integer","minimum":0,"maximum":4},
+        "page":{"$ref":"#/$defs/page"},"nodes":{"type":"array","maxItems":500,"items":{"$ref":"#/$defs/node"}},
+        "edges":{"type":"array","items":{"$ref":"#/$defs/edge"}},"groups":{"type":"array","items":{"$ref":"#/$defs/group"}},
+        "lanes":{"type":"array","items":{"$ref":"#/$defs/lane"}},"aggregateEdges":{"type":"array","items":{"$ref":"#/$defs/aggregateEdge"}},
+        "aggregateEdgePage":{"$ref":"#/$defs/page"},"aggregateEdgeIndexRef":{"type":"string"},
+        "expandedGroupIds":{"type":"array","maxItems":256,"items":{"$ref":"#/$defs/identity"}},
+        "membershipDigest":{"type":"string"},"projectionDigest":{"type":"string"}
+      }
+    },
+    "projectMap": {
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","readOnly","snapshotRef","project","graphRevision","headSequence","headHash","groups","lanes","nodes","aggregateEdges","aggregateEdgePage","membershipDigest","projectionDigest"],
+      "properties":{"apiVersion":{"const":"dagrail.io/ui/v1beta3"},"readOnly":{"const":true},"snapshotRef":{"type":"string","pattern":"^snapshot:[0-9a-f]{64}$"},"project":{"type":"object","additionalProperties":{"type":"string"}},"graphRevision":{"type":"string"},"headSequence":{"type":"integer","minimum":0},"headHash":{"type":"string"},"groups":{"type":"array","items":{"$ref":"#/$defs/group"}},"lanes":{"type":"array","items":{"$ref":"#/$defs/lane"}},"nodes":{"type":"array","items":{"$ref":"#/$defs/node"}},"aggregateEdges":{"type":"array","items":{"$ref":"#/$defs/aggregateEdge"}},"aggregateEdgePage":{"$ref":"#/$defs/page"},"aggregateEdgeIndexRef":{"type":"string"},"membershipDigest":{"type":"string"},"projectionDigest":{"type":"string"}}
+    },
+    "groupMembers": {
+      "type":"object","additionalProperties":false,"required":["apiVersion","readOnly","snapshotRef","groupId","graphRevision","headSequence","topology"],
+      "properties":{"apiVersion":{"const":"dagrail.io/ui/v1beta3"},"readOnly":{"const":true},"snapshotRef":{"type":"string"},"groupId":{"$ref":"#/$defs/identity"},"graphRevision":{"type":"string"},"headSequence":{"type":"integer","minimum":0},"topology":{"$ref":"#/$defs/topologyPage"}}
+    },
+    "locate": {
+      "type":"object","additionalProperties":false,"required":["apiVersion","readOnly","snapshotRef","graphRevision","headSequence","query","results"],
+      "properties":{"apiVersion":{"const":"dagrail.io/ui/v1beta3"},"readOnly":{"const":true},"snapshotRef":{"type":"string"},"graphRevision":{"type":"string"},"headSequence":{"type":"integer","minimum":0},"query":{"type":"string"},"results":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["ref","kind","id","title","ancestorPath"],"properties":{"ref":{"type":"string"},"kind":{"enum":["group","node"]},"id":{"$ref":"#/$defs/identity"},"title":{"type":"string"},"ancestorPath":{"type":"array","items":{"$ref":"#/$defs/identity"}},"matchCount":{"type":"integer","minimum":0}}}}}
+    },
+    "aggregateEdgePageResponse": {
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","readOnly","snapshotRef","graphRevision","headSequence","ref","page","aggregateEdges"],
+      "properties":{
+        "apiVersion":{"const":"dagrail.io/ui/v1beta3"},
+		"readOnly":{"const":true},
+		"snapshotRef":{"type":"string","pattern":"^snapshot:[0-9a-f]{64}$"},
+        "graphRevision":{"type":"string"},
+        "headSequence":{"type":"integer","minimum":0},
+        "ref":{"type":"string","pattern":"^aggregate-edges:[0-9a-f]{64}$"},
+        "focusRef":{"$ref":"#/$defs/identity"},
+        "page":{"$ref":"#/$defs/page"},
+        "aggregateEdges":{"type":"array","items":{"$ref":"#/$defs/aggregateEdge"}}
+      }
+    }
+  }
+}

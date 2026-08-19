@@ -21,23 +21,26 @@ import (
 	"github.com/CongBao/dagrail/internal/domain"
 	"github.com/CongBao/dagrail/internal/journal"
 	"github.com/CongBao/dagrail/internal/project"
+	"github.com/CongBao/dagrail/sdk"
 	"github.com/google/uuid"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 type AllowedAction struct {
-	ID               string         `json:"id"`
-	Kind             string         `json:"kind"`
-	Ref              string         `json:"ref"`
-	NodeID           string         `json:"nodeId,omitempty"`
-	NodeRef          string         `json:"nodeRef,omitempty"`
-	AttemptID        string         `json:"attemptId,omitempty"`
-	TargetRef        string         `json:"targetRef,omitempty"`
-	InputSchema      map[string]any `json:"inputSchema,omitempty"`
-	DetailRef        string         `json:"detailRef,omitempty"`
-	DetailDigest     string         `json:"detailDigest,omitempty"`
-	DetailBytes      int            `json:"detailBytes,omitempty"`
-	DetailsTruncated bool           `json:"detailsTruncated,omitempty"`
+	ID                    string         `json:"id"`
+	Kind                  string         `json:"kind"`
+	Ref                   string         `json:"ref"`
+	NodeID                string         `json:"nodeId,omitempty"`
+	NodeRef               string         `json:"nodeRef,omitempty"`
+	AttemptID             string         `json:"attemptId,omitempty"`
+	TargetRef             string         `json:"targetRef,omitempty"`
+	InputSchema           map[string]any `json:"inputSchema,omitempty"`
+	DetailRef             string         `json:"detailRef,omitempty"`
+	DetailDigest          string         `json:"detailDigest,omitempty"`
+	DetailBytes           int            `json:"detailBytes,omitempty"`
+	DetailsTruncated      bool           `json:"detailsTruncated,omitempty"`
+	LeaseRemainingSeconds int            `json:"leaseRemainingSeconds"`
+	RequiredLeaseSeconds  int            `json:"requiredLeaseSeconds"`
 }
 
 type ActionList struct {
@@ -45,23 +48,35 @@ type ActionList struct {
 }
 
 type ActionResult struct {
-	ActionID           string `json:"actionId"`
-	Kind               string `json:"kind"`
-	NodeID             string `json:"nodeId,omitempty"`
-	NodeRef            string `json:"nodeRef,omitempty"`
-	AttemptID          string `json:"attemptId,omitempty"`
-	AttemptRef         string `json:"attemptRef,omitempty"`
-	AttemptIDDigest    string `json:"attemptIdDigest,omitempty"`
-	AttemptIDBytes     int    `json:"attemptIdBytes,omitempty"`
-	AttemptIDTruncated bool   `json:"attemptIdTruncated,omitempty"`
-	ObjectRef          string `json:"objectRef,omitempty"`
-	ObjectInspectRef   string `json:"objectInspectRef,omitempty"`
-	ObjectRefDetailRef string `json:"objectRefDetailRef,omitempty"`
-	ObjectRefDigest    string `json:"objectRefDigest,omitempty"`
-	ObjectRefBytes     int    `json:"objectRefBytes,omitempty"`
-	ObjectRefTruncated bool   `json:"objectRefTruncated,omitempty"`
-	Status             string `json:"status"`
-	Sequence           uint64 `json:"sequence"`
+	ActionID           string       `json:"actionId"`
+	Kind               string       `json:"kind"`
+	NodeID             string       `json:"nodeId,omitempty"`
+	NodeRef            string       `json:"nodeRef,omitempty"`
+	AttemptID          string       `json:"attemptId,omitempty"`
+	AttemptRef         string       `json:"attemptRef,omitempty"`
+	AttemptIDDigest    string       `json:"attemptIdDigest,omitempty"`
+	AttemptIDBytes     int          `json:"attemptIdBytes,omitempty"`
+	AttemptIDTruncated bool         `json:"attemptIdTruncated,omitempty"`
+	ObjectRef          string       `json:"objectRef,omitempty"`
+	ObjectInspectRef   string       `json:"objectInspectRef,omitempty"`
+	ObjectRefDetailRef string       `json:"objectRefDetailRef,omitempty"`
+	ObjectRefDigest    string       `json:"objectRefDigest,omitempty"`
+	ObjectRefBytes     int          `json:"objectRefBytes,omitempty"`
+	ObjectRefTruncated bool         `json:"objectRefTruncated,omitempty"`
+	Status             string       `json:"status"`
+	Sequence           uint64       `json:"sequence"`
+	HeadSequence       uint64       `json:"headSequence"`
+	HeadHash           string       `json:"headHash"`
+	GraphRevision      string       `json:"graphRevision"`
+	Continuation       Continuation `json:"continuation"`
+}
+
+type Continuation struct {
+	SafeToWait     bool            `json:"safeToWait"`
+	ReasonCodes    []string        `json:"reasonCodes"`
+	NextActions    []AllowedAction `json:"nextActions"`
+	NextActionsRef string          `json:"nextActionsRef,omitempty"`
+	Owner          string          `json:"owner"`
 }
 
 func boundedActionResult(state domain.State, result ActionResult) ActionResult {
@@ -541,6 +556,7 @@ func (s *Service) listActionsForNodeAtWithReady(state domain.State, node domain.
 		return candidates[i].kind < candidates[j].kind
 	})
 	result := ActionList{Actions: make([]AllowedAction, 0, len(candidates))}
+	needsRenewal := false
 	for _, candidate := range candidates {
 		kind := candidate.kind
 		expires := now.Add(5 * time.Minute)
@@ -559,9 +575,64 @@ func (s *Service) listActionsForNodeAtWithReady(state domain.State, node domain.
 		if candidate.resourceID != "" {
 			targetRef = "resource:" + candidate.resourceID
 		}
-		result.Actions = append(result.Actions, AllowedAction{ID: payload.ActionID, Kind: kind, Ref: ref, NodeID: nodeID, AttemptID: attemptID, TargetRef: targetRef, InputSchema: actionInputSchemaForState(state, kind, node)})
+		remaining := int(expires.Sub(now).Seconds())
+		if remaining < 0 {
+			remaining = 0
+		}
+		required := s.requiredLeaseSeconds(kind, node)
+		if required > remaining {
+			needsRenewal = true
+			continue
+		}
+		result.Actions = append(result.Actions, AllowedAction{ID: payload.ActionID, Kind: kind, Ref: ref, NodeID: nodeID, AttemptID: attemptID, TargetRef: targetRef, InputSchema: actionInputSchemaForState(state, kind, node), LeaseRemainingSeconds: remaining, RequiredLeaseSeconds: required})
+	}
+	if needsRenewal {
+		kind := "role.renew"
+		expires := now.Add(5 * time.Minute)
+		if leaseExpiry, parseErr := time.Parse(time.RFC3339Nano, index.lease.ExpiresAt); parseErr == nil && leaseExpiry.Before(expires) {
+			expires = leaseExpiry
+		}
+		identity := strings.Join([]string{state.ProjectID, state.HeadHash, state.GraphRevision, index.providerSet, roleID, index.lease.SessionID, nodeID, attemptID, kind}, "\x00")
+		sum := sha256.Sum256([]byte(identity))
+		payload := actionRefPayload{ActionID: hex.EncodeToString(sum[:]), ProjectID: state.ProjectID, GraphRevision: state.GraphRevision, ProviderSet: index.providerSet, HeadHash: state.HeadHash, RoleID: roleID, SessionID: index.lease.SessionID, NodeID: nodeID, AttemptID: attemptID, Kind: kind, ExpiresAt: expires.Format(time.RFC3339Nano)}
+		ref, err := signActionRef(payload, index.secret)
+		if err != nil {
+			return ActionList{}, err
+		}
+		remaining := max(0, int(expires.Sub(now).Seconds()))
+		result.Actions = append(result.Actions, AllowedAction{ID: payload.ActionID, Kind: kind, Ref: ref, NodeID: nodeID, AttemptID: attemptID, InputSchema: actionInputSchema(kind, node), LeaseRemainingSeconds: remaining, RequiredLeaseSeconds: 0})
 	}
 	return result, nil
+}
+
+func (s *Service) requiredLeaseSeconds(kind string, node domain.NodeDefinition) int {
+	providerOperation := ""
+	var provider any
+	if kind == "effect.prepare" {
+		providerOperation = "dispatch"
+		var declaration effectNodeInput
+		if json.Unmarshal(node.Inputs, &declaration) == nil && declaration.Adapter != "" {
+			provider, _ = s.Providers.Effect(declaration.Adapter)
+		}
+	} else if kind == "gate.evaluate" && node.Decision != nil && node.Decision.ProviderID != "" {
+		providerOperation = "decide"
+		provider, _ = s.Providers.Policy(node.Decision.ProviderID)
+	}
+	if budget, ok := provider.(sdk.OperationBudgetProvider); ok {
+		if seconds := budget.RequiredLeaseSeconds(providerOperation); seconds > 0 && seconds <= 24*60*60 {
+			return seconds
+		}
+	}
+	switch kind {
+	case "effect.prepare":
+		return 120
+	case "resource.close", "resource.reconcile":
+		return 60
+	case "attempt.finish", "evidence.publish", "decision.record":
+		return 30
+	default:
+		return 5
+	}
 }
 
 func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey string) (ActionResult, error) {
@@ -569,6 +640,14 @@ func (s *Service) ApplyAction(ref string, input json.RawMessage, idempotencyKey 
 }
 
 func (s *Service) ApplyActionContext(ctx context.Context, ref string, input json.RawMessage, idempotencyKey string) (ActionResult, error) {
+	result, err := s.applyActionContext(ctx, ref, input, idempotencyKey)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	return s.decorateActionResult(ctx, ref, result), nil
+}
+
+func (s *Service) applyActionContext(ctx context.Context, ref string, input json.RawMessage, idempotencyKey string) (ActionResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ActionResult{}, err
 	}
@@ -694,6 +773,22 @@ func (s *Service) ApplyActionContext(ctx context.Context, ref string, input json
 	attemptID := payload.AttemptID
 	actionInput := input
 	switch payload.Kind {
+	case "role.renew":
+		var value struct {
+			TTLSeconds int `json:"ttlSeconds"`
+		}
+		if err := json.Unmarshal(input, &value); err != nil {
+			return ActionResult{}, fmt.Errorf("decode role renewal input: %w", err)
+		}
+		if value.TTLSeconds == 0 {
+			value.TTLSeconds = 15 * 60
+		}
+		renewed := lease
+		renewed.BoundAt = now
+		renewed.ExpiresAt = authorizedAt.Add(time.Duration(value.TTLSeconds) * time.Second).Format(time.RFC3339Nano)
+		renewed.Active = true
+		raw, _ := json.Marshal(renewed)
+		events = append(events, journal.Event{Type: "role.bound", Payload: raw})
 	case "node.start":
 		if state.Nodes[node.ID].Status != "planned" || !contains(domain.ComputeFrontier(state).Ready, node.ID) {
 			return ActionResult{}, fmt.Errorf("node is not ready")
@@ -894,6 +989,157 @@ func (s *Service) ApplyActionContext(ctx context.Context, ref string, input json
 		return actionResultForSequence(state, segment.Sequence)
 	}
 	return boundedActionResult(state, ActionResult{ActionID: actionRecord.ID, Kind: actionRecord.Kind, NodeID: actionRecord.NodeID, AttemptID: actionRecord.AttemptID, ObjectRef: objectRefForSequence(state, actionRecord.Sequence), Status: actionRecord.Status, Sequence: actionRecord.Sequence}), nil
+}
+
+func (s *Service) ApplySelectedActionContext(ctx context.Context, kind, roleID, nodeID string, input json.RawMessage, idempotencyKey string) (ActionResult, error) {
+	if strings.TrimSpace(kind) == "" {
+		return ActionResult{}, fmt.Errorf("action kind is required")
+	}
+	actions, err := s.ListActions(roleID, nodeID)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	matches := make([]AllowedAction, 0, 2)
+	for _, action := range actions.Actions {
+		if action.Kind == kind {
+			matches = append(matches, action)
+		}
+	}
+	if len(matches) != 1 {
+		kinds := make([]string, 0, len(actions.Actions))
+		for index, action := range actions.Actions {
+			if index == 8 {
+				break
+			}
+			kinds = append(kinds, action.Kind)
+		}
+		return ActionResult{}, fmt.Errorf("action selector matched %d actions for kind %s; current bounded candidates: %s", len(matches), kind, strings.Join(kinds, ","))
+	}
+	return s.ApplyActionContext(ctx, matches[0].Ref, input, idempotencyKey)
+}
+
+func (s *Service) decorateActionResult(ctx context.Context, ref string, result ActionResult) ActionResult {
+	state, _, err := s.load()
+	if err != nil {
+		result.Continuation = Continuation{SafeToWait: false, ReasonCodes: []string{"continuation_unavailable"}, NextActions: []AllowedAction{}, Owner: "agent"}
+		return result
+	}
+	result.HeadSequence, result.HeadHash, result.GraphRevision = state.HeadSequence, state.HeadHash, state.GraphRevision
+	if effect, exists := state.Effects[result.ActionID]; exists {
+		result.Status = effect.Status
+		result.Sequence = effect.Sequence
+	}
+	reasons := []string{}
+	audit, auditErr := s.preWaitFromStateContext(ctx, state)
+	safe := auditErr == nil && audit.SafeToWait
+	if auditErr != nil {
+		reasons = append(reasons, "pre_wait_unavailable")
+	} else {
+		if audit.Counts.SubmittedAttempts > 0 {
+			reasons = append(reasons, "submitted_attempt_pending")
+		}
+		if audit.Counts.ReadyNodes > 0 {
+			reasons = append(reasons, "ready_frontier_nonempty")
+		}
+		if audit.Counts.PendingEffects > 0 {
+			reasons = append(reasons, "effect_pending")
+		}
+		if audit.Counts.OpenIncidents > 0 {
+			reasons = append(reasons, "incident_open")
+		}
+		if audit.Counts.StaleAttempts > 0 {
+			reasons = append(reasons, "attempt_liveness_stale")
+		}
+		if audit.Counts.ExpiredRoles > 0 {
+			reasons = append(reasons, "role_lease_expired")
+		}
+		if audit.Counts.OrphanedResources > 0 {
+			reasons = append(reasons, "resource_orphaned")
+		}
+		if audit.Counts.OverdueIncidents > 0 {
+			reasons = append(reasons, "incident_overdue")
+		}
+		if audit.Counts.CircuitIncidents > 0 {
+			reasons = append(reasons, "incident_circuit_open")
+		}
+		if audit.Counts.ZeroReadyCut > 0 {
+			reasons = append(reasons, "zero_ready_cut")
+		}
+	}
+	owner := "agent"
+	daemonOwnedEffect := result.Kind == "effect.prepare" && (result.Status == "prepared" || result.Status == "dispatched" || result.Status == "reconciling")
+	if daemonOwnedEffect {
+		owner = "daemon"
+		// The authorized Effect itself no longer requires the agent to poll,
+		// but unrelated ready/submitted/stale/incident/resource work remains
+		// a reason not to yield. More than one pending Effect is not assumed
+		// to be owned by this continuation.
+		if auditErr == nil && audit.Counts.PendingEffects == 1 && audit.Counts.ReadyNodes == 0 && audit.Counts.SubmittedAttempts == 0 && audit.Counts.StaleAttempts == 0 && audit.Counts.ExpiredRoles == 0 && audit.Counts.OrphanedResources == 0 && audit.Counts.OpenIncidents == 0 && audit.Counts.OverdueIncidents == 0 && audit.Counts.CircuitIncidents == 0 && audit.Counts.ZeroReadyCut == 0 {
+			safe = true
+			filtered := reasons[:0]
+			for _, reason := range reasons {
+				if reason != "effect_pending" {
+					filtered = append(filtered, reason)
+				}
+			}
+			reasons = filtered
+		}
+		reasons = append(reasons, "authorized_effect_owned_by_daemon")
+	}
+	next := []AllowedAction{}
+	nextRef := ""
+	secret, secretErr := s.actionSecret()
+	if secretErr == nil {
+		if payload, verifyErr := verifyActionRef(ref, secret); verifyErr == nil {
+			if actions, listErr := s.projectAllowedActionsContext(ctx, state, payload.RoleID, 0, s.Now().UTC()); listErr == nil {
+				if daemonOwnedEffect {
+					filtered := actions[:0]
+					for _, action := range actions {
+						if action.Kind != "effect.reconcile" || action.NodeID != result.NodeID {
+							filtered = append(filtered, action)
+						}
+					}
+					actions = filtered
+				}
+				// A lease renewal is the closed prerequisite for the next slow
+				// operation. Keep it inside the three-action continuation preview
+				// and keep the agent active instead of presenting routine short
+				// actions while the high-latency operation remains unsafe.
+				for index, action := range actions {
+					if action.Kind != "role.renew" {
+						continue
+					}
+					safe = false
+					foundReason := false
+					for _, reason := range reasons {
+						if reason == "role_lease_expiring" {
+							foundReason = true
+							break
+						}
+					}
+					if !foundReason {
+						reasons = append(reasons, "role_lease_expiring")
+					}
+					if index > 0 {
+						actions = append([]AllowedAction{action}, append(actions[:index], actions[index+1:]...)...)
+					}
+					break
+				}
+				digest := operationsActionsDigest(actions)
+				if len(actions) > 3 {
+					nextRef = operationsActionsRef(state, payload.RoleID, digest, 0)
+				}
+				for index := 0; index < len(actions) && index < 3; index++ {
+					bounded, boundErr := boundedAllowedAction(state, payload.RoleID, digest, actions[index])
+					if boundErr == nil {
+						next = append(next, bounded)
+					}
+				}
+			}
+		}
+	}
+	result.Continuation = Continuation{SafeToWait: safe, ReasonCodes: reasons, NextActions: next, NextActionsRef: nextRef, Owner: owner}
+	return result
 }
 
 // revalidateActionAuthorization closes the window created by a slow semantic
@@ -1328,6 +1574,8 @@ func actionInputSchema(kind string, node domain.NodeDefinition) map[string]any {
 	artifact := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"digest", "type", "size", "provenance"}, "properties": map[string]any{"digest": digest, "type": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "size": map[string]any{"type": "integer", "minimum": 0}, "uri": map[string]any{"type": "string", "maxLength": 2048}, "provenance": provenance}}
 	protectedInput := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"name", "digest"}, "properties": map[string]any{"name": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "digest": digest}}
 	switch kind {
+	case "role.renew":
+		return map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"ttlSeconds": map[string]any{"type": "integer", "minimum": 60, "maximum": 86400}}}
 	case "attempt.checkpoint":
 		return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"summary"}, "properties": map[string]any{"summary": map[string]any{"type": "string", "minLength": 1, "maxLength": 2048}, "evidenceRefs": map[string]any{"type": "array", "maxItems": 128, "items": evidenceRef}}}
 	case "attempt.finish", "task.complete", "review.resolve", "decision.record", "effect.complete":

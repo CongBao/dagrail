@@ -12,7 +12,7 @@ import (
 
 func TestCatalogIsClosedSortedAndDeterministic(t *testing.T) {
 	report := Current("0.17.0")
-	if report.APIVersion != APIVersion || report.Kind != "CommandCatalog" || len(report.Commands) != 37 {
+	if report.APIVersion != APIVersion || report.Kind != "CommandCatalog" || len(report.Commands) != 38 {
 		t.Fatalf("unexpected catalog: %#v", report)
 	}
 	previous := ""
@@ -33,6 +33,33 @@ func TestCatalogIsClosedSortedAndDeterministic(t *testing.T) {
 		t.Fatalf("catalog is nondeterministic or unbounded: %d bytes", len(first))
 	}
 	validateCatalogSchema(t, first)
+}
+
+func TestV026LifecycleAndHostSubcommandsAreDiscoverable(t *testing.T) {
+	byName := map[string]Command{}
+	for _, command := range Current("0.26.0").Commands {
+		byName[command.Name] = command
+	}
+	if byName["mcp"].Project != "optional" || !contains(byName["mcp"].Subcommands, "probe") {
+		t.Fatalf("MCP lazy bootstrap and fresh-process probe are not discoverable: %#v", byName["mcp"])
+	}
+	if !contains(byName["plugin"].Subcommands, "update") {
+		t.Fatalf("plugin update is not discoverable: %#v", byName["plugin"])
+	}
+	for _, subcommand := range []string{"status", "stop"} {
+		if !contains(byName["ui"].Subcommands, subcommand) {
+			t.Fatalf("UI %s is not discoverable: %#v", subcommand, byName["ui"])
+		}
+	}
+}
+
+func contains(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func validateCatalogSchema(t *testing.T, raw []byte) {

@@ -53,6 +53,7 @@ var commands = []Command{
 	{Name: "completion", Summary: "Generate shell completion from the command catalog", Effect: "read", Project: "none", Output: "text", Subcommands: []string{"bash", "fish", "powershell", "zsh"}},
 	{Name: "context", Summary: "Produce a role-bounded work context", Effect: "read", Project: "required", Output: "json", Subcommands: []string{}},
 	{Name: "contract", Summary: "Print the compatibility contract", Effect: "read", Project: "none", Output: "json", Subcommands: []string{}},
+	{Name: "daemon", Summary: "Manage the owner-local multi-project controller", Effect: "mixed", Project: "none", Output: "json", Subcommands: []string{"logs", "restart", "start", "status", "stop", "warm"}},
 	{Name: "doctor", Summary: "Diagnose project or installation health", Effect: "read", Project: "optional", Output: "json", Subcommands: []string{"install"}},
 	{Name: "evidence", Summary: "Query immutable evidence indexes", Effect: "read", Project: "required", Output: "json", Subcommands: []string{"list"}},
 	{Name: "frontier", Summary: "Compute the current ready frontier", Effect: "read", Project: "required", Output: "json", Subcommands: []string{}},
@@ -65,9 +66,9 @@ var commands = []Command{
 	{Name: "inspect", Summary: "Inspect an object by opaque reference", Effect: "read", Project: "required", Output: "json", Subcommands: []string{}},
 	{Name: "journal", Summary: "Verify, export, replay, or inspect journal compatibility", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"compatibility", "export", "replay", "verify"}},
 	{Name: "lifecycle", Summary: "Validate or atomically import authenticated history and export its projection", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"import-history", "projection", "validate-history"}},
-	{Name: "mcp", Summary: "Serve the six high-level tools over stdio", Effect: "serve", Project: "required", Output: "transport", Subcommands: []string{}},
+	{Name: "mcp", Summary: "Serve or probe the six project-lazy stdio tools", Effect: "serve", Project: "optional", Output: "transport", Subcommands: []string{"probe"}},
 	{Name: "observe", Summary: "Assess or verify an isolated shadow project", Effect: "mixed", Project: "optional", Output: "json", Subcommands: []string{"assess", "create-shadow", "verify-shadow"}},
-	{Name: "plugin", Summary: "Manage runtime and harness plugin projections", Effect: "mixed", Project: "none", Output: "json", Subcommands: []string{"bundle-status", "conformance", "install", "materialize", "rollback", "runtime-status", "status", "uninstall"}},
+	{Name: "plugin", Summary: "Manage runtime and harness plugin projections", Effect: "mixed", Project: "none", Output: "json", Subcommands: []string{"bundle-status", "conformance", "install", "materialize", "rollback", "runtime-status", "status", "uninstall", "update"}},
 	{Name: "pre-wait", Summary: "Check liveness with bounded counts, previews, and inspect refs", Effect: "read", Project: "required", Output: "json", Subcommands: []string{}},
 	{Name: "projection", Summary: "Rebuild or render derived projections", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"rebuild", "render"}},
 	{Name: "provider", Summary: "List, check, or invoke compiled providers", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"check", "invoke", "list"}},
@@ -76,13 +77,70 @@ var commands = []Command{
 	{Name: "reconcile", Summary: "Reconcile an uncertain external effect", Effect: "write", Project: "required", Output: "json", Subcommands: []string{}},
 	{Name: "recovery", Summary: "Rehearse recovery or replace, adopt, and relocate authority identities", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"adopt-legacy-authority", "rehearse", "relocate-authority", "rotate-authority"}},
 	{Name: "release", Summary: "Create or verify a closed release manifest", Effect: "mixed", Project: "none", Output: "json", Subcommands: []string{"manifest", "verify"}},
-	{Name: "role", Summary: "Bind, take over, or release a stable role", Effect: "write", Project: "required", Output: "json", Subcommands: []string{"bind", "release", "takeover"}},
+	{Name: "role", Summary: "Bind, take over, release, or inspect a stable role", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"bind", "release", "status", "takeover"}},
 	{Name: "security", Summary: "Audit the local project security posture", Effect: "read", Project: "required", Output: "json", Subcommands: []string{"audit"}},
 	{Name: "signature", Summary: "Generate keys or sign and verify detached payloads", Effect: "mixed", Project: "none", Output: "json", Subcommands: []string{"keygen", "sign", "verify"}},
 	{Name: "status", Summary: "Read compact operational status", Effect: "read", Project: "required", Output: "json", Subcommands: []string{}},
 	{Name: "support", Summary: "Preview or export a redacted support report", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"export", "preview"}},
-	{Name: "ui", Summary: "Serve the loopback-only read-only explorer", Effect: "serve", Project: "required", Output: "text", Subcommands: []string{}},
+	{Name: "ui", Summary: "Start or manage the daemon-hosted read-only explorer", Effect: "serve", Project: "optional", Output: "text", Subcommands: []string{"status", "stop"}},
 	{Name: "version", Summary: "Print linked build identity", Effect: "read", Project: "none", Output: "json", Subcommands: []string{}},
+}
+
+func Effect(name string) string {
+	index := sort.Search(len(commands), func(index int) bool { return commands[index].Name >= name })
+	if index < len(commands) && commands[index].Name == name {
+		return commands[index].Effect
+	}
+	return "write"
+}
+
+// ProjectReadOnly classifies the exact project-state effect of a command. A
+// mixed top-level command is refined by subcommand so independent queries can
+// share one immutable daemon snapshot without crossing a writer.
+func ProjectReadOnly(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	if Effect(args[0]) == "read" {
+		return true
+	}
+	if Effect(args[0]) != "mixed" || len(args) < 2 {
+		return false
+	}
+	readSubcommands := map[string]map[string]bool{
+		"action":     {"list": true},
+		"backup":     {"create": true, "verify": true},
+		"graph":      {"export": true, "validate": true, "preview-change": true},
+		"journal":    {"verify": true, "compatibility": true, "export": true},
+		"lifecycle":  {"projection": true, "validate-history": true},
+		"projection": {"render": true},
+		"provider":   {"list": true, "check": true},
+		"recovery":   {"rehearse": true},
+		"role":       {"status": true},
+		"support":    {"preview": true},
+	}
+	return readSubcommands[args[0]][args[1]]
+}
+
+// UsesProjectRoot reports whether the concrete CLI shape accepts --root and
+// defaults it to the caller's working directory. The daemon uses this to
+// preserve thin-client path semantics without changing its process cwd.
+func UsesProjectRoot(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "init", "frontier", "status", "history", "context", "inspect", "pre-wait", "reconcile", "evidence", "incident", "security", "support":
+		return true
+	case "action", "backup", "journal", "lifecycle", "projection", "provider", "recovery", "role":
+		return len(args) > 1
+	case "graph":
+		return len(args) > 1 && args[1] != "validate"
+	case "doctor":
+		return len(args) == 1 || (len(args) > 1 && args[1] != "install")
+	default:
+		return false
+	}
 }
 
 func Current(version string) Report {

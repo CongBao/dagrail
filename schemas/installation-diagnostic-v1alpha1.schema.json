@@ -36,12 +36,15 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "detected", "pluginStatus", "mcpConfigured", "configurationReady", "ready", "currentProcessVerified", "activation"],
+        "required": ["id", "detected", "pluginStatus", "pluginInstalled", "mcpConfigured", "serverHandshakeReady", "projectRoundTripReady", "configurationReady", "ready", "currentProcessVerified", "activation"],
         "properties": {
           "id": {"enum": ["codex", "claude-code", "copilot-cli"]},
           "detected": {"type": "boolean"},
           "pluginStatus": {"type": "string", "minLength": 1, "maxLength": 64},
+          "pluginInstalled": {"type": "boolean"},
           "mcpConfigured": {"type": "boolean"},
+          "serverHandshakeReady": {"type": "boolean"},
+          "projectRoundTripReady": {"type": "boolean"},
           "configurationReady": {"type": "boolean"},
           "ready": {"const": false},
           "currentProcessVerified": {"const": false},
@@ -52,7 +55,7 @@
     "checks": {
       "type": "array",
       "minItems": 2,
-      "maxItems": 11,
+      "maxItems": 14,
       "items": {
         "type": "object",
         "additionalProperties": false,

@@ -1,12 +1,14 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 
+	"github.com/CongBao/dagrail/internal/journal"
 	"github.com/gowebpki/jcs"
 )
 
@@ -97,8 +99,15 @@ func (s *Service) ExportJournal() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return exportJournalSegments(context.Background(), segments)
+}
+
+func exportJournalSegments(ctx context.Context, segments []journal.Segment) ([]byte, error) {
 	result := make([]byte, 0)
 	for _, segment := range segments {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		raw, err := json.Marshal(segment)
 		if err != nil {
 			return nil, err

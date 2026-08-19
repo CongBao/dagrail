@@ -22,6 +22,13 @@ should select API versions and schema digests, never human wording or JSON key o
 
 ## CLI
 
+Normal project commands use the versioned owner-local controller RPC. Relative roots
+are resolved against the caller's working directory before execution. `dagrail daemon
+start|status|stop|restart|warm|logs` exposes the lifecycle without making the daemon a
+scheduler. `--offline` is a recovery boundary and fails while the daemon is running.
+`dagrail --version` and `dagrail version` expose the same build identity; bare/help
+commands exit successfully without starting the daemon.
+
 CLI mutation commands require a stable idempotency key and, where applicable, an
 expected revision or controller-issued action ref. JSON output is intended for scripts;
 human frontier output is the exception and can be replaced with `--format json`.
@@ -108,6 +115,11 @@ writable open. An inspection handle never creates or repairs it; a damaged/legac
 runtime missing that file receives a closed diagnostic until an authorized writable
 command performs the local bootstrap.
 
+`journal verify --progress` is the intentional slow-path exception to snapshot reuse:
+it re-reads and validates the complete immutable prefix, can be cancelled between
+segment files, and emits at most about 100 completed/total progress records without
+including event or command payloads.
+
 Authority adoption, rotation, and relocation publish a replacement locator only after
 the schema-4 establishment fence and its rebuildable projection are both durable. An
 exact retry may recreate a missing or corrupt projection from the replacement journal
@@ -122,6 +134,14 @@ production validation or 1.0 readiness. The v1alpha1 schema deliberately fixes b
 those stronger booleans to false and always carries the outstanding adoption gaps.
 
 ## MCP
+
+`dagrail mcp --stdio` is project-independent during protocol initialization. It exposes
+the six tools from any working directory and opens a Project only on the first tool call;
+every tool accepts an optional `root`. `dagrail mcp probe` starts a fresh process,
+performs initialize plus tools/list, and checks all six input-schema digests. A successful
+probe proves the installed launcher, not that an already-running harness task hot-loaded
+new configuration; plugin diagnostics therefore keep `currentProcessVerified: false`
+and `freshSessionRequired: true` until the host itself calls a tool.
 
 The stdio server exposes only these high-level tools:
 
@@ -187,6 +207,16 @@ and `--attempt-ref`; mutating CLI selectors use the corresponding opaque ref fla
 Graph apply and effect reconciliation recheck the active owner lease. Tool cancellation
 is propagated into policy providers and effect adapters; cancellation never commits a
 semantic Decision that was not returned.
+
+Every successful `dag_apply`/`action apply` returns the new head and a bounded
+`continuation`. `safeToWait=false` means the caller must follow `nextActions`, its opaque
+page ref, or the reason codes. `owner=daemon` is used only while the daemon completes an
+already-authorized Effect; it is not Node completion and does not hide unrelated ready,
+submitted, stale, incident, or resource work. Allowed actions publish the remaining and
+required Role-lease seconds. Insufficient lease yields a closed `role.renew` action; the
+daemon never renews a Role automatically. Renewal is Role-scoped: before a planned Node
+has an Attempt, its Action has no `attemptId`; after an Attempt exists, that optional
+binding is validated as an additional consistency check.
 
 Decision and Gate Nodes produce DecisionRecord v1alpha1 authority. A record binds the
 closed outcome and digest-only evidence to one Graph Revision and Attempt. Provider

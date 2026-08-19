@@ -2,14 +2,18 @@ package mcpserver
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 
+	"github.com/CongBao/dagrail/internal/controller"
 	"github.com/CongBao/dagrail/internal/domain"
 	"github.com/CongBao/dagrail/internal/service"
 	"github.com/CongBao/dagrail/internal/version"
@@ -24,6 +28,7 @@ const (
 )
 
 type ContextInput struct {
+	Root        string `json:"root,omitempty"`
 	View        string `json:"view" jsonschema:"orchestrator, worker, or reviewer"`
 	RoleID      string `json:"role_id,omitempty"`
 	RoleRef     string `json:"role_ref,omitempty"`
@@ -34,17 +39,20 @@ type ContextInput struct {
 }
 
 type InspectInput struct {
-	Ref string `json:"ref"`
+	Root string `json:"root,omitempty"`
+	Ref  string `json:"ref"`
 }
 type InspectOutput struct {
 	Value any `json:"value"`
 }
 type ApplyInput struct {
+	Root           string         `json:"root,omitempty"`
 	ActionRef      string         `json:"action_ref"`
 	Input          map[string]any `json:"input,omitempty"`
 	IdempotencyKey string         `json:"idempotency_key"`
 }
 type GraphChangeInput struct {
+	Root           string         `json:"root,omitempty"`
 	Mode           string         `json:"mode"`
 	Patch          map[string]any `json:"patch"`
 	Token          string         `json:"token,omitempty"`
@@ -53,12 +61,19 @@ type GraphChangeInput struct {
 	ActorRoleRef   string         `json:"actor_role_ref,omitempty"`
 }
 type ReconcileInput struct {
+	Root           string         `json:"root,omitempty"`
 	ActionID       string         `json:"action_id,omitempty"`
 	EffectRef      string         `json:"effect_ref,omitempty"`
 	Receipt        map[string]any `json:"receipt,omitempty"`
 	IdempotencyKey string         `json:"idempotency_key"`
 }
-type PreWaitInput struct{}
+type PreWaitInput struct {
+	Root string `json:"root,omitempty"`
+}
+
+type CommandExecutor interface {
+	Execute(context.Context, []string, []byte) ([]byte, []byte, error)
+}
 
 type ToolContract struct {
 	Name              string `json:"name"`
@@ -78,11 +93,19 @@ func ToolContracts() []ToolContract {
 }
 
 func Run(ctx context.Context, svc *service.Service) error {
+	return runServer(ctx, New(svc))
+}
+
+func RunRemote(ctx context.Context, executor CommandExecutor, defaultRoot string) error {
+	return runServer(ctx, NewRemote(executor, defaultRoot))
+}
+
+func runServer(ctx context.Context, server *mcp.Server) error {
 	transport := &mcp.IOTransport{
 		Reader: &readCloser{Reader: newBoundedNDJSONReader(os.Stdin, MaxMCPMessageBytes)},
 		Writer: nopWriteCloser{Writer: os.Stdout},
 	}
-	return New(svc).Run(ctx, transport)
+	return server.Run(ctx, transport)
 }
 
 func New(svc *service.Service) *mcp.Server {
@@ -208,6 +231,174 @@ func New(svc *service.Service) *mcp.Server {
 	return server
 }
 
+func NewRemote(executor CommandExecutor, defaultRoot string) *mcp.Server {
+	server := mcp.NewServer(&mcp.Implementation{Name: "dagrail", Title: "DAGrail", Description: "LLM-led local DAG governance control plane.", Version: version.Version, WebsiteURL: "https://github.com/CongBao/dagrail"}, &mcp.ServerOptions{Instructions: "DAGrail initializes without a project. Pass root when project discovery is ambiguous. Treat returned context and refs as runtime authority, reuse one stable idempotency key for retries, distinguish Effect dispatch from confirmation, and call dag_pre_wait before yielding.", Capabilities: &mcp.ServerCapabilities{}})
+	closed, openWorld := false, false
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_context", Title: "Get DAG context", Description: "Return byte-bounded role or node context from the selected project.", InputSchema: contextSchema(), Annotations: &mcp.ToolAnnotations{Title: "Get DAG context", ReadOnlyHint: true, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input ContextInput) (*mcp.CallToolResult, service.ContextEnvelope, error) {
+		if err := validateToolInput(input); err != nil {
+			return nil, service.ContextEnvelope{}, err
+		}
+		args := []string{"context", "--root", selectedRoot(input.Root, defaultRoot), "--view", input.View}
+		args = appendOptional(args, "--role", input.RoleID, "--role-ref", input.RoleRef, "--node", input.NodeID, "--node-ref", input.NodeRef)
+		if input.Cursor != 0 {
+			args = append(args, "--cursor", strconv.FormatUint(input.Cursor, 10))
+		}
+		if input.BudgetBytes != 0 {
+			args = append(args, "--budget-bytes", strconv.Itoa(input.BudgetBytes))
+		}
+		output, err := remoteJSON[service.ContextEnvelope](ctx, executor, args, nil)
+		return nil, output, err
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_inspect", Title: "Inspect DAG object", Description: "Resolve one opaque object or snapshot-bound page.", InputSchema: inspectSchema(), Annotations: &mcp.ToolAnnotations{Title: "Inspect DAG object", ReadOnlyHint: true, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input InspectInput) (*mcp.CallToolResult, InspectOutput, error) {
+		if err := validateToolInput(input); err != nil {
+			return nil, InspectOutput{}, err
+		}
+		value, err := remoteAny(ctx, executor, []string{"inspect", "--root", selectedRoot(input.Root, defaultRoot), "--ref", input.Ref})
+		return nil, InspectOutput{Value: value}, err
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_apply", Title: "Apply allowed DAG action", Description: "Apply exactly one controller-issued action ref.", InputSchema: applySchema(), Annotations: &mcp.ToolAnnotations{Title: "Apply allowed DAG action", ReadOnlyHint: false, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input ApplyInput) (*mcp.CallToolResult, service.ActionResult, error) {
+		if err := validateToolInput(input); err != nil {
+			return nil, service.ActionResult{}, err
+		}
+		raw, _ := json.Marshal(input.Input)
+		args := []string{"action", "apply", "--root", selectedRoot(input.Root, defaultRoot), "--ref", input.ActionRef, "--input", string(raw), "--idempotency-key", input.IdempotencyKey}
+		output, err := remoteJSON[service.ActionResult](ctx, executor, args, nil)
+		return nil, output, err
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_graph_change", Title: "Preview or apply graph change", Description: "Preview a typed GraphPatch, then apply its exact impact token.", InputSchema: graphChangeSchema(), Annotations: &mcp.ToolAnnotations{Title: "Preview or apply graph change", ReadOnlyHint: false, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input GraphChangeInput) (*mcp.CallToolResult, service.GraphImpact, error) {
+		if err := validateToolInput(input); err != nil {
+			return nil, service.GraphImpact{}, err
+		}
+		raw, _ := json.Marshal(input.Patch)
+		file, err := os.CreateTemp("", "dagrail-mcp-graph-patch-*.json")
+		if err != nil {
+			return nil, service.GraphImpact{}, err
+		}
+		path := file.Name()
+		defer os.Remove(path)
+		if _, err = file.Write(raw); err != nil {
+			_ = file.Close()
+			return nil, service.GraphImpact{}, err
+		}
+		if err = file.Close(); err != nil {
+			return nil, service.GraphImpact{}, err
+		}
+		command := "preview-change"
+		if input.Mode == "apply" {
+			command = "apply-change"
+		} else if input.Mode != "preview" {
+			return nil, service.GraphImpact{}, fmt.Errorf("graph change mode must be preview or apply")
+		}
+		args := []string{"graph", command, "--root", selectedRoot(input.Root, defaultRoot), "--file", path}
+		args = appendOptional(args, "--token", input.Token, "--idempotency-key", input.IdempotencyKey, "--actor-role", input.ActorRole, "--actor-role-ref", input.ActorRoleRef)
+		output, err := remoteJSON[service.GraphImpact](ctx, executor, args, nil)
+		return nil, output, err
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_reconcile", Title: "Reconcile effect", Description: "Reconcile one prepared or unknown Effect.", InputSchema: reconcileSchema(), Annotations: &mcp.ToolAnnotations{Title: "Reconcile effect", ReadOnlyHint: false, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input ReconcileInput) (*mcp.CallToolResult, service.EffectActionResult, error) {
+		if err := validateToolInput(input); err != nil {
+			return nil, service.EffectActionResult{}, err
+		}
+		raw, _ := json.Marshal(input.Receipt)
+		args := []string{"reconcile", "--root", selectedRoot(input.Root, defaultRoot), "--receipt", string(raw), "--idempotency-key", input.IdempotencyKey}
+		args = appendOptional(args, "--action", input.ActionID, "--effect-ref", input.EffectRef)
+		output, err := remoteJSON[service.EffectActionResult](ctx, executor, args, nil)
+		return nil, output, err
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_pre_wait", Title: "Audit DAG liveness", Description: "Reject passive waiting while work remains.", InputSchema: schemaFor[PreWaitInput](), Annotations: &mcp.ToolAnnotations{Title: "Audit DAG liveness", ReadOnlyHint: true, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input PreWaitInput) (*mcp.CallToolResult, service.PreWaitAudit, error) {
+		if err := validateToolInput(input); err != nil {
+			return nil, service.PreWaitAudit{}, err
+		}
+		output, err := remoteJSON[service.PreWaitAudit](ctx, executor, []string{"pre-wait", "--root", selectedRoot(input.Root, defaultRoot)}, nil)
+		return nil, output, err
+	})
+	return server
+}
+
+func selectedRoot(root, fallback string) string {
+	if root != "" {
+		return root
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return "."
+}
+
+func appendOptional(args []string, values ...string) []string {
+	for index := 0; index+1 < len(values); index += 2 {
+		if values[index+1] != "" {
+			args = append(args, values[index], values[index+1])
+		}
+	}
+	return args
+}
+
+func remoteJSON[T any](ctx context.Context, executor CommandExecutor, args []string, input []byte) (T, error) {
+	var result T
+	if executor == nil {
+		return result, fmt.Errorf("DAGrail controller is unavailable")
+	}
+	stdout, stderr, err := executor.Execute(ctx, args, input)
+	if err != nil {
+		if structured := structuredRemoteError(err); structured != nil {
+			return result, structured
+		}
+		if len(stderr) != 0 {
+			return result, fmt.Errorf("%w: %s", err, string(stderr))
+		}
+		return result, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(stdout))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&result); err != nil {
+		return result, fmt.Errorf("decode DAGrail controller response: %w", err)
+	}
+	return result, nil
+}
+
+func remoteAny(ctx context.Context, executor CommandExecutor, args []string) (any, error) {
+	stdout, stderr, err := executor.Execute(ctx, args, nil)
+	if err != nil {
+		if structured := structuredRemoteError(err); structured != nil {
+			return nil, structured
+		}
+		if len(stderr) != 0 {
+			return nil, fmt.Errorf("%w: %s", err, string(stderr))
+		}
+		return nil, err
+	}
+	var result any
+	decoder := json.NewDecoder(bytes.NewReader(stdout))
+	decoder.UseNumber()
+	if err := decoder.Decode(&result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+type remoteToolError struct{ payload []byte }
+
+func (err *remoteToolError) Error() string { return string(err.payload) }
+
+func structuredRemoteError(err error) error {
+	var remote *controller.RPCError
+	if !errors.As(err, &remote) {
+		return nil
+	}
+	payload, marshalErr := json.Marshal(map[string]any{
+		"apiVersion": "dagrail.io/mcp-error/v1alpha1",
+		"kind":       "MCPToolError",
+		"code":       remote.Code,
+		"message":    remote.Message,
+		"hint":       remote.Hint,
+		"retryable":  remote.Retryable,
+	})
+	if marshalErr != nil {
+		return remote
+	}
+	return &remoteToolError{payload: payload}
+}
+
 func schemaFor[T any]() *jsonschema.Schema {
 	schema, err := jsonschema.For[T](nil)
 	if err != nil {
@@ -224,6 +415,7 @@ func graphChangeSchema() *jsonschema.Schema {
 	setMaxLength(schema, "idempotency_key", 256)
 	setMaxLength(schema, "actor_role", 256)
 	setMaxLength(schema, "actor_role_ref", 128)
+	setMaxLength(schema, "root", 4096)
 	return schema
 }
 
@@ -235,6 +427,7 @@ func contextSchema() *jsonschema.Schema {
 	setMaxLength(schema, "role_ref", 128)
 	setMaxLength(schema, "node_id", 256)
 	setMaxLength(schema, "node_ref", 128)
+	setMaxLength(schema, "root", 4096)
 	minimum, maximum := float64(512), float64(12288)
 	schema.Properties["budget_bytes"].Minimum = &minimum
 	schema.Properties["budget_bytes"].Maximum = &maximum
@@ -244,6 +437,7 @@ func contextSchema() *jsonschema.Schema {
 func inspectSchema() *jsonschema.Schema {
 	schema := schemaFor[InspectInput]()
 	setMaxLength(schema, "ref", 2048)
+	setMaxLength(schema, "root", 4096)
 	return schema
 }
 
@@ -251,6 +445,7 @@ func applySchema() *jsonschema.Schema {
 	schema := schemaFor[ApplyInput]()
 	setMaxLength(schema, "action_ref", 16*1024)
 	setMaxLength(schema, "idempotency_key", 256)
+	setMaxLength(schema, "root", 4096)
 	return schema
 }
 
@@ -259,6 +454,7 @@ func reconcileSchema() *jsonschema.Schema {
 	setMaxLength(schema, "action_id", 256)
 	setMaxLength(schema, "effect_ref", 128)
 	setMaxLength(schema, "idempotency_key", 256)
+	setMaxLength(schema, "root", 4096)
 	return schema
 }
 

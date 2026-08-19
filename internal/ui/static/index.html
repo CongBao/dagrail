@@ -1,118 +1,85 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="system" data-resolved-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Read-only local DAGrail governance explorer">
-  <title>DAGrail · Read-only DAG Explorer</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b1b2e'/%3E%3Cpath d='M16 18h14c12 0 20 7 20 14s-8 14-20 14H16zm10 8v12h5c6 0 10-2 10-6s-4-6-10-6z' fill='%2361adff'/%3E%3C/svg%3E">
+  <meta name="description" content="DAGrail read-only project map and execution explorer">
+  <title>DAGrail Explorer</title>
   <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
-      <div class="brand-mark" aria-hidden="true">D</div>
-      <div><span class="eyebrow">DAGRAIL EXPLORER</span><h1 id="project-name">DAG overview</h1></div>
-    </div>
-    <div class="header-actions">
-      <span class="readonly"><span class="readonly-dot"></span>Read only</span>
-      <span id="connection-status" class="connection-status" data-state="loading">Initializing</span>
-      <span id="last-updated" class="revision">No snapshot yet</span>
+    <button id="navigator-toggle" class="icon-button mobile-only" type="button" aria-label="Toggle navigator"></button>
+    <a class="brand" href="/" aria-label="DAGrail project map">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M6 8h7v7H6zM19 5h7v7h-7zM19 20h7v7h-7zM13 11.5h6M16 11.5V23h3"/></svg>
+      <span><strong>DAGrail</strong><small>Explorer</small></span>
+    </a>
+    <div class="project-heading">
+      <span class="readonly"><i></i>Read only</span>
+      <h1 id="project-name">DAG project</h1>
       <span id="revision" class="revision">Uninitialized</span>
-      <label class="auto-refresh" for="auto-refresh">Auto
-        <select id="auto-refresh" aria-label="Automatic refresh interval">
-          <option value="0">Off</option>
-          <option value="30">30s</option>
-          <option value="60">60s</option>
-        </select>
-      </label>
-      <button id="refresh" class="button primary" type="button">Refresh</button>
+    </div>
+    <div class="topbar-actions">
+      <span id="connection" class="connection" data-state="loading">Connecting</span>
+      <button id="theme" class="icon-button" type="button" aria-label="Toggle theme"></button>
     </div>
   </header>
 
-  <main>
-    <section id="summary" class="summary" aria-label="Project status"></section>
-
-    <div class="explorer-shell">
-      <aside class="sidebar" aria-label="Explorer controls">
-        <nav class="view-nav" aria-label="Explorer views">
-          <button type="button" data-view="summary"><span>Project DAG</span><kbd>1</kbd></button>
-          <button type="button" data-view="detail"><span>Execution detail</span><kbd>2</kbd></button>
-          <button type="button" data-view="nodes"><span>Nodes</span><kbd>3</kbd></button>
-          <button type="button" data-view="timeline"><span>Timeline</span><kbd>4</kbd></button>
-          <button type="button" data-view="operations"><span>Operations</span><kbd>5</kbd></button>
-        </nav>
-
-        <form id="filters" class="filters" autocomplete="off">
-          <div class="filter-heading"><span class="eyebrow">FILTER NODES</span><button id="clear-filters" class="link-button" type="button">Clear</button></div>
-          <label for="search">Search</label>
-          <input id="search" name="q" type="search" maxlength="256" placeholder="ID, title, role…">
-          <label for="status-filter">Status</label>
-          <select id="status-filter" name="status"><option value="">Any status</option></select>
-          <label for="kind-filter">Kind</label>
-          <select id="kind-filter" name="kind"><option value="">Any kind</option></select>
-          <label for="role-filter">Role</label>
-          <select id="role-filter" name="role"><option value="">Any role</option></select>
-        </form>
-
-        <div class="sidebar-note">
-          <span class="eyebrow">AUTHORITY</span>
-          <p>Every view is rebuilt from the verified journal. No transition or action endpoint is exposed.</p>
-        </div>
-      </aside>
-
-      <div class="workspace">
-        <section id="view-topology" class="view-panel" data-panel="topology">
-          <div class="view-heading">
-            <div><span id="topology-eyebrow" class="eyebrow">PROJECT DAG</span><h2 id="topology-title">Grouped summary</h2><p id="topology-caption" class="muted"></p><nav id="group-breadcrumb" class="breadcrumb" aria-label="Group breadcrumb"></nav></div>
-            <div class="toolbar">
-              <span id="detail-controls"><label for="depth">Focus depth</label>
-              <select id="depth"><option value="1">1 hop</option><option value="2">2 hops</option><option value="3">3 hops</option><option value="4">4 hops</option></select></span>
-              <button id="collapse-all" class="button" type="button">Collapse all</button>
-              <button id="expand-all" class="button" type="button">Expand all</button>
-              <button id="fit-view" class="button" type="button">Fit view</button>
-              <button id="center-selected" class="button" type="button">Center selected</button>
-              <button id="zoom-out" class="icon-button" type="button" aria-label="Zoom out">−</button>
-              <button id="zoom-reset" class="icon-button" type="button" aria-label="Reset zoom">100%</button>
-              <button id="zoom-in" class="icon-button" type="button" aria-label="Zoom in">+</button>
-            </div>
-          </div>
-          <div id="legend" class="legend" aria-label="Node status legend"></div>
-          <div id="graph-scroll" class="graph-scroll" tabindex="0">
-            <svg id="graph" role="img" aria-label="DAG topology"></svg>
-            <svg id="minimap" class="minimap" role="button" tabindex="0" aria-label="Topology minimap; click to navigate"></svg>
-          </div>
-        </section>
-
-        <section id="view-nodes" class="view-panel" data-panel="nodes" hidden>
-          <div class="view-heading"><div><span class="eyebrow">INVENTORY</span><h2>Nodes</h2><p id="nodes-caption" class="muted"></p></div></div>
-          <div class="table-scroll"><table><thead><tr><th>State</th><th>Node</th><th>Kind</th><th>Role</th><th>Outcome</th></tr></thead><tbody id="nodes-body"></tbody></table></div>
-          <div class="pager"><button id="nodes-prev" class="button" type="button">Previous</button><span id="nodes-page" class="muted"></span><button id="nodes-next" class="button" type="button">Next</button></div>
-        </section>
-
-        <section id="view-timeline" class="view-panel" data-panel="timeline" hidden>
-          <div class="view-heading"><div><span class="eyebrow">AUDIT</span><h2>Event timeline</h2><p class="muted">Payload-free command history, newest page by default.</p></div></div>
-          <ol id="timeline" class="timeline"></ol>
-          <div class="pager"><button id="history-prev" class="button" type="button">Older</button><span id="history-page" class="muted"></span><button id="history-next" class="button" type="button">Newer</button></div>
-        </section>
-
-        <section id="view-operations" class="view-panel" data-panel="operations" hidden>
-          <div class="view-heading"><div><span class="eyebrow">CONTROL STATE</span><h2>Operations</h2><p class="muted">Attempts, leases, incidents, effects, and resource ownership.</p></div></div>
-          <div id="operations" class="operations-grid"></div>
-        </section>
+  <main class="explorer">
+    <aside id="navigator" class="navigator" aria-label="DAG navigator">
+      <div class="navigator-heading">
+        <div><span class="eyebrow">Navigator</span><h2>Project structure</h2></div>
+        <button id="navigator-pin" class="icon-button" type="button" aria-label="Pin navigator"></button>
       </div>
-    </div>
+      <label class="search-box" for="search">
+        <span class="sr-only">Locate a node or group</span>
+        <input id="search" type="search" maxlength="256" placeholder="Find node or group…" autocomplete="off">
+      </label>
+      <div id="search-results" class="search-results" aria-live="polite"></div>
+      <div id="tree" class="tree" role="tree" aria-label="Group hierarchy"></div>
+      <section class="minimap-panel" aria-label="Project minimap">
+        <span class="eyebrow">Overview</span>
+        <svg id="minimap" class="minimap" role="button" tabindex="0" aria-label="Project minimap; click to navigate"></svg>
+      </section>
+    </aside>
+
+    <section class="canvas-panel" aria-label="Project DAG">
+      <div class="canvas-heading">
+        <div>
+          <span class="eyebrow">Project DAG</span>
+          <p>Top-level dependencies with one expandable work group at a time.</p>
+        </div>
+        <div id="canvas-tools" class="canvas-tools" role="toolbar" aria-label="Canvas controls"></div>
+      </div>
+	  <nav class="view-tabs" aria-label="Explorer view">
+		<button type="button" data-explorer-view="map" aria-selected="true">Project map</button>
+		<button type="button" data-explorer-view="execution" aria-selected="false">Execution detail</button>
+		<button type="button" data-explorer-view="timeline" aria-selected="false">Timeline</button>
+		<button type="button" data-explorer-view="operations" aria-selected="false">Operations</button>
+	  </nav>
+      <div id="progress" class="progress" role="status" aria-live="polite" hidden>
+        <span class="progress-spinner" aria-hidden="true"></span><span id="progress-label">Loading project map</span>
+      </div>
+      <div id="canvas-scroll" class="canvas-scroll" tabindex="0">
+        <svg id="graph" role="img" aria-label="Layered DAG topology"></svg>
+        <div class="canvas-hint">Select a group to spotlight it. Use the four-corner control to expand.</div>
+      </div>
+	  <div id="audit-view" class="audit-view" hidden aria-live="polite"></div>
+      <div id="error" class="error" role="alert" hidden></div>
+    </section>
+
+    <aside id="inspector" class="inspector" aria-label="Selection inspector">
+      <div id="inspector-resizer" class="inspector-resizer" role="separator" aria-label="Resize inspector" aria-orientation="vertical" tabindex="0"></div>
+      <div class="inspector-heading">
+        <div><span class="eyebrow">Inspector</span><h2 id="inspector-title">Selection</h2></div>
+        <button id="inspector-close" class="icon-button" type="button" aria-label="Close inspector"></button>
+      </div>
+      <div id="inspector-content" class="inspector-content">
+        <div class="inspector-empty"><strong>Select a group or node</strong><p>Details stay docked beside the DAG without covering it.</p></div>
+      </div>
+    </aside>
   </main>
 
-  <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
-  <aside id="node-drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-hidden="true" tabindex="-1" inert>
-    <div class="drawer-header"><div><span class="eyebrow">NODE INSPECTOR</span><h2 id="drawer-title">Node</h2></div><button id="drawer-close" class="icon-button" type="button" aria-label="Close node inspector">×</button></div>
-    <div id="drawer-content" class="drawer-content"></div>
-  </aside>
-
-  <div id="loading-status" class="loading-status" role="status" aria-live="polite" hidden>Loading verified snapshot…</div>
-
-  <div id="error" role="alert" hidden></div>
   <script src="/assets/app.js" defer></script>
 </body>
 </html>

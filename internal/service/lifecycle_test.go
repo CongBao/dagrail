@@ -1426,6 +1426,104 @@ func TestEffectDispatchAndReconcileShareObservationSerialization(t *testing.T) {
 	assertLifecycleWriterPrefixes(t, svc, initial)
 }
 
+func TestDaemonOutboxReturnsPendingContinuationAndDrainsAuthorizedEffect(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := Init(root, "daemon-effect-outbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := serializedObservationAdapter{dispatchEntered: make(chan struct{}), releaseDispatch: make(chan struct{}), reconcileEntered: make(chan struct{})}
+	if err := svc.Providers.RegisterEffect(adapter); err != nil {
+		t.Fatal(err)
+	}
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"daemon-effect-outbox"},"spec":{"roles":[{"id":"worker","capabilities":["effect.apply","effect.reconcile"]}],"nodes":[{"id":"effect","kind":"effect","role":"worker","title":"effect","inputs":{"adapter":"serialized-observation","request":true},"outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
+	graphPath := filepath.Join(root, "graph.json")
+	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "graph/import", "bootstrap"); err != nil {
+		t.Fatal(err)
+	}
+	initial, _ := svc.State()
+	_, _ = svc.BindRole("worker", "codex", "session", time.Hour, false, "bind")
+	_, _ = svc.ApplyAction(findActionRef(t, svc, "worker", "effect", "node.start"), json.RawMessage(`{}`), "start")
+	prepare := findActionRef(t, svc, "worker", "effect", "effect.prepare")
+	outbox := NewDaemonOutbox()
+	started := time.Now()
+	result, err := svc.ApplyActionContext(WithDaemonOutbox(context.Background(), outbox), prepare, json.RawMessage(`{}`), "prepare")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second || result.Status != "dispatched" || result.Continuation.Owner != "daemon" || !result.Continuation.SafeToWait {
+		t.Fatalf("long Effect did not return a daemon-owned pending continuation: elapsed=%v result=%+v", elapsed, result)
+	}
+	select {
+	case <-adapter.dispatchEntered:
+	case <-time.After(time.Second):
+		t.Fatal("daemon outbox did not start the authorized dispatch")
+	}
+	drained := make(chan struct{})
+	go func() { outbox.Drain(); close(drained) }()
+	select {
+	case <-drained:
+		t.Fatal("daemon drain abandoned an in-flight Effect")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(adapter.releaseDispatch)
+	select {
+	case <-drained:
+	case <-time.After(2 * time.Second):
+		t.Fatal("daemon outbox did not drain after the Effect observation")
+	}
+	state, err := svc.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Effects[result.ActionID].Status != "confirmed" {
+		t.Fatalf("daemon outbox failed to persist the receipt: %+v", state.Effects[result.ActionID])
+	}
+	assertLifecycleWriterPrefixes(t, svc, initial)
+}
+
+func TestDaemonOwnedEffectDoesNotHideUnrelatedReadyWork(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := Init(root, "daemon-effect-with-ready-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := serializedObservationAdapter{dispatchEntered: make(chan struct{}), releaseDispatch: make(chan struct{}), reconcileEntered: make(chan struct{})}
+	if err := svc.Providers.RegisterEffect(adapter); err != nil {
+		t.Fatal(err)
+	}
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"daemon-effect-with-ready-work"},"spec":{"roles":[{"id":"worker","capabilities":["effect.apply","effect.reconcile","node.run"]}],"nodes":[{"id":"effect","kind":"effect","role":"worker","title":"effect","inputs":{"adapter":"serialized-observation","request":true},"outcomes":[{"id":"done","class":"success"}]},{"id":"unrelated","kind":"task","role":"worker","title":"unrelated","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
+	graphPath := filepath.Join(root, "graph.json")
+	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "graph/import", "bootstrap"); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = svc.BindRole("worker", "codex", "session", time.Hour, false, "bind")
+	_, _ = svc.ApplyAction(findActionRef(t, svc, "worker", "effect", "node.start"), json.RawMessage(`{}`), "start")
+	outbox := NewDaemonOutbox()
+	result, err := svc.ApplyActionContext(WithDaemonOutbox(context.Background(), outbox), findActionRef(t, svc, "worker", "effect", "effect.prepare"), json.RawMessage(`{}`), "prepare")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Continuation.Owner != "daemon" || result.Continuation.SafeToWait || !contains(result.Continuation.ReasonCodes, "ready_frontier_nonempty") {
+		t.Fatalf("daemon-owned Effect hid unrelated ready work: %+v", result.Continuation)
+	}
+	select {
+	case <-adapter.dispatchEntered:
+	case <-time.After(time.Second):
+		t.Fatal("daemon outbox did not begin dispatch")
+	}
+	close(adapter.releaseDispatch)
+	outbox.Drain()
+}
+
 func TestEffectIncidentMutationWaitsForObservation(t *testing.T) {
 	for _, receiptStatus := range []string{"confirmed", "unknown"} {
 		t.Run(receiptStatus, func(t *testing.T) {
@@ -1708,10 +1806,10 @@ func TestEffectPrepareCannotCrossRoleLeaseExpiry(t *testing.T) {
 	current := time.Date(2026, 8, 15, 4, 5, 6, 0, time.UTC)
 	svc.Now = func() time.Time { return current }
 	dispatched := false
-	if err := svc.Providers.RegisterEffect(leaseAdvancingEffectAdapter{advance: func() { current = current.Add(2 * time.Second) }, dispatched: &dispatched}); err != nil {
+	if err := svc.Providers.RegisterEffect(leaseAdvancingEffectAdapter{advance: func() { current = current.Add(3 * time.Minute) }, dispatched: &dispatched}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.BindRole("worker", "codex", "session", time.Second, false, "bind"); err != nil {
+	if _, err := svc.BindRole("worker", "codex", "session", 2*time.Minute, false, "bind"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.ApplyAction(findActionRef(t, svc, "worker", "effect", "node.start"), json.RawMessage(`{}`), "start"); err != nil {
@@ -1730,14 +1828,111 @@ func TestEffectPrepareCannotCrossRoleLeaseExpiry(t *testing.T) {
 	assertLifecycleWriterPrefixes(t, svc, initial)
 }
 
+func TestLeaseBudgetOffersClosedRoleRenewalBeforeSlowEffect(t *testing.T) {
+	svc, initial := lifecycleWriterService(t, "effect-renew", `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"effect-renew"},"spec":{"roles":[{"id":"worker","capabilities":["effect.apply"]}],"nodes":[{"id":"effect","kind":"effect","role":"worker","title":"effect","inputs":{"adapter":"manual","request":{}},"outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`)
+	if _, err := svc.BindRole("worker", "codex", "session", 90*time.Second, false, "bind"); err != nil {
+		t.Fatal(err)
+	}
+	started, err := svc.ApplyAction(findActionRef(t, svc, "worker", "effect", "node.start"), json.RawMessage(`{}`), "start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Continuation.SafeToWait || !contains(started.Continuation.ReasonCodes, "role_lease_expiring") || len(started.Continuation.NextActions) == 0 || started.Continuation.NextActions[0].Kind != "role.renew" {
+		t.Fatalf("lease-expiring continuation did not keep the agent active: %+v", started.Continuation)
+	}
+	actions, err := svc.ListActions("worker", "effect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var renew AllowedAction
+	for _, action := range actions.Actions {
+		if action.Kind == "effect.prepare" {
+			t.Fatal("slow Effect was executable with insufficient lease budget")
+		}
+		if action.Kind == "role.renew" {
+			renew = action
+		}
+	}
+	if renew.Ref == "" || renew.AttemptID == "" || renew.LeaseRemainingSeconds > 90 || renew.RequiredLeaseSeconds != 0 {
+		t.Fatalf("bounded renewal remediation is incomplete: %+v", renew)
+	}
+	result, err := svc.ApplyAction(renew.Ref, json.RawMessage(`{"ttlSeconds":600}`), "renew")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Kind != "role.renew" || result.Continuation.Owner == "" {
+		t.Fatalf("unexpected role renewal result: %+v", result)
+	}
+	state, err := svc.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := state.Leases["worker"]
+	if lease.SessionID != "session" || lease.Harness != "codex" {
+		t.Fatalf("renewal changed the executor binding: %+v", lease)
+	}
+	boundAt, _ := time.Parse(time.RFC3339Nano, lease.BoundAt)
+	expiresAt, _ := time.Parse(time.RFC3339Nano, lease.ExpiresAt)
+	if expiresAt.Sub(boundAt) != 10*time.Minute {
+		t.Fatalf("renewal did not apply the requested closed TTL: %+v", lease)
+	}
+	actions, err = svc.ListActions("worker", "effect")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prepared AllowedAction
+	for _, action := range actions.Actions {
+		if action.Kind == "effect.prepare" {
+			prepared = action
+		}
+	}
+	if prepared.RequiredLeaseSeconds != 120 || prepared.LeaseRemainingSeconds < prepared.RequiredLeaseSeconds {
+		t.Fatalf("renewed slow Effect budget is not executable: %+v", prepared)
+	}
+	assertLifecycleWriterPrefixes(t, svc, initial)
+}
+
+func TestPlannedNodeRoleRenewalIsPortableWithoutAttempt(t *testing.T) {
+	svc, initial := lifecycleWriterService(t, "planned-renew", `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"planned-renew"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"task","kind":"task","role":"worker","title":"task","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`)
+	if _, err := svc.BindRole("worker", "codex", "session", 3*time.Second, false, "bind"); err != nil {
+		t.Fatal(err)
+	}
+	actions, err := svc.ListActions("worker", "task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var renew AllowedAction
+	for _, action := range actions.Actions {
+		if action.Kind == "role.renew" {
+			renew = action
+		}
+	}
+	if renew.Ref == "" || renew.AttemptID != "" {
+		t.Fatalf("planned-node renewal was not Role-scoped: %+v", renew)
+	}
+	result, err := svc.ApplyAction(renew.Ref, json.RawMessage(`{"ttlSeconds":600}`), "renew")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := svc.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded := state.Actions[result.ActionID]
+	if recorded.Kind != "role.renew" || recorded.AttemptID != "" || state.Leases["worker"].ExpiresAt == "" {
+		t.Fatalf("planned-node renewal authority is inconsistent: action=%+v lease=%+v", recorded, state.Leases["worker"])
+	}
+	assertLifecycleWriterPrefixes(t, svc, initial)
+}
+
 func TestGateDecisionRevalidatesAuthorizationAtPersistence(t *testing.T) {
 	for _, test := range []struct {
 		name        string
 		leaseTTL    time.Duration
 		wantSuccess bool
 	}{
-		{name: "provider finishes inside lease", leaseTTL: 10 * time.Second, wantSuccess: true},
-		{name: "provider crosses lease expiry", leaseTTL: time.Second, wantSuccess: false},
+		{name: "provider finishes inside lease", leaseTTL: 3 * time.Minute, wantSuccess: true},
+		{name: "provider crosses lease expiry", leaseTTL: time.Minute, wantSuccess: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -1748,7 +1943,7 @@ func TestGateDecisionRevalidatesAuthorizationAtPersistence(t *testing.T) {
 			}
 			current := time.Date(2026, 8, 15, 4, 5, 6, 0, time.UTC)
 			svc.Now = func() time.Time { return current }
-			provider := leaseAdvancingPolicy{advance: func() { current = current.Add(2 * time.Second) }}
+			provider := leaseAdvancingPolicy{advance: func() { current = current.Add(2 * time.Minute) }}
 			provider.metadata = sdk.Metadata{ID: "test.advancing-gate", Version: "1.0.0", Stability: sdk.StabilityStable}
 			provider.metadata.SchemaHash, err = sdk.InputSchemaHash(provider.InputSchema())
 			if err != nil {
@@ -1844,6 +2039,26 @@ func assertLifecycleWriterPrefixes(t *testing.T, svc *Service, initial domain.St
 	validation, err := svc.validateLifecycleMigration(initial, segments[:int(initial.HeadSequence)], manifest, manifest.Source.AuthorityHash)
 	if err != nil || !validation.Valid {
 		t.Fatalf("complete current-writer manifest was rejected: %+v %v", validation, err)
+	}
+	betaRecords := make([]LifecycleMigrationRecord, 0, len(records))
+	for _, record := range records {
+		betaRecords = append(betaRecords, LifecycleMigrationRecord{
+			SourceSequence:     record.SourceSequence,
+			SourceEventID:      record.SourceEventID,
+			SourceEventHash:    record.SourceEventHash,
+			PreviousSourceHash: record.PreviousSourceHash,
+			OccurredAt:         record.OccurredAt,
+			Commands:           []LifecycleMigrationCommand{{CommandIndex: 1, Events: record.Events}},
+		})
+	}
+	betaManifest := manifest
+	betaManifest.APIVersion = LifecycleMigrationBundleAPIVersion
+	betaManifest.Records = betaRecords
+	sealLifecycleManifest(t, &betaManifest)
+	validateLifecycleMigrationSchema(t, betaManifest)
+	betaValidation, betaErr := svc.validateLifecycleMigration(initial, segments[:int(initial.HeadSequence)], betaManifest, betaManifest.Source.AuthorityHash)
+	if betaErr != nil || !betaValidation.Valid {
+		t.Fatalf("complete current-writer v1beta1 manifest was rejected: %+v %v", betaValidation, betaErr)
 	}
 	projection, err := svc.LifecycleProjection()
 	if err != nil {

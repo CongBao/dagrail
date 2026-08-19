@@ -8,12 +8,15 @@ description: Review one DAGrail review or decision node using bounded evidence. 
 Review only the Role, Node, candidate, and evidence boundary in the assigned package.
 
 First verify that the DAGrail MCP tools are callable in this process. Skill discovery is
-not proof that a long-running harness loaded an upgraded MCP registration. If tools are
-absent, run `dagrail doctor install`, start a fresh session, or use `dagrail context`,
+not proof that a long-running harness loaded an upgraded MCP registration. Use
+`dagrail mcp probe` for a fresh-process handshake and `dagrail plugin status --harness
+<host>` for the fresh-session boundary; neither proves the current process. If tools are
+absent, also run `dagrail doctor install`, then start a fresh session or use `dagrail context`,
 `dagrail inspect`, `dagrail action apply`, and `dagrail pre-wait`; never construct a
 review transition manually.
 
-1. Bind the assigned review Role and call `dag_context` with `view: reviewer` and its
+1. Bind the assigned review Role and call `dag_context` with `view: reviewer`, an
+   explicit `root` when project discovery is ambiguous, and its
    Role/Node selectors. Use `role_ref` or `node_ref` for an opaque large identity.
    Never reuse a worker or controller session as the formal reviewer.
 2. Inspect only the candidate, actual artifact, Decision, policy result, or evidence refs
@@ -37,7 +40,13 @@ review transition manually.
    RFC 8785 canonical JSON input value, and idempotency key together. A successor session
    may replay only that canonical-equivalent triple to retrieve the same result; never
    reuse that ref for a changed verdict or new intent.
-7. Call `dag_pre_wait` before becoming passive and report any unresolved item outside
+   In a CLI fallback, `--kind --role --node` may atomically select the unique current
+   action instead of copying a long ref; zero or multiple matches must fail closed.
+7. Read the returned `continuation`. When `safeToWait` is false, handle this Role's next
+   action or inspect `nextActionsRef`; a `role.renew` remediation requires an explicit
+   renewal, never an automatic lease extension. `owner: daemon` only permits yielding
+   while one previously authorized saga completes and never implies a review verdict.
+8. Call `dag_pre_wait` before becoming passive and report any unresolved item outside
    this review Role to the controller by bounded count/target; do not expand unrelated
    paginated blocker or dependency-cut detail.
 

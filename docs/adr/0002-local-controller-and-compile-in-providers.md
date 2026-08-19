@@ -1,6 +1,6 @@
 # ADR 0002: No daemon and compile-in providers for v0.1
 
-- Status: Accepted
+- Status: Superseded by ADR 0022 for process topology; compile-in providers remain accepted
 - Date: 2026-08-14
 
 ## Context

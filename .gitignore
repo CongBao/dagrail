@@ -11,6 +11,10 @@ coverage.html
 *.prof
 *.trace
 .playwright-cli/
+node_modules/
+internal/ui/web/.cache/
+internal/ui/web/test-results/
+internal/ui/web/playwright-report/
 
 # DAGrail runtime state: project.yaml is the only repository-safe marker
 .dagrail/*
@@ -46,6 +50,7 @@ secrets.local.json
 .codex/
 .claude/settings.local.json
 .copilot/
+.brainstorm/
 .idea/
 .vscode/
 *.swp

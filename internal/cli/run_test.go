@@ -17,8 +17,116 @@ import (
 	"time"
 
 	"github.com/CongBao/dagrail/internal/cli"
+	"github.com/CongBao/dagrail/internal/install"
 	"github.com/CongBao/dagrail/internal/service"
+	"github.com/CongBao/dagrail/internal/version"
 )
+
+func TestV026CLIConsistencyAndSelectorFallback(t *testing.T) {
+	run := func(args ...string) (string, string, error) {
+		var stdout, stderr bytes.Buffer
+		err := cli.Run(args, strings.NewReader(""), &stdout, &stderr)
+		return stdout.String(), stderr.String(), err
+	}
+	for _, args := range [][]string{{}, {"--help"}, {"role", "--help"}, {"role", "bind", "--help"}, {"action", "apply", "--help"}} {
+		stdout, stderr, err := run(args...)
+		if err != nil || (stdout == "" && stderr == "") {
+			t.Fatalf("help form failed: args=%v stdout=%q stderr=%q err=%v", args, stdout, stderr, err)
+		}
+	}
+	long, _, err := run("--version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, _, err := run("version")
+	if err != nil || long != command || !strings.Contains(command, `"version":"`+version.Version+`"`) {
+		t.Fatalf("version forms diverged: --version=%q version=%q err=%v", long, command, err)
+	}
+
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(t.TempDir(), "runtime"))
+	graphPath := filepath.Join(root, "graph.json")
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"cli-consistency"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"task","kind":"task","role":"worker","title":"task","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
+	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "--root", root, "--name", "cli-consistency"},
+		{"graph", "import", "--root", root, "--file", graphPath, "--idempotency-key", "import"},
+		{"role", "bind", "--root", root, "--role", "worker", "--harness", "codex", "--session", "session", "--ttl", "15m", "--idempotency-key", "bind"},
+	} {
+		if _, _, err := run(args...); err != nil {
+			t.Fatalf("setup %v: %v", args, err)
+		}
+	}
+	status, _, err := run("role", "status", "--root", root, "--role", "worker")
+	if err != nil || !strings.Contains(status, `"sessionId":"session"`) {
+		t.Fatalf("role status failed: %s %v", status, err)
+	}
+	positional, _, err := run("inspect", "--root", root, "node:task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	flagged, _, err := run("inspect", "--root", root, "--ref", "node:task")
+	if err != nil || flagged != positional {
+		t.Fatalf("inspect forms diverged: positional=%q flagged=%q err=%v", positional, flagged, err)
+	}
+	started, _, err := run("action", "apply", "--root", root, "--kind", "node.start", "--role", "worker", "--node", "task", "--input", `{}`, "--idempotency-key", "start")
+	if err != nil || !strings.Contains(started, `"kind":"node.start"`) || !strings.Contains(started, `"continuation"`) {
+		t.Fatalf("selector apply failed: %s %v", started, err)
+	}
+}
+
+func TestPluginUpdateDryRunDoesNotMaterializeRuntimeOrBundle(t *testing.T) {
+	stateRoot := filepath.Join(t.TempDir(), "state")
+	harnessRoot := t.TempDir()
+	command := "codex"
+	if runtime.GOOS == "windows" {
+		command += ".exe"
+	}
+	harnessPath := filepath.Join(harnessRoot, command)
+	if err := os.WriteFile(harnessPath, []byte("dry-run harness placeholder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", harnessRoot+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
+	t.Setenv("DAGRAIL_HOME", stateRoot)
+	t.Setenv("DAGRAIL_RUNTIME_PATH", filepath.Join(stateRoot, "bin", "dagrail"))
+
+	var stdout, stderr bytes.Buffer
+	if err := cli.Run([]string{"plugin", "update", "--dry-run", "--harness", "codex"}, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatalf("plugin update dry-run failed: %v stderr=%s stdout=%s", err, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"status":"planned"`) || strings.Contains(stdout.String(), `"status":"installed"`) || strings.Contains(stdout.String(), `"status":"materialized"`) {
+		t.Fatalf("dry-run reported a mutating result: %s", stdout.String())
+	}
+	for _, field := range []string{`"marketplaceAdd"`, `"marketplaceUpdate"`, `"marketplaceRemove"`, `"pluginInstall"`, `"pluginRemove"`, `"mcpRemove"`, `"mcpAdd"`} {
+		if !strings.Contains(stdout.String(), field) {
+			t.Fatalf("dry-run omitted exact harness-plan field %s: %s", field, stdout.String())
+		}
+	}
+	var files []string
+	_ = filepath.WalkDir(stateRoot, func(path string, entry os.DirEntry, err error) error {
+		if err == nil && path != stateRoot {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if len(files) != 0 {
+		t.Fatalf("plugin update dry-run changed the state directory: %v", files)
+	}
+	if _, err := os.Stat(stateRoot); !os.IsNotExist(err) {
+		t.Fatalf("plugin update dry-run materialized its state root: %v", err)
+	}
+}
+
+func TestOfflineModeIsRestrictedToRecoverySurfaces(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := cli.RunContext(context.Background(), []string{"--offline", "action", "list", "--root", t.TempDir()}, strings.NewReader(""), &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "offline mode is restricted") {
+		t.Fatalf("ordinary lifecycle command bypassed the daemon: %v", err)
+	}
+}
 
 func TestRelocationPreflightReadSurfacesDoNotMutateProtectedProjectBytes(t *testing.T) {
 	root := t.TempDir()
@@ -966,8 +1074,12 @@ func TestContextBudgetInspectAndPreWaitAreMachineDecidable(t *testing.T) {
 		t.Fatalf("running attempt permits bounded yield: %v %s", err, audit)
 	}
 	submitRef := allowedActionRef(t, run, root, "developer", "A", "attempt.submit")
-	if _, err := run("action", "apply", "--root", root, "--ref", submitRef, "--idempotency-key", "submit"); err != nil {
+	submitted, err := run("action", "apply", "--root", root, "--ref", submitRef, "--idempotency-key", "submit")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(submitted, `"safeToWait":false`) || !strings.Contains(submitted, `"submitted_attempt_pending"`) {
+		t.Fatalf("submitted action result lacks a closed continuation: %s", submitted)
 	}
 	audit, err = run("pre-wait", "--root", root)
 	if err != nil || !strings.Contains(audit, `"safeToWait":false`) || !strings.Contains(audit, `"submittedAttempts"`) {
@@ -1067,6 +1179,9 @@ func TestContractCLIReportsTheClosedMCPBetaSurface(t *testing.T) {
 func TestPluginBundleCanBeMaterializedWithoutAHostOrNetwork(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("DAGRAIL_HOME", filepath.Join(root, "runtime-data"))
+	if _, err := install.InstallRuntime(); err != nil {
+		t.Fatal(err)
+	}
 	var out, errOut bytes.Buffer
 	if err := cli.Run([]string{"plugin", "materialize"}, strings.NewReader(""), &out, &errOut); err != nil {
 		t.Fatal(err)

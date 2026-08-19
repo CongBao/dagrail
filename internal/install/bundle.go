@@ -38,6 +38,8 @@ type bundleFile struct {
 	Data []byte
 }
 
+var pluginRuntimeStatus = RuntimeStatus
+
 // LinkedPluginBundleStatus validates the exact embedded public file set without
 // consulting or writing per-user runtime state.
 func LinkedPluginBundleStatus() (BundleResult, error) {
@@ -49,7 +51,7 @@ func LinkedPluginBundleStatus() (BundleResult, error) {
 }
 
 func MaterializePluginBundle() (BundleResult, error) {
-	files, digest, total, err := linkedPluginBundle()
+	files, digest, total, err := projectedPluginBundle()
 	if err != nil {
 		return BundleResult{}, err
 	}
@@ -111,8 +113,23 @@ func MaterializePluginBundle() (BundleResult, error) {
 	return result, nil
 }
 
+// PlanPluginBundle computes the exact receipt-bound bundle identity and target
+// without creating either the bundle directory or any of its files.
+func PlanPluginBundle(runtimePath string) (BundleResult, error) {
+	files, digest, total, err := projectedPluginBundleForRuntime(runtimePath)
+	if err != nil {
+		return BundleResult{}, err
+	}
+	dataRoot, err := runtimeDataRoot()
+	if err != nil {
+		return BundleResult{}, err
+	}
+	target := filepath.Join(dataRoot, "plugin-bundles", version.Version+"-"+strings.TrimPrefix(digest, "sha256:"))
+	return BundleResult{Status: "planned", Version: version.Version, Digest: digest, Root: target, Files: len(files), Bytes: total}, nil
+}
+
 func PluginBundleStatus() (BundleResult, error) {
-	files, digest, total, err := linkedPluginBundle()
+	files, digest, total, err := projectedPluginBundle()
 	if err != nil {
 		return BundleResult{}, err
 	}
@@ -132,6 +149,61 @@ func PluginBundleStatus() (BundleResult, error) {
 	}
 	result.Status = "verified"
 	return result, nil
+}
+
+// projectedPluginBundle binds the Codex MCP launcher to the exact runtime
+// artifact already authenticated by the local runtime receipt. The repository
+// manifest stays portable; only the immutable per-user bundle receives an
+// absolute launcher, so no host placeholder or PATH lookup can drift.
+func projectedPluginBundle() ([]bundleFile, string, int, error) {
+	runtimeStatus, err := pluginRuntimeStatus()
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("bind plugin MCP launcher to verified runtime: %w", err)
+	}
+	return projectedPluginBundleForRuntime(runtimeStatus.RuntimePath)
+}
+
+func projectedPluginBundleForRuntime(runtimePath string) ([]bundleFile, string, int, error) {
+	if !filepath.IsAbs(runtimePath) {
+		return nil, "", 0, fmt.Errorf("bind plugin MCP launcher to an absolute runtime path")
+	}
+	files, _, _, err := linkedPluginBundle()
+	if err != nil {
+		return nil, "", 0, err
+	}
+	manifestPath := "plugins/dagrail/.codex-plugin/plugin.json"
+	for index := range files {
+		if files[index].Path != manifestPath {
+			continue
+		}
+		var manifest map[string]any
+		if err := json.Unmarshal(files[index].Data, &manifest); err != nil {
+			return nil, "", 0, err
+		}
+		manifest["mcpServers"] = map[string]any{
+			MCPServerName: map[string]any{"type": "stdio", "command": runtimePath, "args": []string{"mcp", "--stdio"}},
+		}
+		files[index].Data, err = json.MarshalIndent(manifest, "", "  ")
+		if err != nil {
+			return nil, "", 0, err
+		}
+		files[index].Data = append(files[index].Data, '\n')
+		break
+	}
+	total := 0
+	hash := sha256.New()
+	_, _ = hash.Write([]byte(pluginBundleDomain))
+	for _, file := range files {
+		if len(file.Data) > maxPluginBundleFile || total > maxPluginBundleBytes-len(file.Data) {
+			return nil, "", 0, fmt.Errorf("projected plugin bundle exceeds its public size limit")
+		}
+		total += len(file.Data)
+		content := sha256.Sum256(file.Data)
+		_, _ = hash.Write([]byte(file.Path))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write(content[:])
+	}
+	return files, "sha256:" + hex.EncodeToString(hash.Sum(nil)), total, nil
 }
 
 func linkedPluginBundle() ([]bundleFile, string, int, error) {

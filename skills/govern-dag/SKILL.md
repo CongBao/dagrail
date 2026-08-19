@@ -10,37 +10,52 @@ Treat DAGrail—not chat, a roadmap projection, or a harness thread—as runtime
 Before binding a Role, verify that `dag_context`, `dag_inspect`, `dag_apply`,
 `dag_graph_change`, `dag_reconcile`, and `dag_pre_wait` are callable in this process.
 Skill discovery does not prove that a long-running harness loaded a newly registered MCP
-server. If any tool is absent, run `dagrail doctor install`, then start a fresh harness
-session; until then use the corresponding `dagrail context`, `dagrail inspect`,
+server. `dagrail mcp probe` proves a fresh server handshake and exact tool schemas, while
+`dagrail plugin status --harness <host>` reports whether a fresh session is still
+required; neither command may claim that this already-running process loaded MCP. If any
+tool is absent, run those diagnostics plus `dagrail doctor install` and start a fresh
+harness session; until then use
+the corresponding `dagrail context`, `dagrail inspect`,
 `dagrail action apply`, `dagrail graph preview-change|apply-change`, `dagrail reconcile`,
 or `dagrail pre-wait` command, never a hand-built transition.
 
 1. Bind only the assigned control Role. It needs the capabilities for actions it will
    perform, such as `graph.change`; takeover is valid only after the former lease expires.
-2. Call `dag_context` with `view: orchestrator` and a cursor when available. Inspect
+2. Call `dag_context` with `view: orchestrator`, an explicit `root` when project
+   discovery is ambiguous, and a cursor when available. Inspect
    opaque refs selectively; do not load the complete graph, journal, or artifact bodies.
    When an ID is too large for a bounded tool input, pass the returned `role_ref`,
    `node_ref`, `actor_role_ref`, or `effect_ref`; do not reconstruct or paste the ID.
    Use its `authorization`, `remediations`, and `projectAllowedActions` as the bounded
    operations plan. Routine in-scope actions do not need a new conversational approval;
    the listed escalation boundaries still do.
-3. Advance work only through current controller-issued action refs. Preserve one stable
+3. Advance work only through current controller-issued action refs. In a CLI fallback,
+   `dagrail action apply --kind <kind> --role <role-or-ref> --node <node-or-ref>` may
+   atomically resolve one current action so the session need not copy a long ref; zero or
+   multiple matches are blockers, never permission to guess. Preserve one stable
    idempotency key per intended action. Do not copy refs, leases, hashes, or Attempt IDs
-   between Roles, Nodes, projects, or sessions. One recovery exception exists: when a
+   between Roles, Nodes, or projects. One recovery exception exists: when a
    call crashes, times out, or loses its result, persist the pending action's original
    ref, RFC 8785 canonical JSON input value, and idempotency key together. A successor
    session may replay only that canonical-equivalent triple to retrieve the same result.
    Never pair the saved ref with changed input, a new key, another Role/Node/project, or
    a new intent.
-4. Keep semantic responsibilities in their typed Nodes. A task produces work, a review
+4. After every action, read its `continuation` before choosing the next step. When
+   `safeToWait` is false, resolve the owned reason codes or inspect `nextActionsRef` and
+   continue; at most three next actions are inlined. `owner: daemon` means only that the
+   daemon is finishing one already-authorized Effect saga and the agent may safely yield;
+   it is not acceptance, completion, or permission for the daemon to choose more work.
+   A `role.renew` remediation means the current lease budget cannot safely cover the
+   requested operation. Renew explicitly; DAGrail never extends a Role lease on its own.
+5. Keep semantic responsibilities in their typed Nodes. A task produces work, a review
    resolves approve/return, a decision records a closed human/LLM choice, a gate invokes
    its policy provider, and an effect owns the external saga. The control Role does not
    repeat review or promote delivery into acceptance.
-5. Modify the graph only with `dag_graph_change` preview followed by apply of that exact,
+6. Modify the graph only with `dag_graph_change` preview followed by apply of that exact,
    unexpired token. Re-preview after any head or revision change. Planned contracts and
    Role capabilities may change; active contracts are frozen, terminal history is
    append-only, and active resources must close before supersession.
-6. Reconcile every `unknown` effect before retrying. If unrelated journal activity made
+7. Reconcile every `unknown` effect before retrying. If unrelated journal activity made
    a saved ref look stale, inspect `effect-continuity:<action-id>`: a global head advance
    is not a causal contract change when the bound adapter ID, version, schema hash, and
    canonical request digest are unchanged. Missing legacy metadata or a same-ID adapter
@@ -48,15 +63,15 @@ or `dagrail pre-wait` command, never a hand-built transition.
    observation; otherwise provide only verified typed evidence. Transport acceptance,
    session creation, recipient-visible delivery, acceptance, completion, and DAG
    outcome are distinct.
-7. Follow `decision:`, `evidence-package:`, and `reuse-decision:` refs. A
+8. Follow `decision:`, `evidence-package:`, and `reuse-decision:` refs. A
    `reuse_execution` result permits policy reevaluation without rerunning the protected
    execution core; it is not approval.
-8. Keep incidents owned and bounded. Record progress, apply one closed recovery
+9. Keep incidents owned and bounded. Record progress, apply one closed recovery
    disposition (`retry`, `rollback`, `lkg`, `quarantine`, `off-critical-path`, or
    `escalate`), and respect an open circuit instead of repeating adjacent fixes. When
    the graph contains a valid repair successor, use the returned `incident.supersede`
    action so the old alert closes with a typed, auditable handoff.
-9. Call `dag_pre_wait` before yielding, waiting, or declaring blocked. Do not wait while
+10. Call `dag_pre_wait` before yielding, waiting, or declaring blocked. Do not wait while
    ready Nodes, submitted Attempts, stale/expired leases, incidents, resource closure,
    or unreconciled effects still require a bounded action. Read exact `counts` first;
    when `truncated` is true, follow only the relevant operations-action, pre-wait, or

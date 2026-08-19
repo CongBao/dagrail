@@ -163,7 +163,7 @@ func TestSystemZipMatchesReleaseMetadataContract(t *testing.T) {
 		t.Skip("system zip unavailable")
 	}
 	root := t.TempDir()
-	for name, mode := range map[string]os.FileMode{"LICENSE": 0o644, "README.md": 0o644, "dagrail.exe": 0o755} {
+	for name, mode := range map[string]os.FileMode{"LICENSE": 0o644, "README.md": 0o644, "THIRD_PARTY_NOTICES.md": 0o644, "dagrail.exe": 0o755} {
 		path := filepath.Join(root, name)
 		if err := os.WriteFile(path, []byte(name), mode); err != nil {
 			t.Fatal(err)
@@ -174,13 +174,13 @@ func TestSystemZipMatchesReleaseMetadataContract(t *testing.T) {
 		}
 	}
 	archive := filepath.Join(root, "system.zip")
-	command := exec.Command(zipCommand, "-X", "-q", archive, "LICENSE", "README.md", "dagrail.exe")
+	command := exec.Command(zipCommand, "-X", "-q", archive, "LICENSE", "README.md", "THIRD_PARTY_NOTICES.md", "dagrail.exe")
 	command.Dir = root
 	command.Env = append(os.Environ(), "TZ=UTC")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("system zip: %v %s", err, output)
 	}
-	if err := verifyZip(archive, map[string]struct{}{"LICENSE": {}, "README.md": {}, "dagrail.exe": {}}, testEpoch); err != nil {
+	if err := verifyZip(archive, map[string]struct{}{"LICENSE": {}, "README.md": {}, "THIRD_PARTY_NOTICES.md": {}, "dagrail.exe": {}}, testEpoch); err != nil {
 		t.Fatalf("release workflow ZIP does not satisfy verifier: %v", err)
 	}
 }
@@ -232,7 +232,7 @@ func createReleaseFixture(t *testing.T) string {
 		if target.OS == "windows" {
 			binary = "dagrail.exe"
 		}
-		contents := map[string][]byte{"LICENSE": []byte("Apache-2.0\n"), "README.md": []byte("# DAGrail\n"), binary: []byte("static-binary-" + target.OS + "-" + target.Arch)}
+		contents := map[string][]byte{"LICENSE": []byte("Apache-2.0\n"), "README.md": []byte("# DAGrail\n"), "THIRD_PARTY_NOTICES.md": []byte("# Third-party notices\n"), binary: []byte("static-binary-" + target.OS + "-" + target.Arch)}
 		archive := filepath.Join(root, archiveFileName(target))
 		if target.Format == "zip" {
 			writeZip(t, archive, contents)

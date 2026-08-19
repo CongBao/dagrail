@@ -194,7 +194,11 @@ func TestLocalBundleUpgradeConvergesAcrossHarnessesAndMutationFailures(t *testin
 	}
 	for _, plan := range plans {
 		plan := plan
-		for failAt := 1; failAt <= 6; failAt++ {
+		mutationCount := 6
+		if len(plan.MCPAdd) == 0 {
+			mutationCount = 5
+		}
+		for failAt := 1; failAt <= mutationCount; failAt++ {
 			failAt := failAt
 			t.Run(fmt.Sprintf("%s/failure-%d", plan.Harness, failAt), func(t *testing.T) {
 				marketplace := "old-bundle"
@@ -255,7 +259,11 @@ func TestLocalBundleUpgradeConvergesAcrossHarnessesAndMutationFailures(t *testin
 				if err := applyInstallPlan(context.Background(), "host", plan, runner); err != nil {
 					t.Fatalf("same install command did not converge after partial failure: %v", err)
 				}
-				if marketplace != filepath.Join(root, "bundle") || !pluginInstalled || !strings.Contains(mcpLauncher, filepath.Join(root, "dagrail")+" mcp --stdio") || remoteUpdateCalled {
+				mcpReady := strings.Contains(mcpLauncher, filepath.Join(root, "dagrail")+" mcp --stdio")
+				if plan.Harness == "codex" {
+					mcpReady = mcpLauncher == ""
+				}
+				if marketplace != filepath.Join(root, "bundle") || !pluginInstalled || !mcpReady || remoteUpdateCalled {
 					t.Fatalf("upgrade did not converge: marketplace=%q plugin=%t mcp=%q update=%t", marketplace, pluginInstalled, mcpLauncher, remoteUpdateCalled)
 				}
 			})

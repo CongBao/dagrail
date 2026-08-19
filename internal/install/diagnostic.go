@@ -27,7 +27,10 @@ type DiagnosticHarness struct {
 	ID                     string `json:"id"`
 	Detected               bool   `json:"detected"`
 	PluginStatus           string `json:"pluginStatus"`
+	PluginInstalled        bool   `json:"pluginInstalled"`
 	MCPConfigured          bool   `json:"mcpConfigured"`
+	ServerHandshakeReady   bool   `json:"serverHandshakeReady"`
+	ProjectRoundTripReady  bool   `json:"projectRoundTripReady"`
 	ConfigurationReady     bool   `json:"configurationReady"`
 	Ready                  bool   `json:"ready"`
 	CurrentProcessVerified bool   `json:"currentProcessVerified"`
@@ -110,8 +113,8 @@ func Diagnose(ctx context.Context, options Options) (InstallationDiagnostic, err
 	}
 	for _, state := range states {
 		detected := state.Status != "not_detected"
-		item := DiagnosticHarness{ID: state.Harness, Detected: detected, PluginStatus: state.Status, MCPConfigured: state.MCPConfigured, CurrentProcessVerified: false, Activation: "fresh-session-or-cli-fallback"}
-		item.ConfigurationReady = detected && state.Status == "installed" && state.MCPConfigured
+		item := DiagnosticHarness{ID: state.Harness, Detected: detected, PluginStatus: state.Status, PluginInstalled: state.PluginInstalled, MCPConfigured: state.MCPConfigured, ServerHandshakeReady: state.ServerHandshakeReady, ProjectRoundTripReady: state.ProjectRoundTripReady, CurrentProcessVerified: false, Activation: "fresh-session-or-cli-fallback"}
+		item.ConfigurationReady = detected && state.PluginInstalled && state.MCPConfigured && state.ServerHandshakeReady
 		// v1alpha1 Ready is activation readiness, not persisted registration
 		// health. No supported probe proves the caller's already-running harness
 		// loaded the new MCP registration, so it remains false.
@@ -120,6 +123,7 @@ func Diagnose(ctx context.Context, options Options) (InstallationDiagnostic, err
 		add("harness."+state.Harness+".detected", detected, "harness_detected", "harness_not_detected")
 		add("harness."+state.Harness+".plugin", state.Status == "installed", "plugin_installed", "plugin_not_installed")
 		add("harness."+state.Harness+".mcp", state.MCPConfigured, "mcp_configured", "mcp_not_configured")
+		add("harness."+state.Harness+".handshake", state.ServerHandshakeReady, "mcp_handshake_ready", "mcp_handshake_unavailable")
 	}
 	return report, nil
 }

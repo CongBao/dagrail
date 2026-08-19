@@ -17,8 +17,9 @@ digests, context budgets, and command inventory implemented by the current binar
   interfaces or types; existing Go interfaces do not gain required methods.
 - Explorer v1beta1 remains the retained flat response contract. Explorer v1beta2 adds
   hierarchical group summaries, lanes, collapsed-edge refs, and repeated group-state
-  query keys under a new schema path/digest in `dagrail contract`. Both remain
-  loopback-only and expose no mutation route.
+  query keys. Explorer v1beta3 adds a complete Project map, snapshot-bound Group-member
+  and locate pages, and aggregate-edge continuation under a new schema path/digest in
+  `dagrail contract`. All remain loopback-only and expose no mutation route.
 - Graph Definition v1alpha1 remains importable. A future graph format uses another
   `apiVersion` rather than silently changing existing semantics. Additive `groups` and
   `node.groupId` declarations do not alter Node lifecycle or dependency authority.
@@ -76,7 +77,11 @@ digests, context budgets, and command inventory implemented by the current binar
   additive in-version; the four broad error classes and their exit codes remain stable
   through the beta line. Completion is generated from the catalog, not an independent
   authority. Installation diagnostics remain path-free and omit raw host output.
-- HistoricalBinaryMatrix v1alpha1 closes the v0.10.0–v0.25.2 input window by exact commit.
+- HistoricalBinaryMatrix v1alpha1 closes the v0.10.0–v0.25.3 input window by exact commit.
+- LocalController v1alpha1 is an owner-local transport and cache boundary, not portable
+  authority. A current CLI may drain and restart a prior daemon version; an unsafe
+  in-flight Effect produces a blocker rather than a forced retry. Offline mutation is
+  restricted to the documented stopped-daemon recovery surfaces.
 - LifecycleMigration v1alpha1/v1beta1 keep v0.22 Effect payloads readable. The additive
   `adapterVersion`/`adapterSchemaHash` fields are an optional pair on imported history;
   current writers emit both, while an unbound nonterminal Effect cannot be reconciled

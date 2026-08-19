@@ -4,12 +4,13 @@ Status: accepted
 
 ## Decision
 
-The browser UI reads six v1beta1 query projections and exposes no mutation route. Full
-graph rendering is capped; selecting a Node requests a deterministic bounded
-neighborhood that retains the focus before distance/ID truncation. Lists use explicit
-cursors or latest-object limits, all JSON is capped at 2 MiB, and Node/effect bodies are
-represented by digests and receipt states. A published response schema is digest-bound
-into the compatibility contract.
+The browser UI reads bounded query projections and exposes no mutation route. The
+v1beta3 Project Map keeps every top-level Group, retrieves snapshot-bound Group members
+and dense-edge pages lazily, and fails stale rather than mixing heads. Execution Detail
+retains deterministic bounded neighborhoods. Lists use explicit cursors or
+latest-object limits, all JSON is capped at 2 MiB, and Node/effect bodies are represented
+by digests and receipt states. Published response schemas are digest-bound into the
+compatibility contract. ADR 0023 defines the hierarchical interaction contract.
 
 URL query keys identify a local view and selected Node but carry no allowed action,
 lease authority, controller secret, or transition input.

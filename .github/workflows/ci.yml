@@ -58,14 +58,14 @@ jobs:
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
             go build -buildvcs=false -trimpath -ldflags "$flags" \
             -o "stage/dagrail${{ matrix.ext }}" ./cmd/dagrail
-          cp "stage/dagrail${{ matrix.ext }}" LICENSE README.md package/
+          cp "stage/dagrail${{ matrix.ext }}" LICENSE README.md THIRD_PARTY_NOTICES.md package/
           find package -exec touch -h -d "@${epoch}" {} +
           asset="dagrail_${{ matrix.goos }}_${{ matrix.goarch }}.${{ matrix.archive }}"
           if [ '${{ matrix.archive }}' = zip ]; then
-            (cd package && TZ=UTC zip -X -q "../${asset}" LICENSE README.md dagrail${{ matrix.ext }})
+            (cd package && TZ=UTC zip -X -q "../${asset}" LICENSE README.md THIRD_PARTY_NOTICES.md dagrail${{ matrix.ext }})
           else
             tar --sort=name --mtime="@${epoch}" --owner=0 --group=0 --numeric-owner \
-              -C package -cf - LICENSE README.md dagrail${{ matrix.ext }} | gzip -n > "$asset"
+              -C package -cf - LICENSE README.md THIRD_PARTY_NOTICES.md dagrail${{ matrix.ext }} | gzip -n > "$asset"
           fi
           echo "ASSET=$asset" >> "$GITHUB_ENV"
       - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
@@ -115,6 +115,15 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: '1.26.6'
+      - name: Verify generated Explorer assets
+        shell: bash
+        run: |
+          npm --prefix internal/ui/web ci --ignore-scripts
+          npm --prefix internal/ui/web audit --audit-level=high
+          npm --prefix internal/ui/web run build
+          npm --prefix internal/ui/web run check
+          npm --prefix internal/ui/web run test:visual
+          git diff --exit-code -- internal/ui/static
       - run: go test ./internal/journal -run RFC8785
       - run: go test ./internal/mcpserver -run TestServerExposesOnlySixHighLevelTypedTools
       - run: go vet ./...
@@ -134,10 +143,10 @@ jobs:
             package="/tmp/dagrail-package-$suffix"
             mkdir -p "$package"
             cp "/tmp/dagrail-build-$suffix" "$package/dagrail"
-            cp LICENSE README.md "$package/"
+            cp LICENSE README.md THIRD_PARTY_NOTICES.md "$package/"
             find "$package" -exec touch -h -d "@${epoch}" {} +
             tar --sort=name --mtime="@${epoch}" --owner=0 --group=0 --numeric-owner \
-              -C "$package" -cf - LICENSE README.md dagrail | gzip -n > "/tmp/dagrail-$suffix.tar.gz"
+              -C "$package" -cf - LICENSE README.md THIRD_PARTY_NOTICES.md dagrail | gzip -n > "/tmp/dagrail-$suffix.tar.gz"
           done
           cmp /tmp/dagrail-a.tar.gz /tmp/dagrail-b.tar.gz
 

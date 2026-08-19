@@ -22,7 +22,7 @@ try {
   $archive = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $temporary $asset))
   try {
     $entries = @($archive.Entries | ForEach-Object { $_.FullName } | Sort-Object)
-    $wanted = @("LICENSE", "README.md", "dagrail.exe") | Sort-Object
+    $wanted = @("LICENSE", "README.md", "THIRD_PARTY_NOTICES.md", "dagrail.exe") | Sort-Object
     if (($entries -join "`n") -ne ($wanted -join "`n")) { throw "release archive contains unexpected paths" }
   } finally {
     $archive.Dispose()

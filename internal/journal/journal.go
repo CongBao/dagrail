@@ -2,6 +2,7 @@ package journal
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -114,6 +115,25 @@ type Store struct {
 	fault                  func(string) error
 }
 
+// SegmentFileIdentity is a cheap, owner-local identity for one immutable
+// segment file. It is cache metadata only; hashes inside Segment remain the
+// authority and every changed identity falls back to full verification.
+type SegmentFileIdentity struct {
+	Name            string
+	Size            int64
+	ModTimeUnixNano int64
+	Mode            os.FileMode
+}
+
+// VerifiedSnapshot couples fully verified segments with their observed file
+// identities. A later read can validate only an append-only suffix when the
+// entire previous prefix is byte-surface identical.
+type VerifiedSnapshot struct {
+	Segments    []Segment
+	Files       []SegmentFileIdentity
+	Incremental bool
+}
+
 const authorityRetirementFile = "authority-retired.json"
 
 var processLocks sync.Map
@@ -145,6 +165,21 @@ func Open(dataDir, projectID string) (*Store, error) {
 	return store, nil
 }
 
+// OpenDeferred performs claim/path admission but defers full journal
+// verification to the caller's snapshot load. The daemon uses it so reopening
+// a hot Project does not replay the journal twice; ordinary offline callers
+// continue to use Open.
+func OpenDeferred(dataDir, projectID string) (*Store, error) {
+	store, err := open(dataDir, projectID, storeCapabilityOrdinary)
+	if err != nil {
+		return nil, err
+	}
+	if err := project.ValidateAuthorityClaim(dataDir, projectID); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
 // OpenInspection applies the same claim and establishment validation as Open,
 // but the returned handle cannot append or restore journal content.
 func OpenInspection(dataDir, projectID string) (*Store, error) {
@@ -160,6 +195,20 @@ func OpenInspection(dataDir, projectID string) (*Store, error) {
 		return nil, err
 	}
 	if err := validateEstablishedAuthorityPrefix(projectID, segments); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+// OpenInspectionDeferred is the read-only counterpart of OpenDeferred. It
+// validates the path-bound claim and relies on the caller's verified snapshot
+// load for authority-prefix verification.
+func OpenInspectionDeferred(dataDir, projectID string) (*Store, error) {
+	store, err := openExisting(dataDir, projectID, storeCapabilityInspection)
+	if err != nil {
+		return nil, err
+	}
+	if err := project.ValidateAuthorityClaim(dataDir, projectID); err != nil {
 		return nil, err
 	}
 	return store, nil
@@ -682,6 +731,98 @@ func (s *Store) ReadAll() ([]Segment, error) {
 	return result, err
 }
 
+// ReadAllContext performs full authority verification while honoring caller
+// cancellation between segment files. progress is observational only and is
+// invoked under the stable journal snapshot lock with completed/total counts.
+func (s *Store) ReadAllContext(ctx context.Context, progress func(completed, total int)) ([]Segment, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	locked, err := s.lock.TryLockContext(ctx, 25*time.Millisecond)
+	if err != nil {
+		return nil, err
+	}
+	if !locked {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("journal lock was not acquired")
+	}
+	defer func() { _ = s.lock.Unlock() }()
+	names, _, err := s.listSegmentFilesUnlocked()
+	if err != nil {
+		return nil, err
+	}
+	if progress != nil {
+		progress(0, len(names))
+	}
+	segments := make([]Segment, 0, len(names))
+	previous := ""
+	for index, name := range names {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		segment, err := s.readSegmentFileUnlocked(name, uint64(index+1), previous)
+		if err != nil {
+			return nil, err
+		}
+		previous = segment.SegmentHash
+		segments = append(segments, segment)
+		if progress != nil {
+			progress(index+1, len(names))
+		}
+	}
+	return segments, nil
+}
+
+// ReadSnapshot returns one stable verified journal snapshot. If the supplied
+// prefix has unchanged file identities, only newly appended segments are read,
+// canonicalized, hash-checked, and compatibility-checked.
+func (s *Store) ReadSnapshot(previous *VerifiedSnapshot) (VerifiedSnapshot, error) {
+	var result VerifiedSnapshot
+	err := s.WithLock(func() error {
+		names, files, err := s.listSegmentFilesUnlocked()
+		if err != nil {
+			return err
+		}
+		if previous != nil && len(files) < len(previous.Files) {
+			return fmt.Errorf("journal prefix was truncated from %d to %d segments", len(previous.Files), len(files))
+		}
+		prefixUnchanged := previous != nil && len(previous.Files) <= len(files)
+		if prefixUnchanged {
+			for index := range previous.Files {
+				if previous.Files[index] != files[index] {
+					prefixUnchanged = false
+					break
+				}
+			}
+		}
+		start := 0
+		segments := make([]Segment, 0, len(names))
+		priorHash := ""
+		if prefixUnchanged {
+			segments = append(segments, previous.Segments...)
+			start = len(previous.Segments)
+			if start != 0 {
+				priorHash = previous.Segments[start-1].SegmentHash
+			}
+		}
+		for index := start; index < len(names); index++ {
+			segment, readErr := s.readSegmentFileUnlocked(names[index], uint64(index+1), priorHash)
+			if readErr != nil {
+				return readErr
+			}
+			segments = append(segments, segment)
+			priorHash = segment.SegmentHash
+		}
+		result = VerifiedSnapshot{Segments: segments, Files: files, Incremental: prefixUnchanged}
+		return nil
+	})
+	return result, err
+}
+
 // InspectHead observes the current append-only tail without replaying every
 // segment. The writer lock makes the directory listing and tail read one stable
 // observation. Every filename is still checked for a continuous sequence and a
@@ -1041,9 +1182,27 @@ func CompatibilityForSegments(segments []Segment) (CompatibilityReport, error) {
 }
 
 func (s *Store) readAllUnlocked() ([]Segment, error) {
-	directory, err := os.Open(s.dir)
+	names, _, err := s.listSegmentFilesUnlocked()
 	if err != nil {
 		return nil, err
+	}
+	segments := make([]Segment, 0, len(names))
+	previous := ""
+	for index, name := range names {
+		segment, err := s.readSegmentFileUnlocked(name, uint64(index+1), previous)
+		if err != nil {
+			return nil, err
+		}
+		previous = segment.SegmentHash
+		segments = append(segments, segment)
+	}
+	return segments, nil
+}
+
+func (s *Store) listSegmentFilesUnlocked() ([]string, []SegmentFileIdentity, error) {
+	directory, err := os.Open(s.dir)
+	if err != nil {
+		return nil, nil, err
 	}
 	defer directory.Close()
 	names := make([]string, 0)
@@ -1052,11 +1211,11 @@ func (s *Store) readAllUnlocked() ([]Segment, error) {
 		for _, entry := range entries {
 			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
 				if entry.Type()&os.ModeSymlink != 0 {
-					return nil, fmt.Errorf("journal segment %s must not be a symlink", entry.Name())
+					return nil, nil, fmt.Errorf("journal segment %s must not be a symlink", entry.Name())
 				}
 				names = append(names, entry.Name())
 				if len(names) > MaxSegmentCount {
-					return nil, fmt.Errorf("journal exceeds %d segments", MaxSegmentCount)
+					return nil, nil, fmt.Errorf("journal exceeds %d segments", MaxSegmentCount)
 				}
 			}
 		}
@@ -1064,68 +1223,81 @@ func (s *Store) readAllUnlocked() ([]Segment, error) {
 			break
 		}
 		if readErr != nil {
-			return nil, readErr
+			return nil, nil, readErr
 		}
 	}
 	sort.Strings(names)
-	segments := make([]Segment, 0, len(names))
-	previous := ""
+	files := make([]SegmentFileIdentity, 0, len(names))
 	for index, name := range names {
 		path := filepath.Join(s.dir, name)
 		info, err := os.Lstat(path)
 		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > MaxSegmentBytes {
-			return nil, fmt.Errorf("journal segment %s must be a regular file no larger than %d bytes", name, MaxSegmentBytes)
+			return nil, nil, fmt.Errorf("journal segment %s must be a regular file no larger than %d bytes", name, MaxSegmentBytes)
 		}
-		file, err := os.Open(path)
-		if err != nil {
-			return nil, err
+		prefix := fmt.Sprintf("%012d-", index+1)
+		digest := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".json")
+		decoded, decodeErr := hex.DecodeString(digest)
+		if !strings.HasPrefix(name, prefix) || len(decoded) != sha256.Size || decodeErr != nil {
+			return nil, nil, fmt.Errorf("journal segment filename is invalid: %s", name)
 		}
-		data, err := io.ReadAll(io.LimitReader(file, MaxSegmentBytes+1))
-		_ = file.Close()
-		if err != nil {
-			return nil, err
-		}
-		if len(data) > MaxSegmentBytes {
-			return nil, fmt.Errorf("journal segment %s exceeds %d bytes", name, MaxSegmentBytes)
-		}
-		if err := domain.ValidateAuthorityJSON(data); err != nil {
-			return nil, fmt.Errorf("decode journal segment %s: %w", name, err)
-		}
-		var segment Segment
-		decoder := json.NewDecoder(bytes.NewReader(data))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&segment); err != nil {
-			return nil, fmt.Errorf("decode journal segment %s: %w", name, err)
-		}
-		var trailing any
-		if err := decoder.Decode(&trailing); err != io.EOF {
-			return nil, fmt.Errorf("decode journal segment %s: trailing content", name)
-		}
-		if err := validateStoredCommand(segment.SchemaVersion, segment.Command); err != nil {
-			return nil, fmt.Errorf("journal compatibility error at %s: %w", name, err)
-		}
-		canonical, err := jcs.Transform(data)
-		if err != nil || !bytes.Equal(data, canonical) {
-			return nil, fmt.Errorf("journal segment %s is not canonical RFC 8785 JSON", name)
-		}
-		if segment.Sequence != uint64(index+1) || segment.ProjectID != s.projectID || segment.PreviousHash != previous {
-			return nil, fmt.Errorf("journal chain mismatch at %s", name)
-		}
-		unsigned := unsignedSegment{SchemaVersion: segment.SchemaVersion, Sequence: segment.Sequence, ProjectID: segment.ProjectID, PreviousHash: segment.PreviousHash, Command: segment.Command, Events: segment.Events, CommittedAt: segment.CommittedAt}
-		hash, err := computeHash(unsigned)
-		if err != nil {
-			return nil, err
-		}
-		if hash != segment.SegmentHash || name != fmt.Sprintf("%012d-%s.json", segment.Sequence, hash) {
-			return nil, fmt.Errorf("journal hash mismatch at %s", name)
-		}
-		if err := validateStoredEvents(segment.SchemaVersion, segment.Events); err != nil {
-			return nil, fmt.Errorf("journal compatibility error at %s: %w", name, err)
-		}
-		previous = hash
-		segments = append(segments, segment)
+		files = append(files, SegmentFileIdentity{Name: name, Size: info.Size(), ModTimeUnixNano: info.ModTime().UnixNano(), Mode: info.Mode()})
 	}
-	return segments, nil
+	return names, files, nil
+}
+
+func (s *Store) readSegmentFileUnlocked(name string, sequence uint64, previous string) (Segment, error) {
+	path := filepath.Join(s.dir, name)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > MaxSegmentBytes {
+		return Segment{}, fmt.Errorf("journal segment %s must be a regular file no larger than %d bytes", name, MaxSegmentBytes)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return Segment{}, err
+	}
+	data, err := io.ReadAll(io.LimitReader(file, MaxSegmentBytes+1))
+	_ = file.Close()
+	if err != nil {
+		return Segment{}, err
+	}
+	if len(data) > MaxSegmentBytes {
+		return Segment{}, fmt.Errorf("journal segment %s exceeds %d bytes", name, MaxSegmentBytes)
+	}
+	if err := domain.ValidateAuthorityJSON(data); err != nil {
+		return Segment{}, fmt.Errorf("decode journal segment %s: %w", name, err)
+	}
+	var segment Segment
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&segment); err != nil {
+		return Segment{}, fmt.Errorf("decode journal segment %s: %w", name, err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return Segment{}, fmt.Errorf("decode journal segment %s: trailing content", name)
+	}
+	if err := validateStoredCommand(segment.SchemaVersion, segment.Command); err != nil {
+		return Segment{}, fmt.Errorf("journal compatibility error at %s: %w", name, err)
+	}
+	canonical, err := jcs.Transform(data)
+	if err != nil || !bytes.Equal(data, canonical) {
+		return Segment{}, fmt.Errorf("journal segment %s is not canonical RFC 8785 JSON", name)
+	}
+	if segment.Sequence != sequence || segment.ProjectID != s.projectID || segment.PreviousHash != previous {
+		return Segment{}, fmt.Errorf("journal chain mismatch at %s", name)
+	}
+	unsigned := unsignedSegment{SchemaVersion: segment.SchemaVersion, Sequence: segment.Sequence, ProjectID: segment.ProjectID, PreviousHash: segment.PreviousHash, Command: segment.Command, Events: segment.Events, CommittedAt: segment.CommittedAt}
+	hash, err := computeHash(unsigned)
+	if err != nil {
+		return Segment{}, err
+	}
+	if hash != segment.SegmentHash || name != fmt.Sprintf("%012d-%s.json", segment.Sequence, hash) {
+		return Segment{}, fmt.Errorf("journal hash mismatch at %s", name)
+	}
+	if err := validateStoredEvents(segment.SchemaVersion, segment.Events); err != nil {
+		return Segment{}, fmt.Errorf("journal compatibility error at %s: %w", name, err)
+	}
+	return segment, nil
 }
 
 func prepareEvents(events []Event) ([]Event, error) {

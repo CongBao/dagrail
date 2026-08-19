@@ -1,6 +1,6 @@
 # ADR 0008: Read-only local operational surface
 
-- Status: accepted
+- Status: accepted; foreground-process topology superseded by ADR 0022
 - Date: 2026-08-14
 
 ## Context
@@ -25,6 +25,8 @@ or MCP application service, where revision, lease, idempotency, and policy check
 
 - UI inspection does not add a second lifecycle writer.
 - The server cannot bind a non-loopback address in v0.5.
-- No daemon, login system, CDN, or remote dashboard is introduced.
+- No login system, CDN, or remote dashboard is introduced. ADR 0022 later moved the
+  loopback server behind the owner-local daemon without changing this read-only HTTP
+  boundary.
 - A future remote UI requires an explicit authentication, authorization, and transport
   decision rather than silently expanding this local boundary.

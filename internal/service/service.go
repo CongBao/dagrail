@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/CongBao/dagrail/internal/domain"
@@ -34,6 +36,32 @@ type Service struct {
 	beforeIncidentSupersedeAppend func()
 	recoveryInspection            bool
 	readOnlyInspection            bool
+	snapshotCache                 *verifiedSnapshotCache
+}
+
+type verifiedSnapshotCache struct {
+	mu          sync.RWMutex
+	journal     journal.VerifiedSnapshot
+	state       domain.State
+	valid       bool
+	lastChecked time.Time
+}
+
+var processSnapshotCacheEnabled atomic.Bool
+var processSnapshotCaches sync.Map
+
+// EnableProcessSnapshotCache enables owner-process sharing for the local
+// controller. It is intentionally opt-in: short-lived offline commands retain
+// their historical isolation and the journal remains the authority.
+func EnableProcessSnapshotCache() { processSnapshotCacheEnabled.Store(true) }
+
+func snapshotCacheFor(p project.Project) *verifiedSnapshotCache {
+	if !processSnapshotCacheEnabled.Load() {
+		return nil
+	}
+	key := p.Config.ProjectID + "\x00" + p.DataDir
+	value, _ := processSnapshotCaches.LoadOrStore(key, &verifiedSnapshotCache{})
+	return value.(*verifiedSnapshotCache)
 }
 
 type openMode uint8
@@ -42,6 +70,7 @@ const (
 	openOrdinary openMode = iota
 	openInspection
 	openRecovery
+	openVerification
 )
 
 func Open(root string) (*Service, error) {
@@ -60,6 +89,13 @@ func OpenForRecovery(root string) (*Service, error) {
 	return open(root, openRecovery, false)
 }
 
+// OpenForAuthorityVerification opens only path-bound read surfaces. The
+// caller's context-aware verification performs the first journal replay, so a
+// cold full verify can be cancelled and report progress.
+func OpenForAuthorityVerification(root string) (*Service, error) {
+	return open(root, openVerification, false)
+}
+
 // OpenForMigration opens writable local projections without running derived
 // automatic Node settlement before a migration's expected-head validation.
 func OpenForMigration(root string) (*Service, error) {
@@ -68,7 +104,7 @@ func OpenForMigration(root string) (*Service, error) {
 
 func open(root string, mode openMode, settle bool) (*Service, error) {
 	openProject := project.Open
-	if mode == openInspection {
+	if mode == openInspection || mode == openVerification {
 		openProject = project.OpenInspection
 	}
 	p, err := openProject(root)
@@ -80,9 +116,19 @@ func open(root string, mode openMode, settle bool) (*Service, error) {
 	case openRecovery:
 		j, err = journal.OpenRecovery(p.DataDir, p.Config.ProjectID)
 	case openInspection:
-		j, err = journal.OpenInspection(p.DataDir, p.Config.ProjectID)
+		if processSnapshotCacheEnabled.Load() {
+			j, err = journal.OpenInspectionDeferred(p.DataDir, p.Config.ProjectID)
+		} else {
+			j, err = journal.OpenInspection(p.DataDir, p.Config.ProjectID)
+		}
+	case openVerification:
+		j, err = journal.OpenInspectionDeferred(p.DataDir, p.Config.ProjectID)
 	default:
-		j, err = journal.Open(p.DataDir, p.Config.ProjectID)
+		if processSnapshotCacheEnabled.Load() {
+			j, err = journal.OpenDeferred(p.DataDir, p.Config.ProjectID)
+		} else {
+			j, err = journal.Open(p.DataDir, p.Config.ProjectID)
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -137,13 +183,14 @@ func open(root string, mode openMode, settle bool) (*Service, error) {
 			return nil, registerErr
 		}
 	}
-	service := &Service{Project: p, Journal: j, Projection: projectionStore, Providers: registry, ProviderRuntime: internalproviders.NewRuntime(registry), Now: time.Now, ConfirmLocator: project.SyncProjectLocator, recoveryInspection: mode == openRecovery, readOnlyInspection: mode == openInspection}
+	service := &Service{Project: p, Journal: j, Projection: projectionStore, Providers: registry, ProviderRuntime: internalproviders.NewRuntime(registry), Now: time.Now, ConfirmLocator: project.SyncProjectLocator, recoveryInspection: mode == openRecovery, readOnlyInspection: mode == openInspection, snapshotCache: snapshotCacheFor(p)}
+	if mode == openVerification {
+		service.readOnlyInspection = true
+		return service, nil
+	}
 	if mode == openInspection {
-		segments, err := j.ReadAll()
+		_, _, err := service.load()
 		if err != nil {
-			return nil, err
-		}
-		if err := validateCurrentAuthority(p, segments); err != nil {
 			return nil, err
 		}
 		return service, nil
@@ -378,6 +425,67 @@ func (s *Service) RebuildProjection() error {
 }
 
 func (s *Service) load() (domain.State, []journal.Segment, error) {
+	if s.snapshotCache != nil {
+		requestStarted := time.Now()
+		s.snapshotCache.mu.Lock()
+		defer s.snapshotCache.mu.Unlock()
+		// Concurrent readers that arrived before one verified head check finished
+		// consume that exact result. Sequential calls still observe the journal on
+		// every read, so there is no TTL window in which an external append is
+		// silently ignored. This is the daemon's read-side singleflight boundary.
+		if s.snapshotCache.valid && !s.snapshotCache.lastChecked.IsZero() && !s.snapshotCache.lastChecked.Before(requestStarted) {
+			return s.snapshotCache.state, s.snapshotCache.journal.Segments, nil
+		}
+		if !s.snapshotCache.valid && !s.recoveryInspection {
+			restored, prefix, report, restoreErr := s.Projection.RestoreCheckpoint()
+			// A checkpoint is a disposable accelerator. Any absence, stale
+			// identity, provider mismatch, or integrity failure falls back to
+			// authoritative journal verification without mutating the cache.
+			if restoreErr == nil && report.Valid && report.ProviderSet == providerFingerprint(restored.Graph) {
+				s.snapshotCache.state = restored
+				s.snapshotCache.journal = prefix
+				s.snapshotCache.valid = true
+			}
+		}
+		var previous *journal.VerifiedSnapshot
+		if s.snapshotCache.valid {
+			previous = &s.snapshotCache.journal
+		}
+		verified, err := s.Journal.ReadSnapshot(previous)
+		if err != nil {
+			return domain.State{}, nil, err
+		}
+		if s.snapshotCache.valid && verified.Incremental && len(verified.Segments) == len(s.snapshotCache.journal.Segments) {
+			s.snapshotCache.lastChecked = time.Now()
+			return s.snapshotCache.state, s.snapshotCache.journal.Segments, nil
+		}
+		var state domain.State
+		if s.snapshotCache.valid && verified.Incremental {
+			state, err = cloneState(s.snapshotCache.state)
+			if err == nil {
+				state, err = reduceSegmentsFrom(state, verified.Segments[len(s.snapshotCache.journal.Segments):], true, false)
+			}
+		} else {
+			if !s.recoveryInspection {
+				err = validateCurrentAuthority(s.Project, verified.Segments)
+			}
+			if err == nil {
+				state, err = reduceSegments(s.Project.Config.ProjectID, verified.Segments)
+			}
+		}
+		if err != nil {
+			return domain.State{}, nil, err
+		}
+		s.snapshotCache.state = state
+		s.snapshotCache.journal = verified
+		s.snapshotCache.valid = true
+		s.snapshotCache.lastChecked = time.Now()
+		return state, verified.Segments, nil
+	}
+	return s.loadAuthority()
+}
+
+func (s *Service) loadAuthority() (domain.State, []journal.Segment, error) {
 	segments, err := s.Journal.ReadAll()
 	if err != nil {
 		return domain.State{}, nil, err
@@ -398,9 +506,23 @@ func (s *Service) load() (domain.State, []journal.Segment, error) {
 // lifecycle migration preflight. A migration is never appended until the exact
 // candidate segment has reduced successfully through this function.
 func reduceSegments(projectID string, segments []journal.Segment) (domain.State, error) {
-	state := domain.NewState(projectID)
-	retired := false
-	established := false
+	return reduceSegmentsFrom(domain.NewState(projectID), segments, false, false)
+}
+
+func cloneState(state domain.State) (domain.State, error) {
+	raw, err := json.Marshal(state)
+	if err != nil {
+		return domain.State{}, err
+	}
+	var cloned domain.State
+	if err := json.Unmarshal(raw, &cloned); err != nil {
+		return domain.State{}, err
+	}
+	return cloned, nil
+}
+
+func reduceSegmentsFrom(state domain.State, segments []journal.Segment, established, retired bool) (domain.State, error) {
+	projectID := state.ProjectID
 	for _, segment := range segments {
 		if retired {
 			return domain.State{}, fmt.Errorf("journal contains a command after authority retirement at sequence %d", segment.Sequence)

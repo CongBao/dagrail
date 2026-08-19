@@ -513,7 +513,7 @@ func verifyArchive(path string, target target, sourceDateEpoch int64) error {
 	if target.OS == "windows" {
 		wantedBinary = "dagrail.exe"
 	}
-	wanted := map[string]struct{}{"LICENSE": {}, "README.md": {}, wantedBinary: {}}
+	wanted := map[string]struct{}{"LICENSE": {}, "README.md": {}, "THIRD_PARTY_NOTICES.md": {}, wantedBinary: {}}
 	if target.Format == "zip" {
 		return verifyZip(path, wanted, sourceDateEpoch)
 	}

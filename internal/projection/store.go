@@ -402,6 +402,11 @@ func (s *Store) syncUnlocked(state domain.State, segments []journal.Segment) err
 		if uint64(currentSequence) == incomingSequence && currentHash != incomingHash {
 			return fmt.Errorf("projection cursor conflicts with journal prefix at sequence %d", incomingSequence)
 		}
+		if uint64(currentSequence) == incomingSequence && currentHash == incomingHash {
+			// Reopening a hot project must not rewrite the entire derived cache.
+			// Explicit warm may still need to (re)seal its disposable checkpoint.
+			return s.SealCheckpoint(state, segments)
+		}
 	}
 	for _, table := range []string{"metadata", "applied_segments", "graph_revisions", "nodes", "edges", "roles", "attempts", "role_leases", "checkpoints", "decisions", "evidence_packages", "reuse_decisions", "actions", "outbox", "incidents", "resources", "evidence_index"} {
 		if _, err := tx.Exec("DELETE FROM " + table); err != nil {
@@ -523,7 +528,10 @@ func (s *Store) syncUnlocked(state domain.State, segments []journal.Segment) err
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return s.SealCheckpoint(state, segments)
 }
 
 func (s *Store) Rebuild(state domain.State, segments []journal.Segment) error {

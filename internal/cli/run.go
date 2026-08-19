@@ -9,10 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/CongBao/dagrail/internal/commandcatalog"
 	"github.com/CongBao/dagrail/internal/contract"
+	"github.com/CongBao/dagrail/internal/controller"
 	"github.com/CongBao/dagrail/internal/domain"
 	"github.com/CongBao/dagrail/internal/gitartifact"
 	"github.com/CongBao/dagrail/internal/harness"
@@ -36,6 +38,13 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 
 func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (runErr error) {
 	defer func() { runErr = normalizeDispatchError(runErr) }()
+	if len(args) == 1 && (args[0] == "--version" || args[0] == "-version") {
+		return writeJSON(stdout, map[string]string{"version": version.Version, "commit": version.Commit, "date": version.Date})
+	}
+	if len(args) == 0 || (len(args) == 1 && (args[0] == "--help" || args[0] == "-h" || args[0] == "help")) {
+		_, err := io.WriteString(stdout, topLevelHelp())
+		return err
+	}
 	if WantsJSONErrors(args) {
 		stderr = io.Discard
 	}
@@ -44,15 +53,53 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 	if err != nil {
 		return err
 	}
+	args, offline := stripOffline(args)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if len(args) == 0 {
-		return usagef("usage: dagrail [--errors=json] <command>")
+		return usagef("a command is required")
 	}
 	if !commandcatalog.Contains(args[0]) {
 		return usagef("unknown command %q", args[0])
 	}
+	if len(args) == 2 && (args[1] == "--help" || args[1] == "-h" || args[1] == "help") {
+		_, err := fmt.Fprintf(stdout, "Usage: dagrail %s [flags]\n\nRun 'dagrail commands' for the closed machine-readable command and subcommand catalog.\n", args[0])
+		return err
+	}
+	if offline {
+		if !offlineRecoveryCommand(args) {
+			return usagef("offline mode is restricted to explicit recovery, restore, replay, rebuild, and authority verification commands")
+		}
+		client, clientErr := controller.NewClient()
+		if clientErr != nil {
+			return clientErr
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+		_, statusErr := client.Status(probeCtx)
+		cancel()
+		if statusErr == nil {
+			return fmt.Errorf("offline mode requires the DAGrail daemon to be stopped; run 'dagrail daemon stop' and retry")
+		}
+	}
+	if !offline && shouldProxyToController(args) {
+		client, clientErr := controller.NewClient()
+		if clientErr != nil {
+			return clientErr
+		}
+		remoteOut, remoteErr, executeErr := client.Execute(ctx, args, nil)
+		if len(remoteOut) > 0 {
+			_, _ = stdout.Write(remoteOut)
+		}
+		if len(remoteErr) > 0 {
+			_, _ = stderr.Write(remoteErr)
+		}
+		return executeErr
+	}
+	return runDirectContext(ctx, args, stdin, stdout, stderr)
+}
+
+func runDirectContext(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	switch args[0] {
 	case "artifact":
 		return runArtifact(ctx, args[1:], stdout, stderr)
@@ -103,7 +150,7 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 	case "recovery":
 		return runRecovery(args[1:], stdout, stderr)
 	case "mcp":
-		return runMCP(ctx, args[1:], stderr)
+		return runMCP(ctx, args[1:], stdout, stderr)
 	case "observe":
 		return runObserve(args[1:], stdout, stderr)
 	case "ui":
@@ -119,7 +166,7 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 	case "signature":
 		return runSignature(args[1:], stdout, stderr)
 	case "journal":
-		return runJournal(args[1:], stdout, stderr)
+		return runJournal(ctx, args[1:], stdout, stderr)
 	case "lifecycle":
 		return runLifecycle(args[1:], stdout, stderr)
 	case "evidence":
@@ -136,6 +183,8 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 		return runRelease(args[1:], stdout, stderr)
 	case "doctor":
 		return runDoctor(ctx, args[1:], stdout, stderr)
+	case "daemon":
+		return runDaemon(ctx, args[1:], stdout, stderr)
 	case "security":
 		return runSecurity(args[1:], stdout, stderr)
 	case "support":
@@ -147,6 +196,177 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 		return writeJSON(stdout, map[string]string{"version": version.Version, "commit": version.Commit, "date": version.Date})
 	default:
 		return usagef("unknown command %q", args[0])
+	}
+}
+
+func topLevelHelp() string {
+	return "DAGrail — LLM-led local DAG governance\n\nUsage:\n  dagrail [--errors=json] [--offline] <command> [flags]\n\nCore commands:\n  init, graph, frontier, role, action, context, inspect, pre-wait\n  reconcile, journal, projection, backup, daemon, mcp, ui, plugin\n\nRun 'dagrail commands' for the machine-readable catalog or '<command> --help' for flags.\n"
+}
+
+func stripOffline(args []string) ([]string, bool) {
+	result := make([]string, 0, len(args))
+	offline := false
+	for _, arg := range args {
+		if arg == "--offline" {
+			offline = true
+			continue
+		}
+		result = append(result, arg)
+	}
+	return result, offline
+}
+
+func offlineRecoveryCommand(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	subcommand := ""
+	if len(args) > 1 {
+		subcommand = args[1]
+	}
+	switch args[0] {
+	case "recovery":
+		return true
+	case "backup":
+		return subcommand == "restore" || subcommand == "verify"
+	case "journal":
+		return subcommand == "verify" || subcommand == "replay"
+	case "projection":
+		return subcommand == "rebuild"
+	case "doctor", "security":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldProxyToController(args []string) bool {
+	if len(args) == 0 || os.Getenv("DAGRAIL_DAEMON_DISABLE") == "1" || os.Getenv("DAGRAIL_DAEMON_CHILD") == "1" {
+		return false
+	}
+	for _, arg := range args[1:] {
+		if arg == "--help" || arg == "-h" || arg == "help" {
+			return false
+		}
+	}
+	switch args[0] {
+	case "daemon", "mcp", "ui", "plugin", "commands", "completion", "contract", "version", "artifact", "signature", "release", "qualify", "readiness", "observe", "hook", "harness":
+		return false
+	default:
+		return true
+	}
+}
+
+func runDaemon(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return usagef("usage: dagrail daemon <start|status|stop|restart|warm|logs>")
+	}
+	client, err := controller.NewClient()
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "serve":
+		if os.Getenv("DAGRAIL_DAEMON_CHILD") != "1" {
+			return fmt.Errorf("daemon serve is an internal entry point")
+		}
+		endpoint, err := controller.Endpoint()
+		if err != nil {
+			return err
+		}
+		service.EnableProcessSnapshotCache()
+		server := controller.NewServer(func(callCtx context.Context, callArgs []string, input io.Reader, output, errors io.Writer) error {
+			if len(callArgs) > 0 && callArgs[0] == "__daemon_warm" {
+				flags := flag.NewFlagSet("daemon warm internal", flag.ContinueOnError)
+				flags.SetOutput(errors)
+				root := flags.String("root", "", "project root")
+				if err := flags.Parse(callArgs[1:]); err != nil || *root == "" {
+					return fmt.Errorf("daemon warm requires an absolute project root")
+				}
+				svc, err := service.Open(*root)
+				if err != nil {
+					return err
+				}
+				state, err := svc.State()
+				if err != nil {
+					return err
+				}
+				return writeJSON(output, map[string]any{"warmed": true, "projectId": state.ProjectID, "headSequence": state.HeadSequence, "headHash": state.HeadHash, "graphRevision": state.GraphRevision})
+			}
+			return runDirectContext(callCtx, callArgs, input, output, errors)
+		}, endpoint)
+		uiManager := &managedUI{}
+		server.SetUIManager(uiManager.Start, uiManager.Status, uiManager.Stop)
+		return server.Serve(ctx)
+	case "start":
+		status, err := client.Ensure(ctx)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, status)
+	case "status":
+		statusCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer cancel()
+		status, err := client.Status(statusCtx)
+		if err != nil {
+			return writeJSON(stdout, map[string]any{"apiVersion": controller.APIVersion, "kind": "ControllerStatus", "running": false})
+		}
+		return writeJSON(stdout, status)
+	case "stop":
+		statusCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		_, statusErr := client.Status(statusCtx)
+		cancel()
+		if statusErr != nil {
+			return writeJSON(stdout, map[string]any{"stopped": true, "alreadyStopped": true})
+		}
+		if err := client.Stop(ctx); err != nil {
+			return err
+		}
+		return writeJSON(stdout, map[string]any{"stopped": true, "draining": true})
+	case "restart":
+		statusCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		_, statusErr := client.Status(statusCtx)
+		cancel()
+		if statusErr == nil {
+			if err := client.Stop(ctx); err != nil {
+				return err
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		status, err := client.Ensure(ctx)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, status)
+	case "warm":
+		flags := flag.NewFlagSet("daemon warm", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		root := flags.String("root", ".", "project root")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		absoluteRoot, err := filepath.Abs(*root)
+		if err != nil {
+			return err
+		}
+		out, remoteErr, err := client.Execute(ctx, []string{"__daemon_warm", "--root", absoluteRoot}, nil)
+		if len(remoteErr) > 0 {
+			_, _ = stderr.Write(remoteErr)
+		}
+		if err != nil {
+			return err
+		}
+		_, err = stdout.Write(out)
+		return err
+	case "logs":
+		logs, err := client.Logs()
+		if err != nil {
+			return err
+		}
+		_, err = stdout.Write(logs)
+		return err
+	default:
+		return usagef("unknown daemon command %q", args[0])
 	}
 }
 
@@ -351,22 +571,104 @@ func runSignature(args []string, stdout, stderr io.Writer) error {
 }
 
 func runUI(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	operation := "start"
+	if len(args) > 0 && (args[0] == "status" || args[0] == "stop") {
+		operation, args = args[0], args[1:]
+	}
 	flags := flag.NewFlagSet("ui", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
-	listen := flags.String("listen", "127.0.0.1:7474", "loopback listen address")
+	listen := flags.String("listen", "127.0.0.1:0", "loopback listen address")
 	open := flags.Bool("open", true, "open the system browser")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	// Explorer is a read-only observer; merely starting it cannot advance the
-	// journal or repair derived state.
-	s, err := service.OpenForInspection(*root)
+	client, err := controller.NewClient()
 	if err != nil {
 		return err
 	}
-	_ = stdout
-	return dagrailui.Serve(ctx, s, *listen, *open, stderr)
+	switch operation {
+	case "status":
+		status, err := client.UIStatus(ctx)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, status)
+	case "stop":
+		status, err := client.StopUI(ctx)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, status)
+	default:
+		status, err := client.StartUI(ctx, controller.UIRequest{Root: *root, Listen: *listen, Open: *open})
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, status)
+	}
+}
+
+type managedUI struct {
+	mu        sync.Mutex
+	instance  *dagrailui.Instance
+	root      string
+	startedAt string
+}
+
+func (manager *managedUI) Start(_ context.Context, request controller.UIRequest) (controller.UIStatus, error) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	svc, err := service.OpenForInspection(request.Root)
+	if err != nil {
+		return controller.UIStatus{}, err
+	}
+	if manager.instance != nil {
+		if manager.root == svc.Project.Root {
+			return manager.statusLocked(), nil
+		}
+		stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if err := manager.instance.Stop(stopCtx); err != nil {
+			cancel()
+			return controller.UIStatus{}, err
+		}
+		cancel()
+		manager.instance = nil
+	}
+	instance, err := dagrailui.Start(svc, request.Listen, request.Open)
+	if err != nil {
+		return controller.UIStatus{}, err
+	}
+	manager.instance, manager.root = instance, svc.Project.Root
+	manager.startedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	return manager.statusLocked(), nil
+}
+
+func (manager *managedUI) Status() controller.UIStatus {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	return manager.statusLocked()
+}
+
+func (manager *managedUI) statusLocked() controller.UIStatus {
+	status := controller.UIStatus{APIVersion: controller.APIVersion, Kind: "UIStatus", Running: manager.instance != nil}
+	if manager.instance != nil {
+		status.Root, status.URL, status.StartedAt = manager.root, manager.instance.URL(), manager.startedAt
+	}
+	return status
+}
+
+func (manager *managedUI) Stop(ctx context.Context) error {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.instance == nil {
+		return nil
+	}
+	if err := manager.instance.Stop(ctx); err != nil {
+		return err
+	}
+	manager.instance, manager.root, manager.startedAt = nil, "", ""
+	return nil
 }
 
 func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -664,7 +966,7 @@ func runEvidence(ctx context.Context, args []string, stdout, stderr io.Writer) e
 
 func runPlugin(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: dagrail plugin <install|status|conformance|materialize|bundle-status|runtime-status|rollback|uninstall>")
+		return fmt.Errorf("usage: dagrail plugin <install|update|status|conformance|materialize|bundle-status|runtime-status|rollback|uninstall>")
 	}
 	flags := flag.NewFlagSet("plugin "+args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -672,6 +974,8 @@ func runPlugin(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	source := flags.String("marketplace-source", "", "local path or Git marketplace source (default: linked offline bundle)")
 	runtimePath := flags.String("runtime", "", "absolute DAGrail runtime path")
 	dryRun := flags.Bool("dry-run", false, "show or validate without changing host configuration")
+	updateCheck := flags.Bool("check", false, "check whether the installed runtime and bundle match this release")
+	updateVersion := flags.String("version", "", "exact release version to install (this binary's version)")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -688,6 +992,51 @@ func runPlugin(ctx context.Context, args []string, stdout, stderr io.Writer) err
 			return err
 		}
 		return writeJSON(stdout, result)
+	}
+	if args[0] == "update" {
+		if *updateCheck {
+			runtimeStatus, runtimeErr := install.RuntimeStatus()
+			bundleStatus, bundleErr := install.PluginBundleStatus()
+			ready := runtimeErr == nil && bundleErr == nil && runtimeStatus.Version == version.Version && bundleStatus.Version == version.Version && bundleStatus.Status == "verified"
+			return writeJSON(stdout, map[string]any{"apiVersion": "dagrail.io/plugin-update/v1alpha1", "currentVersion": version.Version, "installedVersion": runtimeStatus.Version, "updateRequired": !ready, "runtimeReady": runtimeErr == nil, "bundleReady": bundleErr == nil && bundleStatus.Status == "verified"})
+		}
+		requested := strings.TrimPrefix(*updateVersion, "v")
+		if requested == "" {
+			requested = version.Version
+		}
+		if requested != version.Version {
+			return fmt.Errorf("this runtime can install only its linked version %s; run the requested release binary first", version.Version)
+		}
+		var runtimeResult install.RuntimeResult
+		var bundle install.BundleResult
+		var err error
+		if *dryRun {
+			runtimeResult, err = install.PlanRuntime()
+			if err == nil {
+				bundle, err = install.PlanPluginBundle(runtimeResult.RuntimePath)
+			}
+		} else {
+			runtimeResult, err = install.InstallRuntime()
+			if err == nil {
+				bundle, err = install.MaterializePluginBundle()
+			}
+		}
+		if err != nil {
+			return err
+		}
+		options := install.Options{Harnesses: []string{*harnesses}, RuntimePath: runtimeResult.RuntimePath, MarketplaceSource: bundle.Root, DryRun: *dryRun}
+		if *dryRun {
+			plans, planErr := install.Plan(options)
+			if writeErr := writeJSON(stdout, map[string]any{"runtime": runtimeResult, "bundle": bundle, "harnesses": plans}); writeErr != nil {
+				return writeErr
+			}
+			return planErr
+		}
+		results, installErr := install.Install(ctx, options)
+		if writeErr := writeJSON(stdout, map[string]any{"runtime": runtimeResult, "bundle": bundle, "harnesses": results}); writeErr != nil {
+			return writeErr
+		}
+		return installErr
 	}
 	if *runtimePath == "" {
 		if args[0] == "install" && !*dryRun {
@@ -811,10 +1160,33 @@ func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	return writeJSON(stdout, output)
 }
 
-func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
+func runMCP(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) > 0 && args[0] == "probe" {
+		flags := flag.NewFlagSet("mcp probe", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		root := flags.String("root", "", "optional project root for future round-trip diagnostics")
+		runtimePath := flags.String("runtime", "", "absolute DAGrail runtime; defaults to this executable")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *runtimePath == "" {
+			resolved, err := os.Executable()
+			if err != nil {
+				return err
+			}
+			*runtimePath = resolved
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		report, err := mcpserver.Probe(probeCtx, *runtimePath, *root)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, report)
+	}
 	flags := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	root := flags.String("root", ".", "project root")
+	root := flags.String("root", ".", "default project root; tools may override it")
 	stdio := flags.Bool("stdio", false, "serve MCP over stdio")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -822,11 +1194,11 @@ func runMCP(ctx context.Context, args []string, stderr io.Writer) error {
 	if !*stdio {
 		return fmt.Errorf("this release supports only --stdio")
 	}
-	s, err := service.Open(*root)
+	client, err := controller.NewClient()
 	if err != nil {
 		return err
 	}
-	return mcpserver.Run(ctx, s)
+	return mcpserver.RunRemote(ctx, client, *root)
 }
 
 func runReconcile(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -871,17 +1243,21 @@ func runInspect(ctx context.Context, args []string, stdout, stderr io.Writer) er
 	flags := flag.NewFlagSet("inspect", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
+	ref := flags.String("ref", "", "opaque object reference")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if flags.NArg() != 1 {
-		return fmt.Errorf("usage: dagrail inspect [--root path] kind:id")
+	if flags.NArg() > 1 || (*ref != "" && flags.NArg() != 0) || (*ref == "" && flags.NArg() != 1) {
+		return fmt.Errorf("usage: dagrail inspect [--root path] [--ref opaque-ref | kind:id]")
+	}
+	if *ref == "" {
+		*ref = flags.Arg(0)
 	}
 	s, err := service.OpenForInspection(*root)
 	if err != nil {
 		return err
 	}
-	value, err := s.InspectContext(ctx, flags.Arg(0))
+	value, err := s.InspectContext(ctx, *ref)
 	if err != nil {
 		return err
 	}
@@ -908,7 +1284,7 @@ func runPreWait(ctx context.Context, args []string, stdout, stderr io.Writer) er
 
 func runRole(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: dagrail role <bind|takeover|release>")
+		return fmt.Errorf("usage: dagrail role <bind|takeover|release|status>")
 	}
 	flags := flag.NewFlagSet("role "+args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -922,7 +1298,11 @@ func runRole(args []string, stdout, stderr io.Writer) error {
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	s, err := service.Open(*root)
+	open := service.Open
+	if args[0] == "status" {
+		open = service.OpenForInspection
+	}
+	s, err := open(*root)
 	if err != nil {
 		return err
 	}
@@ -936,6 +1316,12 @@ func runRole(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 	switch args[0] {
+	case "status":
+		value, err := s.RoleStatusContext(context.Background(), *role)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, value)
 	case "bind", "takeover":
 		lease, err := s.BindRole(*role, *harness, *session, *ttl, args[0] == "takeover", *key)
 		if err != nil {
@@ -985,6 +1371,7 @@ func runAction(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	node := flags.String("node", "", "node ID")
 	nodeRef := flags.String("node-ref", "", "opaque Node ref")
 	ref := flags.String("ref", "", "allowed action ref")
+	kind := flags.String("kind", "", "select one current action by kind")
 	input := flags.String("input", "{}", "JSON action input")
 	key := flags.String("idempotency-key", "", "idempotency key")
 	if err := flags.Parse(args[1:]); err != nil {
@@ -1027,7 +1414,15 @@ func runAction(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		if !validBoundedJSON(*input, 64*1024) {
 			return fmt.Errorf("--input must be valid JSON no larger than 64 KiB")
 		}
-		value, err := s.ApplyActionContext(ctx, *ref, json.RawMessage(*input), *key)
+		if (*ref == "") == (*kind == "") {
+			return fmt.Errorf("provide exactly one of --ref or --kind")
+		}
+		var value service.ActionResult
+		if *kind != "" {
+			value, err = s.ApplySelectedActionContext(ctx, *kind, *role, *node, json.RawMessage(*input), *key)
+		} else {
+			value, err = s.ApplyActionContext(ctx, *ref, json.RawMessage(*input), *key)
+		}
 		if err != nil {
 			return err
 		}
@@ -1270,7 +1665,7 @@ func runFrontier(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	return err
 }
 
-func runJournal(args []string, stdout, stderr io.Writer) error {
+func runJournal(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: dagrail journal <verify|compatibility|export|replay>")
 	}
@@ -1278,10 +1673,14 @@ func runJournal(args []string, stdout, stderr io.Writer) error {
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
 	output := flags.String("output", "", "export path; stdout when empty")
+	showProgress := flags.Bool("progress", false, "emit bounded verification progress to stderr")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
 	open := service.OpenForInspection
+	if args[0] == "verify" {
+		open = service.OpenForAuthorityVerification
+	}
 	if args[0] == "replay" {
 		open = service.Open
 	}
@@ -1291,7 +1690,22 @@ func runJournal(args []string, stdout, stderr io.Writer) error {
 	}
 	switch args[0] {
 	case "verify":
-		report, err := s.VerifyJournalReport()
+		lastProgress := -1
+		progress := func(completed, total int) {
+			if !*showProgress {
+				return
+			}
+			step := total / 100
+			if step < 1 {
+				step = 1
+			}
+			if completed != 0 && completed != total && completed-lastProgress < step {
+				return
+			}
+			lastProgress = completed
+			_, _ = fmt.Fprintf(stderr, "{\"operation\":\"journal.verify\",\"completed\":%d,\"total\":%d}\n", completed, total)
+		}
+		report, err := s.VerifyJournalReportContext(ctx, progress)
 		if err != nil {
 			return err
 		}

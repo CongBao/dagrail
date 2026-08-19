@@ -62,6 +62,29 @@ func InstallRuntime() (RuntimeResult, error) {
 	return result, err
 }
 
+// PlanRuntime describes the linked runtime publication without creating the
+// destination, backup, or install receipt. It is the only runtime surface used
+// by plugin dry-runs.
+func PlanRuntime() (RuntimeResult, error) {
+	source, err := os.Executable()
+	if err != nil {
+		return RuntimeResult{}, err
+	}
+	source, err = filepath.EvalSymlinks(source)
+	if err != nil {
+		return RuntimeResult{}, err
+	}
+	destination, err := DefaultRuntimePath()
+	if err != nil {
+		return RuntimeResult{}, err
+	}
+	digest, err := fileSHA256(source)
+	if err != nil {
+		return RuntimeResult{}, err
+	}
+	return RuntimeResult{Status: "planned", Version: version.Version, RuntimePath: destination, SHA256: digest}, nil
+}
+
 func RollbackRuntime() (RuntimeResult, error) {
 	dataRoot, err := runtimeDataRoot()
 	if err != nil {

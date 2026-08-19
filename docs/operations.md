@@ -1,8 +1,25 @@
 # Local operations
 
 DAGrail keeps its immutable journal in the per-user project data directory. SQLite is a
-rebuildable projection. The commands below operate on a project discovered from
-`--root`; they do not require a daemon.
+rebuildable projection. Normal project commands are thin clients of one on-demand,
+owner-local daemon; `--root` still selects the Project and the journal remains authority.
+
+```sh
+dagrail daemon status
+dagrail daemon warm --root .
+dagrail daemon logs
+dagrail daemon restart
+```
+
+The first project command starts the daemon. It does not start at login, stop on idle,
+or choose work. `stop` and `restart` drain accepted requests and already-authorized
+Effect dispatches. Use `--offline` only after the daemon is stopped for explicit
+recovery; it continues to obtain the Project file lock. Offline mode is rejected for
+ordinary lifecycle actions. Its closed escape hatch is recovery, backup verify/restore,
+journal verify/replay, projection rebuild, doctor, and security audit.
+The status carries only a digest of the selected authority-data namespace. Changing
+`DAGRAIL_HOME` causes the next normal command to drain and restart the daemon before it
+opens a Project, so one locator is never silently resolved through the previous home.
 
 ## Observe
 
@@ -37,10 +54,10 @@ returned by context, pre-wait, operations, or inspect: `--role-ref`, `--node-ref
 the recovered large identifier back through a bounded control surface.
 
 `history` returns payload-free command metadata in pages
-of at most 100 entries. `ui` starts a foreground, loopback-only, strictly read-only web
-Explorer and opens the default browser; use `--open=false` when automatic launch is not
-wanted. See [`ui.md`](ui.md) for bounded APIs, deep links, filtering, and large-graph
-behavior.
+of at most 100 entries. `ui` asks the daemon to start one loopback-only, strictly
+read-only Explorer and then exits; use `ui status|stop` to manage it and `--open=false`
+when automatic launch is not wanted. See [`ui.md`](ui.md) for bounded APIs, deep links,
+hierarchical navigation, and large-graph behavior.
 
 If `action apply` returns no definitive result because of a crash, timeout, or lost
 response, preserve the original action ref, RFC 8785 canonical JSON input value, and
@@ -54,6 +71,7 @@ intent.
 ```sh
 dagrail security audit --root .
 dagrail journal verify --root .
+dagrail journal verify --root . --progress
 ```
 
 The security audit reports typed pass/warn/fail checks without absolute project paths
@@ -61,6 +79,10 @@ or authority payloads. On POSIX it verifies that runtime authority is owner-only
 that the repository locator is not group/other writable. On Windows it verifies file
 structure and explicitly delegates ACL inspection to host tooling. `journal verify`
 returns the verified head, compatibility window, canonical export size, and digest.
+Full verification bypasses hot snapshot shortcuts, honors process cancellation between
+segment files, and `--progress` emits bounded completed/total records to stderr. In
+offline recovery those records stream directly; through the local RPC they are returned
+with the command response and `daemon status` remains available from another terminal.
 Neither command establishes actor identity or malicious same-user isolation.
 
 ## Manage incidents
@@ -150,11 +172,14 @@ refuses private keys readable by group or other users.
 ## Verify or roll back the shared runtime
 
 ```sh
+dagrail plugin update --dry-run
 dagrail plugin runtime-status
 dagrail plugin rollback
 dagrail plugin runtime-status
 ```
 
+The update dry-run derives the exact linked runtime, receipt-bound plugin bundle, and
+harness plan without creating any runtime, receipt, bundle, or host registration.
 An upgrade preserves one immutable binary under a SHA-256-addressed data path and
 validates every candidate in a fresh process. Rollback is reversible: the displaced
 runtime becomes the next rollback candidate. This switches the stable DAGrail

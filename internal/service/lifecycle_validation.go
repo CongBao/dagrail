@@ -63,6 +63,8 @@ type lifecycleRecordContext struct {
 	incidentEvents         map[string]lifecycleIncidentEvent
 	incidentResolutions    map[string]string
 	effectAdmissions       map[string]bool
+	roleBindings           map[string]domain.RoleLease
+	roleBefore             map[string]domain.RoleLease
 }
 
 type lifecycleIncidentEvent struct {
@@ -80,6 +82,7 @@ func newLifecycleRecordContext(effectAdmissions map[string]bool) *lifecycleRecor
 		effects: map[string]domain.EffectAction{}, effectObservations: map[string]lifecycleEffectObservation{}, effectIncidentBefore: map[string]*domain.Incident{},
 		finishes: map[string]lifecycleAttemptFinish{}, incidentEvents: map[string]lifecycleIncidentEvent{},
 		incidentResolutions: map[string]string{}, effectAdmissions: effectAdmissions,
+		roleBindings: map[string]domain.RoleLease{}, roleBefore: map[string]domain.RoleLease{},
 	}
 }
 
@@ -139,6 +142,7 @@ func applyValidatedLifecycleEvent(state *domain.State, event LifecycleMigrationE
 			return fmt.Errorf("role binding timestamps are invalid")
 		}
 		if current, ok := state.Leases[lease.RoleID]; ok && current.Active {
+			context.roleBefore[lease.RoleID] = current
 			currentExpiry, err := time.Parse(time.RFC3339Nano, current.ExpiresAt)
 			currentBound, boundErr := time.Parse(time.RFC3339Nano, current.BoundAt)
 			if err != nil || boundErr != nil || bound.Before(currentBound) || (currentExpiry.After(bound) && current.SessionID != lease.SessionID) {
@@ -146,6 +150,7 @@ func applyValidatedLifecycleEvent(state *domain.State, event LifecycleMigrationE
 			}
 		}
 		state.Leases[lease.RoleID] = lease
+		context.roleBindings[lease.RoleID] = lease
 	case "role.released":
 		var value struct {
 			RoleID     string `json:"roleId"`
@@ -636,12 +641,19 @@ func canonicalAuthorityJSONEqual(first, second json.RawMessage) bool {
 }
 
 func validateLifecycleAction(action domain.ActionRecord, state domain.State, context *lifecycleRecordContext) error {
-	if action.ID == "" || action.NodeID == "" || action.AttemptID == "" || len(action.Input) == 0 || domain.ValidateAuthorityJSON(action.Input) != nil {
+	if action.ID == "" || action.NodeID == "" || len(action.Input) == 0 || domain.ValidateAuthorityJSON(action.Input) != nil {
 		return fmt.Errorf("action record is incomplete")
 	}
-	attempt, ok := state.Attempts[action.AttemptID]
 	node, nodeOK := state.NodeDefinition(action.NodeID)
-	if !ok || !nodeOK || attempt.NodeID != action.NodeID {
+	if !nodeOK {
+		return fmt.Errorf("action target is inconsistent")
+	}
+	attempt, hasAttempt := state.Attempts[action.AttemptID]
+	if action.Kind == "role.renew" {
+		if action.AttemptID != "" && (!hasAttempt || attempt.NodeID != action.NodeID || attempt.RoleID != node.Role) {
+			return fmt.Errorf("role renewal attempt binding is inconsistent")
+		}
+	} else if action.AttemptID == "" || !hasAttempt || attempt.NodeID != action.NodeID {
 		return fmt.Errorf("action target is inconsistent")
 	}
 	if err := validateAllowedActionInput(persistedActionInputSchema(action.Kind, node), action.Input); err != nil {
@@ -656,6 +668,27 @@ func validateLifecycleAction(action domain.ActionRecord, state domain.State, con
 		return fmt.Errorf("confirmed action status is invalid")
 	}
 	switch action.Kind {
+	case "role.renew":
+		var input struct {
+			TTLSeconds int `json:"ttlSeconds"`
+		}
+		if decodeStrictAuthorityJSON(action.Input, &input) != nil {
+			return fmt.Errorf("role renewal input is invalid")
+		}
+		if input.TTLSeconds == 0 {
+			input.TTLSeconds = 15 * 60
+		}
+		before, hadBefore := context.roleBefore[node.Role]
+		renewed, renewedHere := context.roleBindings[node.Role]
+		boundAt, boundErr := time.Parse(time.RFC3339Nano, renewed.BoundAt)
+		expiresAt, expiresErr := time.Parse(time.RFC3339Nano, renewed.ExpiresAt)
+		if !hadBefore || !renewedHere || boundErr != nil || expiresErr != nil ||
+			before.RoleID != renewed.RoleID || before.SessionID != renewed.SessionID ||
+			before.Harness != renewed.Harness || expiresAt.Sub(boundAt) != time.Duration(input.TTLSeconds)*time.Second {
+			return fmt.Errorf("role renewal action has no matching binding")
+		}
+		delete(context.roleBefore, node.Role)
+		delete(context.roleBindings, node.Role)
 	case "node.start":
 		introduced, introducedHere := context.attempts[action.AttemptID]
 		status, startedHere := context.statuses[action.AttemptID]
@@ -897,6 +930,8 @@ func validateLifecycleActionEventShape(state domain.State, context *lifecycleRec
 	expected := map[string]int{"action.applied": 1}
 	actual := lifecycleEventCounts(context.eventTypes)
 	switch action.Kind {
+	case "role.renew":
+		expected["role.bound"] = 1
 	case "node.start":
 		expected["attempt.leased"] = 1
 		expected["attempt.status-changed"] = 1
@@ -1135,7 +1170,7 @@ func nodeRequiresDecision(node domain.NodeDefinition) bool {
 
 func lifecycleConfirmedActionKinds() map[string]bool {
 	return map[string]bool{
-		"node.start": true, "attempt.checkpoint": true, "evidence.publish": true,
+		"role.renew": true, "node.start": true, "attempt.checkpoint": true, "evidence.publish": true,
 		"evidence.assess-reuse": true, "attempt.wait": true, "attempt.resume": true,
 		"attempt.submit": true, "task.complete": true, "review.resolve": true,
 		"decision.record": true, "effect.complete": true, "attempt.finish": true,
@@ -1144,9 +1179,16 @@ func lifecycleConfirmedActionKinds() map[string]bool {
 }
 
 func validateLifecycleActionFinal(action domain.ActionRecord, state domain.State) error {
-	attempt, ok := state.Attempts[action.AttemptID]
 	node, nodeOK := state.NodeDefinition(action.NodeID)
-	if action.ID == "" || action.NodeID == "" || action.AttemptID == "" || !ok || !nodeOK || attempt.NodeID != action.NodeID {
+	if action.ID == "" || action.NodeID == "" || !nodeOK {
+		return fmt.Errorf("action target is inconsistent")
+	}
+	attempt, hasAttempt := state.Attempts[action.AttemptID]
+	if action.Kind == "role.renew" {
+		if action.AttemptID != "" && (!hasAttempt || attempt.NodeID != action.NodeID || attempt.RoleID != node.Role) {
+			return fmt.Errorf("role renewal attempt binding is inconsistent")
+		}
+	} else if action.AttemptID == "" || !hasAttempt || attempt.NodeID != action.NodeID {
 		return fmt.Errorf("action target is inconsistent")
 	}
 	completionKinds := map[string]bool{"task.complete": true, "review.resolve": true, "decision.record": true, "effect.complete": true, "attempt.finish": true, "gate.evaluate": true}

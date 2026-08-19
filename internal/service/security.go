@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/CongBao/dagrail/internal/journal"
+	"github.com/CongBao/dagrail/internal/projection"
 )
 
 const SecurityAPIVersion = "dagrail.io/security/v1alpha1"
@@ -52,15 +54,27 @@ type JournalVerificationReport struct {
 }
 
 func (s *Service) VerifyJournalReport() (JournalVerificationReport, error) {
-	segments, err := s.VerifyJournal()
+	return s.VerifyJournalReportContext(context.Background(), nil)
+}
+
+func (s *Service) VerifyJournalReportContext(ctx context.Context, progress func(completed, total int)) (JournalVerificationReport, error) {
+	segments, err := s.Journal.ReadAllContext(ctx, progress)
 	if err != nil {
 		return JournalVerificationReport{}, err
 	}
-	compatibility, err := s.Compatibility()
+	if err := validateCurrentAuthority(s.Project, segments); err != nil {
+		return JournalVerificationReport{}, err
+	}
+	journalCompatibility, err := journal.CompatibilityForSegments(segments)
 	if err != nil {
 		return JournalVerificationReport{}, err
 	}
-	exported, err := s.ExportJournal()
+	projectionVersion, err := s.Projection.SchemaVersion()
+	if err != nil {
+		return JournalVerificationReport{}, err
+	}
+	compatibility := CompatibilityStatus{Journal: journalCompatibility, ProjectionSchemaVersion: projectionVersion, CurrentProjectionSchemaVersion: projection.CurrentSchemaVersion}
+	exported, err := exportJournalSegments(ctx, segments)
 	if err != nil {
 		return JournalVerificationReport{}, err
 	}
@@ -134,6 +148,7 @@ func (s *Service) SecurityAudit() SecurityAuditReport {
 	checkPath("journal-directory", filepath.Join(s.Project.DataDir, "journal"), "directory", 0o077, true)
 	checkPath("projection-database", filepath.Join(s.Project.DataDir, "projection.sqlite"), "file", 0o077, true)
 	checkPath("action-secret", filepath.Join(s.Project.DataDir, "action-secret"), "file", 0o077, false)
+	checkPath("snapshot-checkpoint", filepath.Join(s.Project.DataDir, "verified-snapshot-checkpoint.json"), "file", 0o077, false)
 	checkPath("observation-locator", filepath.Join(s.Project.DataDir, "observation-locator.json"), "file", 0o077, false)
 
 	if _, err := s.VerifyJournalReport(); err != nil {
@@ -145,6 +160,16 @@ func (s *Service) SecurityAudit() SecurityAuditReport {
 		add("projection-integrity", "fail", "SQLite integrity verification failed; the projection is disposable and should be rebuilt only after the journal verifies")
 	} else {
 		add("projection-integrity", "pass", "SQLite integrity_check returned ok")
+	}
+	if checkpoint, err := s.Projection.VerifyCheckpoint(); err != nil {
+		// The checkpoint is disposable acceleration metadata, never authority.
+		// A stale projection or a damaged checkpoint must disable the fast path,
+		// but cannot make an otherwise verified journal authority insecure.
+		add("snapshot-checkpoint-integrity", "warn", "sealed snapshot checkpoint is unusable; the controller will ignore it until an explicit warm or normal write replaces it")
+	} else if checkpoint.Present {
+		add("snapshot-checkpoint-integrity", "pass", "owner-private HMAC and derived state/head identities verified; checkpoint remains disposable cache metadata")
+	} else {
+		add("snapshot-checkpoint-integrity", "warn", "no sealed snapshot checkpoint; run 'dagrail daemon warm --root <project>' or perform a normal write")
 	}
 
 	entries, err := os.ReadDir(filepath.Join(s.Project.DataDir, "journal"))

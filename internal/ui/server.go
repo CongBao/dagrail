@@ -72,6 +72,9 @@ func Handler(svc *service.Service) http.Handler {
 	mux.HandleFunc("/assets/app.js", func(w http.ResponseWriter, r *http.Request) {
 		serveAsset(w, r, assets, "app.js", "text/javascript; charset=utf-8")
 	})
+	mux.HandleFunc("/assets/layout-worker.js", func(w http.ResponseWriter, r *http.Request) {
+		serveAsset(w, r, assets, "layout-worker.js", "text/javascript; charset=utf-8")
+	})
 	mux.HandleFunc("/api/v1/snapshot", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
 		if err := requireQuery(r, nil); err != nil {
 			return err
@@ -103,39 +106,64 @@ func Handler(svc *service.Service) http.Handler {
 }
 
 func Serve(ctx context.Context, svc *service.Service, address string, open bool, announcements io.Writer) error {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return fmt.Errorf("invalid listen address: %w", err)
-	}
-	ip := net.ParseIP(host)
-	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-		return fmt.Errorf("read-only UI may bind only to loopback")
-	}
-	listener, err := net.Listen("tcp", address)
+	instance, err := Start(svc, address, open)
 	if err != nil {
 		return err
 	}
+	if announcements != nil {
+		_, _ = fmt.Fprintf(announcements, "DAGrail read-only UI: %s\n", instance.URL())
+	}
+	<-ctx.Done()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return instance.Stop(shutdownCtx)
+}
+
+type Instance struct {
+	server   *http.Server
+	listener net.Listener
+	url      string
+	done     chan error
+}
+
+func (instance *Instance) URL() string { return instance.url }
+
+func (instance *Instance) Stop(ctx context.Context) error {
+	err := instance.server.Shutdown(ctx)
+	serveErr := <-instance.done
+	if err != nil {
+		return err
+	}
+	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		return serveErr
+	}
+	return nil
+}
+
+// Start binds the loopback explorer and returns as soon as the URL is usable.
+// The caller owns the lifetime; the daemon uses this to keep one UI instance
+// alive after the thin CLI client exits.
+func Start(svc *service.Service, address string, open bool) (*Instance, error) {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("invalid listen address: %w", err)
+	}
+	ip := net.ParseIP(host)
+	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return nil, fmt.Errorf("read-only UI may bind only to loopback")
+	}
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return nil, err
+	}
 	server := &http.Server{Handler: Handler(svc), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second}
 	url := "http://" + listener.Addr().String() + "/"
-	if announcements != nil {
-		_, _ = fmt.Fprintf(announcements, "DAGrail read-only UI: %s\n", url)
-	}
 	if open {
-		if err := openBrowser(url); err != nil && announcements != nil {
-			_, _ = fmt.Fprintf(announcements, "Browser was not opened automatically: %v\n", err)
-		}
+		_ = openBrowser(url)
 	}
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
-	}()
-	err = server.Serve(listener)
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
-	}
-	return err
+	instance := &Instance{server: server, listener: listener, url: url, done: make(chan error, 1)}
+	go func() { instance.done <- server.Serve(listener) }()
+	return instance, nil
 }
 
 func buildSnapshot(ctx context.Context, svc *service.Service, cache *explorerCache) (Snapshot, error) {

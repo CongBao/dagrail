@@ -75,7 +75,12 @@ func (s *Service) applyEffectAction(ctx context.Context, state domain.State, pay
 	if err != nil {
 		return ActionResult{}, err
 	}
-	defer releaseObservation()
+	releaseOnReturn := true
+	defer func() {
+		if releaseOnReturn {
+			releaseObservation()
+		}
+	}()
 	state, _, err = s.load()
 	if err != nil {
 		return ActionResult{}, err
@@ -128,7 +133,8 @@ func (s *Service) applyEffectAction(ctx context.Context, state domain.State, pay
 	dispatchedAt := dispatchTime.Format(time.RFC3339Nano)
 	dispatchedRaw, _ := json.Marshal(map[string]string{"actionId": payload.ActionID, "dispatchedAt": dispatchedAt})
 	expectedDispatchHead := state.HeadHash
-	if _, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "effect.dispatch", ActorRole: payload.RoleID, IdempotencyKey: idempotencyKey + "/dispatch", ObjectRef: "effect:" + payload.ActionID, RequestDigest: requestDigest}, []journal.Event{{Type: "effect.dispatched", Payload: dispatchedRaw}}, dispatchTime, &expectedDispatchHead); err != nil {
+	dispatchSegment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "effect.dispatch", ActorRole: payload.RoleID, IdempotencyKey: idempotencyKey + "/dispatch", ObjectRef: "effect:" + payload.ActionID, RequestDigest: requestDigest}, []journal.Event{{Type: "effect.dispatched", Payload: dispatchedRaw}}, dispatchTime, &expectedDispatchHead)
+	if err != nil {
 		return ActionResult{}, err
 	}
 	state, segments, err = s.load()
@@ -138,18 +144,38 @@ func (s *Service) applyEffectAction(ctx context.Context, state domain.State, pay
 	if err := s.Projection.Sync(state, segments); err != nil {
 		return ActionResult{}, err
 	}
-	receipt, dispatchErr := adapter.Dispatch(ctx, request, prepared)
-	if dispatchErr != nil {
-		receipt = sdk.EffectReceipt{Status: "unknown", Detail: mustJSON(map[string]string{"error": boundedError(dispatchErr)})}
+	dispatch := func(dispatchContext context.Context) (ActionResult, error) {
+		receipt, dispatchErr := adapter.Dispatch(dispatchContext, request, prepared)
+		if dispatchErr != nil {
+			receipt = sdk.EffectReceipt{Status: "unknown", Detail: mustJSON(map[string]string{"error": boundedError(dispatchErr)})}
+		}
+		if receipt.Status == "" {
+			receipt.Status = "unknown"
+		}
+		observed, observeErr := s.observeEffect(payload.ActionID, payload.RoleID, receipt, idempotencyKey+"/observe", requestDigest)
+		if observeErr != nil {
+			return ActionResult{ActionID: payload.ActionID, Kind: payload.Kind, NodeID: node.ID, AttemptID: attempt.ID, Status: "unknown", Sequence: segment.Sequence}, fmt.Errorf("effect may have occurred; reconcile action %s: %w", payload.ActionID, observeErr)
+		}
+		return ActionResult{ActionID: payload.ActionID, Kind: payload.Kind, NodeID: node.ID, AttemptID: attempt.ID, Status: observed.Status, Sequence: observed.Sequence}, nil
 	}
-	if receipt.Status == "" {
-		receipt.Status = "unknown"
+	if outbox := daemonOutboxFromContext(ctx); outbox != nil {
+		// Transfer the already-held cross-process Effect lock to the daemon job
+		// before responding. A concurrent reconcile therefore cannot overtake
+		// the authorized dispatch, while a daemon crash still releases the OS
+		// lock and leaves the durable dispatched prefix to explicit reconcile.
+		releaseOnReturn = false
+		outbox.start(func() {
+			defer releaseObservation()
+			result, dispatchErr := dispatch(context.Background())
+			status := result.Status
+			if dispatchErr != nil {
+				status = "unknown"
+			}
+			_, _ = fmt.Fprintf(os.Stderr, "{\"operation\":\"effect.dispatch\",\"actionId\":%q,\"status\":%q}\n", payload.ActionID, status)
+		})
+		return ActionResult{ActionID: payload.ActionID, Kind: payload.Kind, NodeID: node.ID, AttemptID: attempt.ID, Status: "dispatched", Sequence: dispatchSegment.Sequence}, nil
 	}
-	observed, observeErr := s.observeEffect(payload.ActionID, payload.RoleID, receipt, idempotencyKey+"/observe", requestDigest)
-	if observeErr != nil {
-		return ActionResult{ActionID: payload.ActionID, Kind: payload.Kind, NodeID: node.ID, AttemptID: attempt.ID, Status: "unknown", Sequence: segment.Sequence}, fmt.Errorf("effect may have occurred; reconcile action %s: %w", payload.ActionID, observeErr)
-	}
-	return ActionResult{ActionID: payload.ActionID, Kind: payload.Kind, NodeID: node.ID, AttemptID: attempt.ID, Status: observed.Status, Sequence: observed.Sequence}, nil
+	return dispatch(ctx)
 }
 
 func (s *Service) ReconcileEffect(actionID string, evidence json.RawMessage, idempotencyKey string) (domain.EffectAction, error) {

@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/CongBao/dagrail/internal/mcpserver"
 )
 
 const (
@@ -47,7 +49,10 @@ type Result struct {
 	Harness                string `json:"harness"`
 	Status                 string `json:"status"`
 	Executable             string `json:"executable,omitempty"`
+	PluginInstalled        bool   `json:"pluginInstalled"`
 	MCPConfigured          bool   `json:"mcpConfigured"`
+	ServerHandshakeReady   bool   `json:"serverHandshakeReady"`
+	ProjectRoundTripReady  bool   `json:"projectRoundTripReady"`
 	FreshSessionRequired   bool   `json:"freshSessionRequired"`
 	CurrentProcessVerified bool   `json:"currentProcessVerified"`
 	Activation             string `json:"activation"`
@@ -55,6 +60,8 @@ type Result struct {
 }
 
 const freshSessionActivation = "fresh-session-or-cli-fallback"
+
+var probeMCP = mcpserver.Probe
 
 type RuntimeResult struct {
 	Status            string `json:"status"`
@@ -97,7 +104,10 @@ func Plan(options Options) ([]PlanResult, error) {
 			plan.PluginInstall = []string{"plugin", "add", pluginID, "--json"}
 			plan.PluginRemove = []string{"plugin", "remove", pluginID, "--json"}
 			plan.MCPRemove = []string{"mcp", "remove", MCPServerName}
-			plan.MCPAdd = []string{"mcp", "add", MCPServerName, "--", options.RuntimePath, "mcp", "--stdio"}
+			// The materialized Codex bundle carries the receipt-bound absolute
+			// launcher. Remove any older standalone registration so two versions
+			// cannot race for the same server name.
+			plan.MCPAdd = nil
 		case "claude-code":
 			plan.MarketplaceAdd = []string{"plugin", "marketplace", "add", options.MarketplaceSource}
 			plan.MarketplaceUpdate = []string{"plugin", "marketplace", "update", marketplaceName}
@@ -129,6 +139,7 @@ func Install(ctx context.Context, options Options) ([]Result, error) {
 	var failures []error
 	var runtimeValidationErr error
 	runtimeValidated := false
+	serverHandshakeReady := false
 	for _, plan := range plans {
 		executable := findExecutable(plan.Harness)
 		plan.Executable = executable
@@ -146,6 +157,19 @@ func Install(ctx context.Context, options Options) ([]Result, error) {
 			if runtimeValidationErr == nil {
 				runtimeValidationErr = validateHookLauncher(ctx, options.RuntimePath)
 			}
+			if runtimeValidationErr == nil {
+				probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				probe, probeErr := probeMCP(probeCtx, options.RuntimePath, "")
+				cancel()
+				if probeErr != nil || !probe.ServerHandshakeReady || probe.ToolCount != 6 {
+					if probeErr == nil {
+						probeErr = fmt.Errorf("fresh MCP process did not expose the closed six-tool contract")
+					}
+					runtimeValidationErr = probeErr
+				} else {
+					serverHandshakeReady = true
+				}
+			}
 			runtimeValidated = true
 		}
 		if runtimeValidationErr != nil {
@@ -158,7 +182,7 @@ func Install(ctx context.Context, options Options) ([]Result, error) {
 			failures = append(failures, applyErr)
 			continue
 		}
-		results = append(results, Result{Harness: plan.Harness, Status: "installed_or_updated", Executable: executable, MCPConfigured: true, FreshSessionRequired: true, Activation: freshSessionActivation, Message: "start a fresh harness session before relying on newly registered MCP tools; CLI fallback remains available"})
+		results = append(results, Result{Harness: plan.Harness, Status: "installed_or_updated", Executable: executable, PluginInstalled: true, MCPConfigured: true, ServerHandshakeReady: serverHandshakeReady, ProjectRoundTripReady: false, FreshSessionRequired: true, Activation: freshSessionActivation, Message: "fresh MCP initialize/tools-list passed; start a fresh harness session before relying on newly registered tools"})
 	}
 	return results, errors.Join(failures...)
 }
@@ -173,8 +197,10 @@ func applyInstallPlan(ctx context.Context, executable string, plan PlanResult, r
 		return err
 	}
 	_, _ = runner(ctx, executable, plan.MCPRemove...)
-	if _, err := runner(ctx, executable, plan.MCPAdd...); err != nil {
-		return err
+	if len(plan.MCPAdd) != 0 {
+		if _, err := runner(ctx, executable, plan.MCPAdd...); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -235,6 +261,15 @@ func StatusContext(ctx context.Context, options Options) ([]Result, error) {
 		return nil, err
 	}
 	results := make([]Result, 0, len(harnesses))
+	serverHandshakeReady := false
+	if filepath.IsAbs(options.RuntimePath) {
+		if info, statErr := os.Stat(options.RuntimePath); statErr == nil && info.Mode().IsRegular() {
+			probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			probe, probeErr := probeMCP(probeCtx, options.RuntimePath, "")
+			cancel()
+			serverHandshakeReady = probeErr == nil && probe.ServerHandshakeReady && probe.ToolCount == 6
+		}
+	}
 	for _, harness := range harnesses {
 		if err := ctx.Err(); err != nil {
 			return results, err
@@ -269,7 +304,7 @@ func StatusContext(ctx context.Context, options Options) ([]Result, error) {
 		if freshSessionRequired && message == "" {
 			message = "start a fresh harness session to prove MCP activation; CLI fallback remains available"
 		}
-		results = append(results, Result{Harness: harness, Status: status, Executable: path, MCPConfigured: mcpConfigured, FreshSessionRequired: freshSessionRequired, Activation: freshSessionActivation, Message: message})
+		results = append(results, Result{Harness: harness, Status: status, Executable: path, PluginInstalled: status == "installed", MCPConfigured: mcpConfigured, ServerHandshakeReady: serverHandshakeReady, ProjectRoundTripReady: false, FreshSessionRequired: freshSessionRequired, Activation: freshSessionActivation, Message: message})
 	}
 	return results, nil
 }

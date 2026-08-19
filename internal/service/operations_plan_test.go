@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -195,14 +196,14 @@ func TestCompactIncidentSupersedeRetrySurvivesRoleSessionReplacement(t *testing.
 		t.Fatalf("exact compact retry after session replacement failed: %v", err)
 	}
 	afterRetry, _ := svc.State()
-	if retried != first || afterRetry.HeadSequence != beforeRetry.HeadSequence {
+	if !reflect.DeepEqual(actionResultIdentity(retried), actionResultIdentity(first)) || afterRetry.HeadSequence != beforeRetry.HeadSequence {
 		t.Fatalf("compact retry did not return the original result without appending: first=%#v retry=%#v before=%d after=%d", first, retried, beforeRetry.HeadSequence, afterRetry.HeadSequence)
 	}
 	canonicalRetryInput := json.RawMessage("{\n  \"note\" : \"bind the durable repair successor\"\n}")
 	beforeCanonicalRetry, _ := svc.State()
 	canonicalRetry, err := svc.ApplyAction(action.Ref, canonicalRetryInput, "supersede-long")
 	afterCanonicalRetry, _ := svc.State()
-	if err != nil || canonicalRetry != first || afterCanonicalRetry.HeadSequence != beforeCanonicalRetry.HeadSequence {
+	if err != nil || !reflect.DeepEqual(actionResultIdentity(canonicalRetry), actionResultIdentity(first)) || afterCanonicalRetry.HeadSequence != beforeCanonicalRetry.HeadSequence {
 		t.Fatalf("canonical-equivalent cross-session retry was not idempotent: result=%#v err=%v before=%d after=%d", canonicalRetry, err, beforeCanonicalRetry.HeadSequence, afterCanonicalRetry.HeadSequence)
 	}
 	if _, err := svc.ApplyAction(action.Ref, json.RawMessage(`{"note":"changed intent"}`), "supersede-long"); err == nil || !strings.Contains(err.Error(), "another command") {
@@ -741,7 +742,7 @@ func TestActionResultBoundsAndRecoversImportedOversizedAttemptID(t *testing.T) {
 	beforeRetry, _ := svc.State()
 	retried, err := svc.ApplyAction(checkpointRef, input, "checkpoint-long-attempt")
 	afterRetry, _ := svc.State()
-	if err != nil || retried != result {
+	if err != nil || !reflect.DeepEqual(actionResultIdentity(retried), actionResultIdentity(result)) {
 		t.Fatalf("idempotent result reconstruction changed the bounded Attempt identity: first=%#v retry=%#v err=%v", result, retried, err)
 	}
 	if afterRetry.HeadSequence != beforeRetry.HeadSequence {
@@ -769,6 +770,14 @@ func readBoundedDetail(t *testing.T, svc *Service, firstRef string) []byte {
 		ref = chunk.NextRef
 	}
 	return recovered.Bytes()
+}
+
+func actionResultIdentity(value ActionResult) ActionResult {
+	value.HeadSequence = 0
+	value.HeadHash = ""
+	value.GraphRevision = ""
+	value.Continuation = Continuation{}
+	return value
 }
 
 func TestProjectAllowedActionsPreCancelledLargeIncidentGraphReturnsImmediately(t *testing.T) {

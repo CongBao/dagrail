@@ -8,13 +8,66 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/CongBao/dagrail/internal/controller"
 	"github.com/CongBao/dagrail/internal/mcpserver"
 	"github.com/CongBao/dagrail/internal/service"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+type missingProjectExecutor struct{ calls atomic.Int32 }
+
+func (executor *missingProjectExecutor) Execute(context.Context, []string, []byte) ([]byte, []byte, error) {
+	executor.calls.Add(1)
+	return nil, nil, &controller.RPCError{Code: "project_not_found", Message: ".dagrail/project.yaml was not found", Hint: "Pass an explicit root or initialize a project."}
+}
+
+func TestRemoteMCPInitializesWithoutOpeningAProject(t *testing.T) {
+	executor := &missingProjectExecutor{}
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	server := mcpserver.NewRemote(executor, ".")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- server.Run(ctx, serverTransport) }()
+	started := time.Now()
+	client := mcp.NewClient(&mcp.Implementation{Name: "lazy-bootstrap-test", Version: "1.0.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("project-independent initialize/tools-list exceeded 500ms: %v", elapsed)
+	}
+	if len(listed.Tools) != 6 || executor.calls.Load() != 0 {
+		t.Fatalf("protocol initialization touched project state: tools=%d calls=%d", len(listed.Tools), executor.calls.Load())
+	}
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "dag_pre_wait", Arguments: map[string]any{}})
+	if err == nil && (result == nil || !result.IsError) {
+		t.Fatalf("missing project did not become a bounded tool error: result=%+v err=%v", result, err)
+	}
+	raw, _ := json.Marshal(result)
+	if !strings.Contains(errString(err)+string(raw), "project_not_found") || executor.calls.Load() != 1 {
+		t.Fatalf("missing project diagnostic was not structured or lazy: calls=%d err=%v result=%s", executor.calls.Load(), err, raw)
+	}
+	_ = session.Close()
+	cancel()
+	<-done
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
 
 func TestServerExposesOnlySixHighLevelTypedTools(t *testing.T) {
 	root := t.TempDir()

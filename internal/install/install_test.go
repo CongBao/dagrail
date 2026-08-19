@@ -22,7 +22,11 @@ func TestInstallPlanUsesOneAbsoluteRuntimeForAllThreeHarnesses(t *testing.T) {
 	}
 	for _, plan := range plans {
 		joined := strings.Join(plan.MCPAdd, " ")
-		if !strings.Contains(joined, runtime+" mcp --stdio") {
+		if plan.Harness == "codex" {
+			if len(plan.MCPAdd) != 0 {
+				t.Fatalf("Codex must use the receipt-bound plugin MCP projection, not a standalone registration: %s", joined)
+			}
+		} else if !strings.Contains(joined, runtime+" mcp --stdio") {
 			t.Fatalf("%s MCP launcher is not absolute and shared: %s", plan.Harness, joined)
 		}
 		if len(plan.PluginInstall) == 0 || len(plan.MCPRemove) == 0 {

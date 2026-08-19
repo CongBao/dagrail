@@ -76,7 +76,7 @@ func TestReadOnlyUIExposesBoundedSnapshotAndNoWriteRoute(t *testing.T) {
 	}
 	indexBody, _ := io.ReadAll(index.Body)
 	_ = index.Body.Close()
-	if !strings.Contains(string(indexBody), "Read only") || !strings.Contains(string(indexBody), `role="dialog" aria-modal="true"`) || !strings.Contains(string(indexBody), `data-view="summary"`) || !strings.Contains(string(indexBody), `data-view="detail"`) || !strings.Contains(string(indexBody), `aria-hidden="true" tabindex="-1" inert`) || strings.Contains(string(indexBody), "https://") {
+	if !strings.Contains(string(indexBody), "Read only") || !strings.Contains(string(indexBody), `id="navigator"`) || !strings.Contains(string(indexBody), `id="canvas-scroll"`) || !strings.Contains(string(indexBody), `id="inspector"`) || strings.Contains(string(indexBody), "https://") {
 		t.Fatalf("unexpected UI shell: %s", indexBody)
 	}
 	assetResponse, err := http.Get(server.URL + "/assets/index.html")
@@ -102,22 +102,22 @@ func TestReadOnlyUIExposesBoundedSnapshotAndNoWriteRoute(t *testing.T) {
 	}
 	scriptBody, _ := io.ReadAll(script.Body)
 	_ = script.Body.Close()
-	for _, contract := range []string{"aria-expanded", "ArrowRight", "ArrowLeft", "expanded", "collapsed", "renderBreadcrumb", "renderMinimap", "centerSelected"} {
+	for _, contract := range []string{"aria-expanded", "expand-glyph", "expanded", "dagrail.navigatorPinned", "mini-viewport", "spotlight-muted"} {
 		if !strings.Contains(string(scriptBody), contract) {
 			t.Fatalf("UI interaction contract %q is missing", contract)
 		}
 	}
-	for _, contract := range []string{"view:'auto'", "groupState", "state.view==='auto'?'':state.view"} {
+	for _, contract := range []string{"groupState", "project-map", "group-members", "locate"} {
 		if !strings.Contains(string(scriptBody), contract) {
 			t.Fatalf("UI automatic legacy/detail or compact group-state contract %q is missing", contract)
 		}
 	}
-	for _, contract := range []string{"AbortController", "/api/v1/head", "completeAggregateEdges", "showNodeSkeleton", "dagrail.autoRefresh", "snapshotAt", "syncBackgroundInert"} {
+	for _, contract := range []string{"AbortController", "/api/v1/head", "/api/v1/aggregate-edges", "Loading node details", "dagrail.autoRefresh", "auto-refresh", "Auto 30s", "Auto 60s", "snapshotRef", "layout-worker"} {
 		if !strings.Contains(string(scriptBody), contract) {
 			t.Fatalf("UI large-graph request contract %q is missing", contract)
 		}
 	}
-	for _, contract := range []string{"else{clearError();setConnection('connected','Connected')", "tooltip.textContent=`${node.title||node.id} (${node.id})`"} {
+	for _, contract := range []string{"Connected", " — ${", "readiness||"} {
 		if !strings.Contains(string(scriptBody), contract) {
 			t.Fatalf("UI recovery or full-title contract %q is missing", contract)
 		}
@@ -503,8 +503,12 @@ func TestExplorerProductScaleSummaryIsCompleteAndBounded(t *testing.T) {
 		t.Fatalf("product-scale summary is incomplete: groups=%d nodes=%d aggregate=%d page=%+v", len(topology.Groups), len(topology.Nodes), len(topology.AggregateEdges), topology.AggregateEdgePage)
 	}
 	ref := url.QueryEscape(topology.AggregateEdgeIndexRef)
+	var first ui.AggregateEdgePage
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/aggregate-edges?ref="+ref+"&limit=100", http.StatusOK), &first); err != nil {
+		t.Fatal(err)
+	}
 	var tail ui.AggregateEdgePage
-	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/aggregate-edges?ref="+ref+"&cursor=100&limit=100", http.StatusOK), &tail); err != nil {
+	if err := json.Unmarshal(getBody(t, server.URL+"/api/v1/aggregate-edges?ref="+ref+"&cursor=100&limit=100&snapshotRef="+url.QueryEscape(first.SnapshotRef), http.StatusOK), &tail); err != nil {
 		t.Fatal(err)
 	}
 	if len(tail.AggregateEdges) != 90 || tail.Page.Truncated || tail.Page.Total != 190 {
@@ -621,7 +625,12 @@ func TestExplorerDenseAggregateEdgeIndexIsBoundedAndRecoverable(t *testing.T) {
 		t.Fatalf("dense aggregate edge index is not bounded and recoverable: page=%+v ref=%q inline=%d", topology.AggregateEdgePage, topology.AggregateEdgeIndexRef, len(topology.AggregateEdges))
 	}
 	var page ui.AggregateEdgePage
-	endpoint := server.URL + "/api/v1/aggregate-edges?ref=" + url.QueryEscape(topology.AggregateEdgeIndexRef) + "&cursor=100&limit=100"
+	firstEndpoint := server.URL + "/api/v1/aggregate-edges?ref=" + url.QueryEscape(topology.AggregateEdgeIndexRef) + "&limit=100"
+	if err := json.Unmarshal(getBody(t, firstEndpoint, http.StatusOK), &page); err != nil {
+		t.Fatal(err)
+	}
+	endpoint := server.URL + "/api/v1/aggregate-edges?ref=" + url.QueryEscape(topology.AggregateEdgeIndexRef) + "&cursor=100&limit=100&snapshotRef=" + url.QueryEscape(page.SnapshotRef)
+	page = ui.AggregateEdgePage{}
 	if err := json.Unmarshal(getBody(t, endpoint, http.StatusOK), &page); err != nil {
 		t.Fatal(err)
 	}
@@ -896,6 +905,124 @@ func TestExplorerResponsesMatchPublishedSchema(t *testing.T) {
 	}
 }
 
+func TestExplorerV1Beta3ResponsesMatchClosedPublishedSchema(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := service.Init(root, "v1beta3 schema fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"v1beta3-schema"},"spec":{"groups":[{"id":"work","title":"Work","kind":"work-unit","summaryNodeId":"task","collapsedByDefault":true}],"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"task","kind":"task","role":"worker","groupId":"work","title":"Task","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
+	graphPath := filepath.Join(root, "graph.json")
+	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "graph", "governor"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(ui.Handler(svc))
+	defer server.Close()
+	for _, path := range []string{"/api/v1/project-map", "/api/v1/group-members?id=work", "/api/v1/locate?q=task"} {
+		value := getJSON(t, server.URL+path, http.StatusOK)
+		validateExplorerContract(t, value)
+	}
+}
+
+func TestGroupMembersPaginationIsSnapshotBoundAndRecoverable(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := service.Init(root, "group member pagination")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := domain.GraphDefinition{APIVersion: domain.GraphAPIVersion, Kind: domain.GraphKind, Metadata: domain.GraphMetadata{Name: "group-pages"}, Spec: domain.GraphSpec{Groups: []domain.GroupDefinition{{ID: "large", Title: "Large", Kind: "work-unit", SummaryNodeID: "node-000", CollapsedByDefault: true}}, Roles: []domain.RoleDefinition{{ID: "worker", Capabilities: []string{"node.run"}}}}}
+	for index := range 425 {
+		id := fmt.Sprintf("node-%03d", index)
+		graph.Spec.Nodes = append(graph.Spec.Nodes, domain.NodeDefinition{ID: id, Kind: "task", Role: "worker", GroupID: "large", Title: id, Outcomes: []domain.Outcome{{ID: "done", Class: "success"}}})
+	}
+	raw, _ := json.Marshal(graph)
+	graphPath := filepath.Join(root, "graph.json")
+	if err := os.WriteFile(graphPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "graph", "governor"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(ui.Handler(svc))
+	defer server.Close()
+	projectMap := getJSON(t, server.URL+"/api/v1/project-map", http.StatusOK)
+	snapshotRef := projectMap["snapshotRef"].(string)
+	first := getJSON(t, server.URL+"/api/v1/group-members?id=large&limit=200&snapshotRef="+url.QueryEscape(snapshotRef), http.StatusOK)
+	firstTopology := first["topology"].(map[string]any)
+	firstPage := firstTopology["page"].(map[string]any)
+	if firstPage["total"] != float64(425) || firstPage["nextCursor"] != float64(200) || len(firstTopology["nodes"].([]any)) != 200 {
+		t.Fatalf("unexpected first group page: %#v", firstTopology)
+	}
+	second := getJSON(t, server.URL+"/api/v1/group-members?id=large&cursor=200&limit=200&snapshotRef="+url.QueryEscape(snapshotRef), http.StatusOK)
+	secondTopology := second["topology"].(map[string]any)
+	secondPage := secondTopology["page"].(map[string]any)
+	if secondPage["nextCursor"] != float64(400) || len(secondTopology["nodes"].([]any)) != 200 {
+		t.Fatalf("unexpected second group page: %#v", secondTopology)
+	}
+	third := getJSON(t, server.URL+"/api/v1/group-members?id=large&cursor=400&limit=200&snapshotRef="+url.QueryEscape(snapshotRef), http.StatusOK)
+	thirdTopology := third["topology"].(map[string]any)
+	if len(thirdTopology["nodes"].([]any)) != 25 || thirdTopology["page"].(map[string]any)["truncated"] != false {
+		t.Fatalf("unexpected final group page: %#v", thirdTopology)
+	}
+	if _, err := svc.BindRole("worker", "codex", "session", time.Hour, false, "bind"); err != nil {
+		t.Fatal(err)
+	}
+	_ = getBody(t, server.URL+"/api/v1/group-members?id=large&cursor=200&limit=200&snapshotRef="+url.QueryEscape(snapshotRef), http.StatusConflict)
+}
+
+func TestNestedGroupNeighborhoodUsesTheGroupMemberProjection(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(root, ".data"))
+	svc, err := service.Init(root, "nested group neighborhood")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := domain.GraphDefinition{
+		APIVersion: domain.GraphAPIVersion,
+		Kind:       domain.GraphKind,
+		Metadata:   domain.GraphMetadata{Name: "nested-group-neighborhood"},
+		Spec: domain.GraphSpec{
+			Roles: []domain.RoleDefinition{{ID: "worker", Capabilities: []string{"node.run"}}},
+			Groups: []domain.GroupDefinition{
+				{ID: "parent", Title: "Parent", Kind: "work-unit", SummaryNodeID: "parent-summary", CollapsedByDefault: true},
+				{ID: "child", Title: "Child", Kind: "work-unit", ParentGroupID: "parent", SummaryNodeID: "child-summary", CollapsedByDefault: true},
+			},
+			Nodes: []domain.NodeDefinition{
+				{ID: "parent-summary", Kind: "milestone", GroupID: "parent", Title: "Parent summary", Outcomes: []domain.Outcome{{ID: "done", Class: "success"}}},
+				{ID: "child-summary", Kind: "milestone", GroupID: "child", Title: "Child summary", Outcomes: []domain.Outcome{{ID: "done", Class: "success"}}},
+				{ID: "child-task", Kind: "task", Role: "worker", GroupID: "child", Title: "Child task", Outcomes: []domain.Outcome{{ID: "done", Class: "success"}}},
+				{ID: "outside", Kind: "milestone", Title: "Outside", Outcomes: []domain.Outcome{{ID: "done", Class: "success"}}},
+			},
+			Edges: []domain.EdgeDefinition{{ID: "child-to-outside", From: "child-task", To: "outside", When: domain.Predicate{Outcome: "done"}}},
+		},
+	}
+	raw, _ := json.Marshal(graph)
+	graphPath := filepath.Join(root, "graph.json")
+	if err := os.WriteFile(graphPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "graph", "governor"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(ui.Handler(svc))
+	defer server.Close()
+	projectMap := getJSON(t, server.URL+"/api/v1/project-map", http.StatusOK)
+	snapshotRef := projectMap["snapshotRef"].(string)
+	members := getJSON(t, server.URL+"/api/v1/group-members?id=child&snapshotRef="+url.QueryEscape(snapshotRef), http.StatusOK)
+	topology := members["topology"].(map[string]any)
+	ref := topology["aggregateEdgeIndexRef"].(string)
+	endpoint := server.URL + "/api/v1/aggregate-edges?ref=" + url.QueryEscape(ref) + "&focus=child&groupState=collapsed&expanded=child&snapshotRef=" + url.QueryEscape(snapshotRef)
+	page := getJSON(t, endpoint, http.StatusOK)
+	if len(page["aggregateEdges"].([]any)) == 0 {
+		t.Fatal("nested group neighborhood omitted the child dependency")
+	}
+}
+
 func getJSON(t *testing.T, url string, status int) map[string]any {
 	t.Helper()
 	body := getBody(t, url, status)
@@ -969,23 +1096,6 @@ func firstSnapshotMismatch(before, after map[string][32]byte) string {
 
 func validateExplorerContract(t *testing.T, values ...any) {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "schemas", "ui-api-v1beta2.schema.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var document any
-	if err := json.Unmarshal(raw, &document); err != nil {
-		t.Fatal(err)
-	}
-	compiler := jsonschema.NewCompiler()
-	compiler.DefaultDraft(jsonschema.Draft2020)
-	if err := compiler.AddResource("urn:dagrail:ui-api-v1beta2", document); err != nil {
-		t.Fatal(err)
-	}
-	schema, err := compiler.Compile("urn:dagrail:ui-api-v1beta2")
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, value := range values {
 		encoded, err := json.Marshal(value)
 		if err != nil {
@@ -995,8 +1105,36 @@ func validateExplorerContract(t *testing.T, values ...any) {
 		if err := json.Unmarshal(encoded, &instance); err != nil {
 			t.Fatal(err)
 		}
+		var envelope struct {
+			APIVersion string `json:"apiVersion"`
+		}
+		if err := json.Unmarshal(encoded, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		version := "v1beta2"
+		if envelope.APIVersion == "dagrail.io/ui/v1beta3" {
+			version = "v1beta3"
+		}
+		raw, err := os.ReadFile(filepath.Join("..", "..", "schemas", "ui-api-"+version+".schema.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var document any
+		if err := json.Unmarshal(raw, &document); err != nil {
+			t.Fatal(err)
+		}
+		compiler := jsonschema.NewCompiler()
+		compiler.DefaultDraft(jsonschema.Draft2020)
+		resource := "urn:dagrail:ui-api:" + version
+		if err := compiler.AddResource(resource, document); err != nil {
+			t.Fatal(err)
+		}
+		schema, err := compiler.Compile(resource)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := schema.Validate(instance); err != nil {
-			t.Fatalf("grouped Explorer response violates v1beta2: %v\n%s", err, encoded)
+			t.Fatalf("grouped Explorer response violates %s: %v\n%s", version, err, encoded)
 		}
 	}
 }

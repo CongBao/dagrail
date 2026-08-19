@@ -255,6 +255,23 @@ vocabulary, repository paths, and cutover policy are not shipped as DAGrail cont
 - add generic declared lanes and a stable layered summary that retrieves every aggregate
   edge page while keeping 920-node/58-group validation project-independent.
 
+## v0.26.0 — Owner-local control plane and DAG Explorer
+
+- add one non-autonomous, per-user daemon with versioned local RPC, per-project actors,
+  shared verified snapshots, safe drain/restart, explicit offline recovery, and a
+  durable outbox that finishes only already-authorized Effect sagas;
+- make the six-tool MCP server initialize from any directory before opening a project,
+  add a fresh-process protocol/schema probe, and expose exact plugin/handshake/project
+  readiness without claiming that a running harness process hot-loaded an upgrade;
+- add atomic action selection, lease budgets, Role renewal remediation, and head-bound
+  continuations so an agent can keep progressing without copying large opaque refs;
+- replace the summary canvas with the v1beta3 compound Project Map: one expandable
+  Group at a time, snapshot-bound lazy membership, ELK layered layout in a cancellable
+  worker, Navigator/tree/minimap synchronization, docked Inspector, and accessible
+  light/dark themes;
+- keep the journal as sole authority, the daemon rebuildable, the Explorer read-only,
+  and all validation fixtures independent of any external product vocabulary.
+
 ## Post-v0.23 field-validation backlog
 
 These are repository-neutral observations from the first live writer cutover. They are

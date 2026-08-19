@@ -50,7 +50,7 @@ Execution Packages accept only digest metadata and bounded absolute artifact URI
 userinfo, query strings, fragments, and data schemes are rejected because they commonly
 carry credentials or inline artifact bodies.
 
-The v0.11 Explorer is a local read-only projection. It refuses non-loopback binds,
+The Explorer is a local read-only projection. It refuses non-loopback binds,
 accepts only `GET` and `HEAD`, loads no third-party assets, emits restrictive browser
 security and Permissions Policy headers, and omits allowed-action references,
 controller tokens, event payloads, effect requests, prompts, Graph metadata,
@@ -64,6 +64,15 @@ the exact HTTP Host including port. Cross-port localhost requests are rejected, 
 never enabled, and same-origin resource/opener policies are emitted. This limits
 browser-mediated cross-origin reads; it does not isolate another malicious process
 running under the same OS account.
+
+The owner-local daemon uses a mode-0600 Unix socket on macOS/Linux or a named pipe
+restricted to the current Windows SID. These permissions prevent accidental cross-user
+use; they do not authenticate competing processes owned by the same user. Daemon logs
+contain only a generated operation number, top-level command, duration, and stable error
+class. They omit CLI arguments, input/receipt bodies, prompts, and secrets. In-memory
+verified snapshots and HMAC-sealed SQLite checkpoints are disposable cache state and
+never authorize an append without the journal, path-bound authority claim, Role lease,
+and signed action checks.
 
 The Codex native adapter talks only to the detected local executable through the
 harness-owned app-server daemon and stdio proxy. Receipt detail omits the generated work
@@ -124,7 +133,7 @@ uses inspection-only security and recovery checks. Structural qualification neve
 claims that CI actually ran for a particular tag or that production adoption occurred;
 the tag workflow supplies build evidence and the report leaves adoption gaps explicit.
 
-The historical compatibility job builds exact commit-pinned v0.10.0–v0.25.2 sources in
+The historical compatibility job builds exact commit-pinned v0.10.0–v0.25.3 sources in
 temporary directories. Source archives reject traversal, links, unsupported entry
 types, excessive entries, and excessive expanded bytes. Readiness reports cite the
 manifest digest but cannot turn this CI evidence into production validation.

@@ -27,8 +27,9 @@ durable checkpoints, deterministic readiness, and recoverable external effects.
   graph without prescribing which agent should make semantic decisions.
 - An immutable hash-chained journal is authority; SQLite and the read-only DAG UI are
   rebuildable projections.
-- CLI and six MCP tools return bounded context and signed allowed actions. Agents never
-  need to construct lifecycle events or retain the full graph in context.
+- An on-demand, owner-local daemon shares verified snapshots across the CLI, six MCP
+  tools, and Explorer. Agents never construct lifecycle events or retain the full graph
+  in context; the daemon never schedules work on its own.
 - Leases, checkpoints, idempotency, incidents, and explicit Effect reconciliation make
   session replacement and ambiguous external writes recoverable.
 
@@ -55,6 +56,7 @@ supported harnesses. Restart open agent applications, then verify:
 
 ```bash
 dagrail plugin status
+dagrail mcp probe
 dagrail doctor install
 ```
 
@@ -88,8 +90,10 @@ dagrail pre-wait --root .
 dagrail ui --root .
 ```
 
-Use `dagrail action list` to obtain current signed actions, `dagrail action apply` to
-execute one, and `dagrail reconcile` before retrying an ambiguous Effect. Dynamic graph
+Use `dagrail action list` to obtain current signed actions. Apply one by ref, or let the
+daemon atomically resolve a unique current `--kind --role --node` selector. Every result
+includes a bounded continuation stating who owns the next step and whether it is safe
+to wait. Use `dagrail reconcile` before retrying an ambiguous Effect. Dynamic graph
 changes use `graph preview-change` followed by `graph apply-change`. Run
 `dagrail commands` for the machine-readable command catalog.
 
@@ -109,4 +113,5 @@ not an identity signature or hostile-user security boundary.
   [Compatibility](COMPATIBILITY.md) · [Security](SECURITY.md)
 - [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
-Apache-2.0 licensed. See [LICENSE](LICENSE).
+Apache-2.0 licensed. See [LICENSE](LICENSE) and
+[third-party notices](THIRD_PARTY_NOTICES.md).

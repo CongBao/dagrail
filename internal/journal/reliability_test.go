@@ -1,6 +1,7 @@
 package journal
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,6 +101,72 @@ func TestInspectHeadObservesAppendAndRejectsCorruptTail(t *testing.T) {
 	}
 	if _, err := store.InspectHead(); err == nil {
 		t.Fatal("non-canonical tail passed cheap head observation")
+	}
+}
+
+func TestReadAllContextReportsProgressAndCancelsBetweenSegments(t *testing.T) {
+	store, err := openClaimed(t, t.TempDir(), reliabilityProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"verify-one", "verify-two", "verify-three"} {
+		if _, _, err := appendReliabilityEvent(store, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	progress := make([][2]int, 0)
+	segments, err := store.ReadAllContext(ctx, func(completed, total int) {
+		progress = append(progress, [2]int{completed, total})
+		if completed == 1 {
+			cancel()
+		}
+	})
+	if !errors.Is(err, context.Canceled) || segments != nil {
+		t.Fatalf("cancelled verification returned %d segments, %v", len(segments), err)
+	}
+	if len(progress) != 2 || progress[0] != [2]int{0, 3} || progress[1] != [2]int{1, 3} {
+		t.Fatalf("unexpected verification progress: %v", progress)
+	}
+}
+
+func TestVerifiedSnapshotReusesOnlyAnUnchangedAppendOnlyPrefix(t *testing.T) {
+	root := t.TempDir()
+	store, err := openClaimed(t, root, reliabilityProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _, err := appendReliabilityEvent(store, "snapshot-first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := store.ReadSnapshot(nil)
+	if err != nil || initial.Incremental || len(initial.Segments) != 1 {
+		t.Fatalf("initial snapshot = %+v, %v", initial, err)
+	}
+	second, _, err := appendReliabilityEvent(store, "snapshot-second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	advanced, err := store.ReadSnapshot(&initial)
+	if err != nil || !advanced.Incremental || len(advanced.Segments) != 2 || advanced.Segments[1].SegmentHash != second.SegmentHash {
+		t.Fatalf("incremental snapshot = %+v, %v", advanced, err)
+	}
+	firstPath := filepath.Join(root, "journal", fmt.Sprintf("%012d-%s.json", first.Sequence, first.SegmentHash))
+	changed := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(firstPath, changed, changed); err != nil {
+		t.Fatal(err)
+	}
+	fullyVerified, err := store.ReadSnapshot(&advanced)
+	if err != nil || fullyVerified.Incremental || len(fullyVerified.Segments) != 2 {
+		t.Fatalf("changed prefix did not fall back to full verification: %+v, %v", fullyVerified, err)
+	}
+	secondPath := filepath.Join(root, "journal", fmt.Sprintf("%012d-%s.json", second.Sequence, second.SegmentHash))
+	if err := os.Remove(secondPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReadSnapshot(&fullyVerified); err == nil || !strings.Contains(err.Error(), "truncated") {
+		t.Fatalf("truncated prefix was accepted: %v", err)
 	}
 }
 

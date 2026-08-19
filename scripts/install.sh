@@ -33,7 +33,7 @@ expected="$(awk -v asset="$asset" '$2 == asset {count++; digest=$1} END {if (cou
 if command -v sha256sum >/dev/null 2>&1; then actual="$(sha256sum "${temporary}/${asset}" | awk '{print $1}')"; else actual="$(shasum -a 256 "${temporary}/${asset}" | awk '{print $1}')"; fi
 [ -n "$expected" ] && [ "$expected" = "$actual" ] || { echo "checksum verification failed" >&2; exit 1; }
 contents="$(tar -tzf "${temporary}/${asset}" | LC_ALL=C sort)"
-expected_contents="$(printf '%s\n' LICENSE README.md dagrail | LC_ALL=C sort)"
+expected_contents="$(printf '%s\n' LICENSE README.md THIRD_PARTY_NOTICES.md dagrail | LC_ALL=C sort)"
 [ "$contents" = "$expected_contents" ] || { echo "release archive contains unexpected paths" >&2; exit 1; }
 tar -xzf "${temporary}/${asset}" -C "$temporary"
 "${temporary}/dagrail" plugin install --harness "$harness"

@@ -273,6 +273,55 @@ type EffectActionResult struct {
 	Truncated    bool                 `json:"truncated,omitempty"`
 }
 
+type RoleStatus struct {
+	RoleID                string            `json:"roleId"`
+	RoleRef               string            `json:"roleRef,omitempty"`
+	Lease                 *domain.RoleLease `json:"lease,omitempty"`
+	LeaseState            string            `json:"leaseState"`
+	LeaseRemainingSeconds int               `json:"leaseRemainingSeconds"`
+	GraphRevision         string            `json:"graphRevision"`
+	HeadSequence          uint64            `json:"headSequence"`
+	HeadHash              string            `json:"headHash"`
+}
+
+func (s *Service) RoleStatusContext(ctx context.Context, roleID string) (RoleStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return RoleStatus{}, err
+	}
+	state, _, err := s.load()
+	if err != nil {
+		return RoleStatus{}, err
+	}
+	if state.Graph == nil {
+		return RoleStatus{}, fmt.Errorf("graph has not been imported")
+	}
+	found := false
+	for _, role := range state.Graph.Spec.Roles {
+		if role.ID == roleID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return RoleStatus{}, fmt.Errorf("unknown role %s", roleID)
+	}
+	ref, _ := s.EntityRef("role", roleID)
+	result := RoleStatus{RoleID: roleID, RoleRef: ref, LeaseState: "unbound", GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, HeadHash: state.HeadHash}
+	if lease, exists := state.Leases[roleID]; exists {
+		copy := lease
+		result.Lease = &copy
+		if !lease.Active {
+			result.LeaseState = "released"
+		} else if expiry, parseErr := time.Parse(time.RFC3339Nano, lease.ExpiresAt); parseErr != nil || !s.Now().UTC().Before(expiry) {
+			result.LeaseState = "expired"
+		} else {
+			result.LeaseState = "active"
+			result.LeaseRemainingSeconds = int(expiry.Sub(s.Now().UTC()).Seconds())
+		}
+	}
+	return result, nil
+}
+
 func (s *Service) BoundedEffectAction(effect domain.EffectAction) (EffectActionResult, error) {
 	state, _, err := s.load()
 	if err != nil {

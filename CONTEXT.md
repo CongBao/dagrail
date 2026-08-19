@@ -49,6 +49,16 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
   an Execution package may be reused or execution must rerun; it is not a semantic
   approval or policy outcome.
 - **Projection**: disposable SQLite or human-facing data rebuilt from journal segments.
+- **Owner-local daemon**: one non-autonomous, per-OS-user process that multiplexes
+  project actors for CLI, MCP, and Explorer clients. It serializes writes, shares
+  immutable verified snapshots, and completes only explicitly authorized Effect
+  sagas; it never chooses work or becomes authority.
+- **Verified snapshot**: immutable, head-bound reduced state shared by one project
+  actor. A sealed local checkpoint may accelerate its reconstruction, but the journal
+  remains the only canonical authority and full verification remains available.
+- **Continuation**: bounded, head-bound liveness guidance returned after an action,
+  including whether an agent may wait, the current owner, reason codes, and at most
+  three immediately relevant next actions plus an opaque continuation ref.
 - **Effect**: an external side effect managed as a saga, never represented as an ACID transaction.
 - **Receipt**: typed observation of transport, session creation, visible delivery, acceptance, and completion. These states are not interchangeable.
 - **Incident**: a durable blocker with owner, deadline, attempt budget, progress metric, closed classification, recovery disposition, and dependency cut.
@@ -104,8 +114,9 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 - **Lifecycle projection**: a deterministic, redacted view of imported and native
   runtime state. Raw action inputs and effect/resource receipts are omitted or digested.
 - **DAG Explorer**: loopback-only, mutation-free browser projection over bounded,
-  deterministic v1beta1 query APIs. A selected Node deep link is a view locator, never
-  a lifecycle capability.
+  deterministic v1beta3 query APIs. Its Project Map uses compound Groups, declared
+  lanes, snapshot-bound lazy members, and one accordion expansion; a selected Node or
+  Group deep link is a view locator, never a lifecycle capability.
 - **Security audit**: path-redacted v1alpha1 evidence over the cooperative OS-user
   boundary, filesystem permissions, journal verification, and projection integrity;
   it is not an authorization decision.
@@ -153,6 +164,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 2. Journal rename is the only local command commit point; SQLite can be deleted.
 3. A stable Role has at most one unexpired active lease.
 4. Every external effect has a stable action ID; ambiguity requires reconcile, never blind retry.
+   A daemon may finish only the already-authorized saga represented by that ID; it may
+   not choose or prepare another Effect on an agent's behalf.
 5. Active Node identity, kind, objective, and input contract are frozen. Terminal history is append-only.
 6. Hooks may discover, inject bounded context, and observe sessions; they cannot transition lifecycle state.
    Explorer, hooks, and public project queries use a read-only open and cannot settle
@@ -176,7 +189,8 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 14. Explorer routes accept only `GET` and `HEAD`; collections, queries, responses, and
     graph neighborhoods are bounded, `HEAD` shares GET validation, focused truncation
     preserves the selected Node, and no raw event/effect payload or action ref is
-    returned.
+    returned. Every v1beta3 page is bound to one immutable snapshot and fails stale
+    rather than mixing heads.
 15. Authority JSON is duplicate-free, depth/value bounded, and closed where its
     envelope is typed; no reducer consumes a journal segment before these checks.
 16. Roles do not isolate a malicious same-user process. Security diagnostics state
@@ -298,11 +312,14 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 
 - **Graph authoring**: Graph Definition, validation, two-phase GraphPatch, Graph Revision.
 - **Runtime control**: Node runtime, frontier, Attempt, Role lease, checkpoint, incident, resource lease.
+- **Owner-local control**: daemon discovery, versioned local RPC, project actors,
+  verified snapshots, drain/restart, and explicit offline recovery.
 - **Effect control**: allowed action, outbox, prepared effect, dispatch, receipt, reconcile.
 - **Harness integration**: capability probe, plugin manifest, hooks, launch/resume envelope.
 - **Read model**: SQLite projection, context envelope, cursor delta, inspect ref, dashboard-ready queries.
-- **Explorer projection**: bounded overview, Node inventory, focused topology, Node
-  detail, payload-free timeline, and operational summaries with stable local deep links.
+- **Explorer projection**: compound Project Map, lazy Group membership, bounded
+  neighborhoods, Node detail, payload-free timeline, operational summaries, and stable
+  local deep links over one snapshot.
 - **Operational surface**: payload-free status/history, verified journal backup,
   runtime upgrade/rollback, optional portable-file signatures, local security audit,
   bundled-plugin conformance, command catalog, installation diagnostics, shareable
@@ -320,4 +337,6 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
 
 ## Current non-goals
 
-Requirement management, autonomous scheduling, container orchestration, background polling, remote multi-tenant service, hostile-user authorization, signed identity, and geographically distributed availability.
+Requirement management, autonomous scheduling, daemon-driven project polling, login
+autostart, container orchestration, remote multi-tenant service, hostile-user
+authorization, signed identity, and geographically distributed availability.

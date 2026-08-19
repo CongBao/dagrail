@@ -2,6 +2,63 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.26.0 — 2026-08-19
+
+### Added
+
+- an on-demand, owner-local daemon now serves multiple Projects through an owner-only
+  Unix socket or current-SID Windows named pipe; project actors serialize writes, share
+  immutable reads, drain authorized Effect work, and remain disposable beside the
+  canonical journal;
+- MCP initializes and lists its six tools without opening a Project, accepts an optional
+  root per call, and has a real fresh-process `mcp probe` that verifies exact tool and
+  schema identities before reporting handshake readiness;
+- verified snapshots support incremental suffix replay, concurrent singleflight, and a
+  disposable HMAC-sealed projection checkpoint; `daemon warm` persists the accelerator
+  without turning SQLite into authority;
+- Action results include bounded continuation ownership, next-action refs, and lease
+  budgets; CLI callers can atomically apply one uniquely matched `--kind --role --node`
+  action without copying a long signed ref;
+- Explorer API v1beta3 adds Project map, snapshot-bound Group members, locate results,
+  and complete aggregate-edge indexes for large hierarchical DAGs.
+
+### Changed
+
+- normal project CLI, MCP, and UI work now uses the shared daemon; explicit offline
+  access is limited to stopped-daemon recovery, restore, replay, rebuild, and authority
+  verification surfaces;
+- the read-only Explorer uses cancellable ELK compound layout in a Web Worker, a single
+  expanded Group, one-hop spotlight, a search/tree/minimap Navigator, docked Inspector,
+  direct Node detail, and URL-restorable selection;
+- the Calm Collaboration interface follows the system light/dark theme or an explicit
+  choice, uses a locked Lucide icon subset, starts with a compact Navigator rail, and
+  keeps automatic refresh off unless 30- or 60-second polling is selected;
+- bundled Codex, Claude Code, and Copilot skills now distinguish fresh-process MCP
+  readiness from current-session activation and consume continuation/lease ownership
+  without granting the daemon scheduler authority.
+
+### Fixed
+
+- MCP no longer disappears when started outside a DAGrail Project or spends the host's
+  initialization timeout replaying a large journal;
+- concurrent CLI readers no longer repeat full verification/reduction, while full
+  journal verification, recovery rehearsal, and security audit keep their authority
+  checks and cancellation boundary;
+- a same-version daemon is now bound to a path-hiding authority-data namespace digest;
+  changing `DAGRAIL_HOME` drains and restarts it instead of resolving locators through
+  the previous store;
+- nested Group expansion and cross-Group search use one ancestor-aware projection, so a
+  selected Group or Node remains centered, focused, and inspectable instead of failing
+  with a stale aggregate-edge ref;
+- plugin diagnostics separate installed configuration, fresh server handshake, project
+  round trip, fresh-session requirement, and current-process proof instead of treating
+  manifest presence as MCP availability.
+- planned-node `role.renew` is now a portable Role-scoped lifecycle action even before
+  an Attempt exists, while an attached Attempt remains an additional consistency check;
+- `plugin update --dry-run` now computes the exact runtime, bundle, and harness plan
+  (including marketplace, plugin, and MCP commands) without installing a runtime,
+  materializing a bundle, or changing host files.
+
 ## 0.25.3 — 2026-08-19
 
 ### Added

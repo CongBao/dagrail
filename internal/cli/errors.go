@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/CongBao/dagrail/internal/commandcatalog"
+	"github.com/CongBao/dagrail/internal/controller"
 )
 
 const ErrorAPIVersion = "dagrail.io/cli-error/v1alpha1"
@@ -21,6 +22,7 @@ type codedError struct {
 	category  string
 	exitCode  int
 	retryable bool
+	hint      string
 	err       error
 }
 
@@ -35,6 +37,7 @@ type ErrorReport struct {
 	Message    string `json:"message"`
 	Retryable  bool   `json:"retryable"`
 	ExitCode   int    `json:"exitCode"`
+	Hint       string `json:"hint,omitempty"`
 }
 
 func usagef(format string, args ...any) error {
@@ -52,12 +55,19 @@ func normalizeDispatchError(err error) error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(err, flag.ErrHelp) {
+		return nil
+	}
 	var typed *codedError
 	if errors.As(err, &typed) || errors.Is(err, context.Canceled) {
 		return err
 	}
+	var remote *controller.RPCError
+	if errors.As(err, &remote) {
+		return &codedError{code: remote.Code, category: "operation", retryable: remote.Retryable, hint: remote.Hint, exitCode: commandcatalog.ExitOperationFailed, err: err}
+	}
 	message := err.Error()
-	if errors.Is(err, flag.ErrHelp) || strings.HasPrefix(message, "usage: dagrail") || strings.HasPrefix(message, "flag provided but not defined:") || strings.HasPrefix(message, "invalid value ") || strings.HasPrefix(message, "expected argument for flag") || (strings.HasPrefix(message, "unknown ") && strings.Contains(message, " command ")) {
+	if strings.HasPrefix(message, "usage: dagrail") || strings.HasPrefix(message, "flag provided but not defined:") || strings.HasPrefix(message, "invalid value ") || strings.HasPrefix(message, "expected argument for flag") || (strings.HasPrefix(message, "unknown ") && strings.Contains(message, " command ")) {
 		return &codedError{code: "usage", category: "usage", exitCode: commandcatalog.ExitUsage, err: err}
 	}
 	return err
@@ -68,6 +78,7 @@ func DescribeError(err error) ErrorReport {
 	var typed *codedError
 	if errors.As(err, &typed) {
 		report.Code, report.Category, report.Retryable, report.ExitCode = typed.code, typed.category, typed.retryable, typed.exitCode
+		report.Hint = typed.hint
 	} else if errors.Is(err, context.Canceled) {
 		report.Code, report.Category, report.Message = "interrupted", "interruption", "operation interrupted"
 		report.Retryable, report.ExitCode = true, commandcatalog.ExitInterrupted

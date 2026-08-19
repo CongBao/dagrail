@@ -19,6 +19,7 @@ import (
 
 const (
 	explorerAPIVersion   = "dagrail.io/ui/v1beta2"
+	explorerAPIVersionV3 = "dagrail.io/ui/v1beta3"
 	maxAPIResponse       = 2 * 1024 * 1024
 	maxNodePage          = 200
 	maxTopologyNodes     = 500
@@ -27,7 +28,55 @@ const (
 	maxNodeDetailItems   = 100
 	maxGroupEdgePage     = 100
 	maxAggregateEdgePage = 100
+	maxProjectBackbone   = 512
 )
+
+type ProjectMap struct {
+	APIVersion            string              `json:"apiVersion"`
+	ReadOnly              bool                `json:"readOnly"`
+	SnapshotRef           string              `json:"snapshotRef"`
+	Project               map[string]string   `json:"project"`
+	GraphRevision         string              `json:"graphRevision"`
+	HeadSequence          uint64              `json:"headSequence"`
+	HeadHash              string              `json:"headHash"`
+	Groups                []GroupView         `json:"groups"`
+	Lanes                 []grouping.Lane     `json:"lanes"`
+	Nodes                 []NodeView          `json:"nodes"`
+	AggregateEdges        []AggregateEdgeView `json:"aggregateEdges"`
+	AggregateEdgePage     PageInfo            `json:"aggregateEdgePage"`
+	AggregateEdgeIndexRef string              `json:"aggregateEdgeIndexRef,omitempty"`
+	MembershipDigest      string              `json:"membershipDigest"`
+	ProjectionDigest      string              `json:"projectionDigest"`
+}
+
+type GroupMembers struct {
+	APIVersion    string       `json:"apiVersion"`
+	ReadOnly      bool         `json:"readOnly"`
+	SnapshotRef   string       `json:"snapshotRef"`
+	GroupID       string       `json:"groupId"`
+	GraphRevision string       `json:"graphRevision"`
+	HeadSequence  uint64       `json:"headSequence"`
+	Topology      TopologyPage `json:"topology"`
+}
+
+type LocateResult struct {
+	Ref          string   `json:"ref"`
+	Kind         string   `json:"kind"`
+	ID           string   `json:"id"`
+	Title        string   `json:"title"`
+	AncestorPath []string `json:"ancestorPath"`
+	MatchCount   int      `json:"matchCount,omitempty"`
+}
+
+type LocateResponse struct {
+	APIVersion    string         `json:"apiVersion"`
+	ReadOnly      bool           `json:"readOnly"`
+	SnapshotRef   string         `json:"snapshotRef"`
+	GraphRevision string         `json:"graphRevision"`
+	HeadSequence  uint64         `json:"headSequence"`
+	Query         string         `json:"query"`
+	Results       []LocateResult `json:"results"`
+}
 
 type ExplorerOverview struct {
 	APIVersion    string              `json:"apiVersion"`
@@ -69,6 +118,7 @@ type PageInfo struct {
 	Total      int  `json:"total"`
 	NextCursor *int `json:"nextCursor,omitempty"`
 	Truncated  bool `json:"truncated"`
+	Backbone   bool `json:"backbone,omitempty"`
 }
 
 type NodePage struct {
@@ -125,11 +175,14 @@ type GroupEdgePage struct {
 
 type AggregateEdgePage struct {
 	APIVersion     string              `json:"apiVersion"`
+	ReadOnly       bool                `json:"readOnly"`
+	SnapshotRef    string              `json:"snapshotRef"`
 	GraphRevision  string              `json:"graphRevision"`
 	HeadSequence   uint64              `json:"headSequence"`
 	Ref            string              `json:"ref"`
 	Page           PageInfo            `json:"page"`
 	AggregateEdges []AggregateEdgeView `json:"aggregateEdges"`
+	FocusRef       string              `json:"focusRef,omitempty"`
 }
 
 type NodeContractView struct {
@@ -253,6 +306,115 @@ type nodeFilter struct {
 }
 
 func registerExplorerAPI(mux *http.ServeMux, svc *service.Service, cache *explorerCache) {
+	mux.HandleFunc("/api/v1/project-map", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
+		if err := requireQuery(r, map[string]bool{"refresh": true}); err != nil {
+			return err
+		}
+		refresh, err := queryInt(r, "refresh", 0, 0, 1)
+		if err != nil {
+			return err
+		}
+		state, _, err := cache.state(r.Context(), refresh == 1)
+		if err != nil {
+			return err
+		}
+		topology, err := buildSummaryTopology(state, nodeFilter{}, "", 1, maxTopologyNodes, "collapsed", nil, nil)
+		if err != nil {
+			return err
+		}
+		backbone, page, edgeRef := topology.AggregateEdges, PageInfo{}, topology.AggregateEdgeIndexRef
+		if state.Graph != nil {
+			overrides, _ := groupOverrides(state.Graph, "collapsed", nil, nil)
+			projection, buildErr := grouping.Build(state, overrides)
+			if buildErr != nil {
+				return buildErr
+			}
+			backbone = projectBackboneEdges(projection, maxProjectBackbone)
+			page = PageInfo{Cursor: 0, Limit: maxProjectBackbone, Total: len(projection.AggregateEdges), Truncated: len(backbone) < len(projection.AggregateEdges), Backbone: true}
+			if page.Truncated {
+				next := 0
+				page.NextCursor = &next
+			}
+			edgeRef = aggregateEdgeIndexRef(projection)
+		}
+		value := ProjectMap{APIVersion: explorerAPIVersionV3, ReadOnly: true, SnapshotRef: explorerSnapshotRef(state), Project: map[string]string{"id": svc.Project.Config.ProjectID, "name": svc.Project.Config.Name}, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, HeadHash: state.HeadHash, Groups: topology.Groups, Lanes: topology.Lanes, Nodes: topology.Nodes, AggregateEdges: backbone, AggregateEdgePage: page, AggregateEdgeIndexRef: edgeRef, MembershipDigest: topology.MembershipDigest, ProjectionDigest: topology.ProjectionDigest}
+		return writeAPIResult(w, value, nil)
+	}))
+	mux.HandleFunc("/api/v1/group-members", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
+		if err := requireQuery(r, map[string]bool{"id": true, "cursor": true, "limit": true, "snapshotRef": true}); err != nil {
+			return err
+		}
+		groupID, err := queryString(r, "id", 4096)
+		if err != nil || groupID == "" {
+			return clientError(http.StatusBadRequest, "group id is required")
+		}
+		cursor, err := queryInt(r, "cursor", 0, 0, 1_000_000)
+		if err != nil {
+			return err
+		}
+		limit, err := queryInt(r, "limit", 200, 1, maxNodePage)
+		if err != nil {
+			return err
+		}
+		boundSnapshot, err := queryString(r, "snapshotRef", 128)
+		if err != nil {
+			return err
+		}
+		state, _, err := cache.state(r.Context(), false)
+		if err != nil {
+			return err
+		}
+		snapshotRef := explorerSnapshotRef(state)
+		if boundSnapshot != "" && boundSnapshot != snapshotRef {
+			return clientError(http.StatusConflict, "group member snapshot is stale; reload project-map")
+		}
+		if cursor > 0 && boundSnapshot == "" {
+			return clientError(http.StatusConflict, "group member pagination requires snapshotRef")
+		}
+		if boundSnapshot != "" {
+			if err := requireCurrentSnapshot(svc, state, "group member"); err != nil {
+				return err
+			}
+		}
+		if state.Graph == nil {
+			return clientError(http.StatusNotFound, "graph is unavailable")
+		}
+		found := false
+		for _, group := range state.Graph.Spec.Groups {
+			if group.ID == groupID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return clientError(http.StatusNotFound, "unknown group")
+		}
+		topology, err := buildSummaryTopologyPage(state, nodeFilter{}, groupID, 1, limit, cursor, "collapsed", []string{groupID}, nil)
+		if err != nil {
+			return err
+		}
+		topology.APIVersion = explorerAPIVersionV3
+		return writeAPIResult(w, GroupMembers{APIVersion: explorerAPIVersionV3, ReadOnly: true, SnapshotRef: snapshotRef, GroupID: groupID, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Topology: topology}, nil)
+	}))
+	mux.HandleFunc("/api/v1/locate", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
+		if err := requireQuery(r, map[string]bool{"q": true, "limit": true}); err != nil {
+			return err
+		}
+		query, err := queryString(r, "q", 256)
+		if err != nil || strings.TrimSpace(query) == "" {
+			return clientError(http.StatusBadRequest, "non-empty locate query is required")
+		}
+		limit, err := queryInt(r, "limit", 25, 1, 100)
+		if err != nil {
+			return err
+		}
+		state, _, err := cache.state(r.Context(), false)
+		if err != nil {
+			return err
+		}
+		results := locateState(state, query, limit)
+		return writeAPIResult(w, LocateResponse{APIVersion: explorerAPIVersionV3, ReadOnly: true, SnapshotRef: explorerSnapshotRef(state), GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Query: query, Results: results}, nil)
+	}))
 	mux.HandleFunc("/api/v1/head", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
 		if err := requireQuery(r, nil); err != nil {
 			return err
@@ -397,7 +559,7 @@ func registerExplorerAPI(mux *http.ServeMux, svc *service.Service, cache *explor
 		return writeAPIResult(w, value, err)
 	}))
 	mux.HandleFunc("/api/v1/aggregate-edges", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
-		if err := requireQuery(r, map[string]bool{"ref": true, "cursor": true, "limit": true, "groupState": true, "expanded": true, "collapsed": true}); err != nil {
+		if err := requireQuery(r, map[string]bool{"ref": true, "cursor": true, "limit": true, "focus": true, "groupState": true, "expanded": true, "collapsed": true, "snapshotRef": true}); err != nil {
 			return err
 		}
 		ref, err := queryString(r, "ref", 128)
@@ -409,6 +571,14 @@ func registerExplorerAPI(mux *http.ServeMux, svc *service.Service, cache *explor
 			return err
 		}
 		limit, err := queryInt(r, "limit", maxAggregateEdgePage, 1, maxAggregateEdgePage)
+		if err != nil {
+			return err
+		}
+		focus, err := queryString(r, "focus", 4096)
+		if err != nil {
+			return err
+		}
+		boundSnapshot, err := queryString(r, "snapshotRef", 128)
 		if err != nil {
 			return err
 		}
@@ -428,7 +598,19 @@ func registerExplorerAPI(mux *http.ServeMux, svc *service.Service, cache *explor
 		if err != nil {
 			return err
 		}
-		value, err := buildAggregateEdgePage(state, ref, cursor, limit, groupState, expanded, collapsed)
+		snapshotRef := explorerSnapshotRef(state)
+		if cursor > 0 && boundSnapshot == "" {
+			return clientError(http.StatusConflict, "aggregate edge pagination requires snapshotRef")
+		}
+		if boundSnapshot != "" && boundSnapshot != snapshotRef {
+			return clientError(http.StatusConflict, "aggregate edge snapshot is stale; reload project-map")
+		}
+		if boundSnapshot != "" {
+			if err := requireCurrentSnapshot(svc, state, "aggregate edge"); err != nil {
+				return err
+			}
+		}
+		value, err := buildAggregateEdgePage(state, ref, cursor, limit, focus, groupState, expanded, collapsed)
 		return writeAPIResult(w, value, err)
 	}))
 	mux.HandleFunc("/api/v1/history", apiEndpoint(func(w http.ResponseWriter, r *http.Request) error {
@@ -465,6 +647,53 @@ func registerExplorerAPI(mux *http.ServeMux, svc *service.Service, cache *explor
 		value, err := buildOperations(state, limit)
 		return writeAPIResult(w, value, err)
 	}))
+}
+
+func explorerSnapshotRef(state domain.State) string {
+	digest := sha256.Sum256([]byte("dagrail-ui-snapshot-v1\x00" + state.ProjectID + "\x00" + state.HeadHash + "\x00" + state.GraphRevision))
+	return "snapshot:" + hex.EncodeToString(digest[:])
+}
+
+func locateState(state domain.State, query string, limit int) []LocateResult {
+	if state.Graph == nil {
+		return []LocateResult{}
+	}
+	needle := strings.ToLower(strings.TrimSpace(query))
+	groups := map[string]domain.GroupDefinition{}
+	for _, group := range state.Graph.Spec.Groups {
+		groups[group.ID] = group
+	}
+	path := func(groupID string) []string {
+		values := []string{}
+		for current := groupID; current != ""; current = groups[current].ParentGroupID {
+			values = append(values, current)
+		}
+		for left, right := 0, len(values)-1; left < right; left, right = left+1, right-1 {
+			values[left], values[right] = values[right], values[left]
+		}
+		return values
+	}
+	results := []LocateResult{}
+	for _, group := range state.Graph.Spec.Groups {
+		if strings.Contains(strings.ToLower(group.ID+"\x00"+group.Title+"\x00"+group.Kind), needle) {
+			results = append(results, LocateResult{Ref: "group:" + group.ID, Kind: "group", ID: group.ID, Title: group.Title, AncestorPath: path(group.ParentGroupID)})
+		}
+	}
+	for _, node := range state.Graph.Spec.Nodes {
+		if strings.Contains(strings.ToLower(node.ID+"\x00"+node.Title+"\x00"+node.Kind+"\x00"+node.Role), needle) {
+			results = append(results, LocateResult{Ref: "node:" + node.ID, Kind: "node", ID: node.ID, Title: node.Title, AncestorPath: path(node.GroupID)})
+		}
+	}
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Kind == results[j].Kind {
+			return results[i].ID < results[j].ID
+		}
+		return results[i].Kind < results[j].Kind
+	})
+	if len(results) > limit {
+		results = results[:limit]
+	}
+	return results
 }
 
 type endpointFunc func(http.ResponseWriter, *http.Request) error
@@ -631,6 +860,10 @@ func buildTopology(state domain.State, filter nodeFilter, focus string, depth, l
 }
 
 func buildSummaryTopology(state domain.State, filter nodeFilter, focus string, depth, limit int, groupState string, expandedIDs, collapsedIDs []string) (TopologyPage, error) {
+	return buildSummaryTopologyPage(state, filter, focus, depth, limit, 0, groupState, expandedIDs, collapsedIDs)
+}
+
+func buildSummaryTopologyPage(state domain.State, filter nodeFilter, focus string, depth, limit, cursor int, groupState string, expandedIDs, collapsedIDs []string) (TopologyPage, error) {
 	if state.Graph == nil {
 		return TopologyPage{APIVersion: explorerAPIVersion, Mode: "summary", Depth: depth, Nodes: []NodeView{}, Edges: []domain.EdgeDefinition{}, Groups: []GroupView{}, AggregateEdges: []AggregateEdgeView{}}, nil
 	}
@@ -642,18 +875,8 @@ func buildSummaryTopology(state domain.State, filter nodeFilter, focus string, d
 	if err != nil {
 		return TopologyPage{}, err
 	}
-	if focus != "" {
-		if group, ok := groups[focus]; ok {
-			for current := group.ParentGroupID; current != ""; current = groups[current].ParentGroupID {
-				overrides[current] = true
-			}
-		} else if node, ok := state.NodeDefinition(focus); ok {
-			for current := node.GroupID; current != ""; current = groups[current].ParentGroupID {
-				overrides[current] = true
-			}
-		} else {
-			return TopologyPage{}, clientError(http.StatusNotFound, "unknown focus group or node")
-		}
+	if err := expandFocusAncestors(state, focus, overrides); err != nil {
+		return TopologyPage{}, err
 	}
 	projection, err := grouping.Build(state, overrides)
 	if err != nil {
@@ -695,9 +918,14 @@ func buildSummaryTopology(state domain.State, filter nodeFilter, focus string, d
 		}
 	}
 	total := len(visibleNodeIDs)
-	if len(visibleNodeIDs) > limit {
-		visibleNodeIDs = visibleNodeIDs[:limit]
+	if cursor > total {
+		return TopologyPage{}, clientError(http.StatusBadRequest, "group member cursor exceeds result")
 	}
+	end := cursor + limit
+	if end > total {
+		end = total
+	}
+	visibleNodeIDs = visibleNodeIDs[cursor:end]
 	views := viewsForOrderedIDs(state, visibleNodeIDs)
 	expanded := []string{}
 	for _, summary := range projection.Groups {
@@ -707,9 +935,14 @@ func buildSummaryTopology(state domain.State, filter nodeFilter, focus string, d
 	}
 	sort.Strings(expanded)
 	aggregateEdges, aggregatePage, aggregateRef := aggregateEdgeIndex(projection, 0, maxAggregateEdgePage)
+	page := PageInfo{Cursor: cursor, Limit: limit, Total: total, Truncated: end < total}
+	if end < total {
+		next := end
+		page.NextCursor = &next
+	}
 	return TopologyPage{
 		APIVersion: explorerAPIVersion, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence,
-		Mode: "summary", Focus: focus, Depth: depth, Page: PageInfo{Cursor: 0, Limit: limit, Total: total, Truncated: len(views) < total},
+		Mode: "summary", Focus: focus, Depth: depth, Page: page,
 		Nodes: views, Edges: []domain.EdgeDefinition{}, Groups: groupViews, Lanes: filterLanes(projection.Lanes, groupViews, views), AggregateEdges: aggregateEdges,
 		AggregateEdgePage: &aggregatePage, AggregateEdgeIndexRef: aggregateRef,
 		ExpandedGroupIDs: expanded, MembershipDigest: projection.MembershipDigest, ProjectionDigest: projection.ProjectionDigest,
@@ -778,12 +1011,15 @@ func buildGroupEdgePage(state domain.State, ref string, cursor, limit int, group
 	return GroupEdgePage{}, clientError(http.StatusNotFound, "group edge ref is stale or unknown")
 }
 
-func buildAggregateEdgePage(state domain.State, ref string, cursor, limit int, groupState string, expandedIDs, collapsedIDs []string) (AggregateEdgePage, error) {
+func buildAggregateEdgePage(state domain.State, ref string, cursor, limit int, focus, groupState string, expandedIDs, collapsedIDs []string) (AggregateEdgePage, error) {
 	if state.Graph == nil {
 		return AggregateEdgePage{}, clientError(http.StatusNotFound, "aggregate edge index ref is unavailable")
 	}
 	overrides, err := groupOverrides(state.Graph, groupState, expandedIDs, collapsedIDs)
 	if err != nil {
+		return AggregateEdgePage{}, err
+	}
+	if err := expandFocusAncestors(state, focus, overrides); err != nil {
 		return AggregateEdgePage{}, err
 	}
 	projection, err := grouping.Build(state, overrides)
@@ -794,11 +1030,33 @@ func buildAggregateEdgePage(state domain.State, ref string, cursor, limit int, g
 	if ref != expectedRef {
 		return AggregateEdgePage{}, clientError(http.StatusNotFound, "aggregate edge index ref is stale or unknown")
 	}
-	if cursor > len(projection.AggregateEdges) {
+	edges := projection.AggregateEdges
+	if focus != "" {
+		focusRefs := aggregateFocusRefs(state, projection, focus)
+		filtered := edges[:0:0]
+		for _, edge := range edges {
+			if focusRefs[edge.FromRef] || focusRefs[edge.ToRef] {
+				filtered = append(filtered, edge)
+			}
+		}
+		edges = filtered
+	}
+	if cursor > len(edges) {
 		return AggregateEdgePage{}, clientError(http.StatusBadRequest, "aggregate edge cursor exceeds result")
 	}
-	edges, page, _ := aggregateEdgeIndex(projection, cursor, limit)
-	return AggregateEdgePage{APIVersion: explorerAPIVersion, GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Ref: ref, Page: page, AggregateEdges: edges}, nil
+	pageEdges, page := aggregateEdgeViews(edges, cursor, limit)
+	return AggregateEdgePage{APIVersion: explorerAPIVersionV3, ReadOnly: true, SnapshotRef: explorerSnapshotRef(state), GraphRevision: state.GraphRevision, HeadSequence: state.HeadSequence, Ref: ref, Page: page, AggregateEdges: pageEdges, FocusRef: focus}, nil
+}
+
+func requireCurrentSnapshot(svc *service.Service, state domain.State, surface string) error {
+	currentHead, err := svc.Journal.InspectHead()
+	if err != nil {
+		return err
+	}
+	if currentHead.Sequence != state.HeadSequence || currentHead.Hash != state.HeadHash {
+		return clientError(http.StatusConflict, surface+" snapshot is stale; reload project-map")
+	}
+	return nil
 }
 
 func groupOverrides(graph *domain.GraphDefinition, groupState string, expandedIDs, collapsedIDs []string) (map[string]bool, error) {
@@ -833,8 +1091,77 @@ func groupOverrides(graph *domain.GraphDefinition, groupState string, expandedID
 	return overrides, nil
 }
 
+func expandFocusAncestors(state domain.State, focus string, overrides map[string]bool) error {
+	if focus == "" || state.Graph == nil {
+		return nil
+	}
+	groups := map[string]domain.GroupDefinition{}
+	for _, group := range state.Graph.Spec.Groups {
+		groups[group.ID] = group
+	}
+	current := ""
+	if group, ok := groups[focus]; ok {
+		current = group.ParentGroupID
+	} else if node, ok := state.NodeDefinition(focus); ok {
+		current = node.GroupID
+	} else {
+		return clientError(http.StatusNotFound, "unknown focus group or node")
+	}
+	for current != "" {
+		overrides[current] = true
+		current = groups[current].ParentGroupID
+	}
+	return nil
+}
+
+func aggregateFocusRefs(state domain.State, projection grouping.Projection, focus string) map[string]bool {
+	refs := map[string]bool{"group:" + focus: true, "node:" + focus: true}
+	if state.Graph == nil {
+		return refs
+	}
+	groups := map[string]domain.GroupDefinition{}
+	for _, group := range state.Graph.Spec.Groups {
+		groups[group.ID] = group
+	}
+	if _, ok := groups[focus]; !ok {
+		return refs
+	}
+	within := func(groupID string) bool {
+		for current := groupID; current != ""; current = groups[current].ParentGroupID {
+			if current == focus {
+				return true
+			}
+		}
+		return false
+	}
+	for _, groupID := range projection.VisibleGroupIDs {
+		if within(groupID) {
+			refs["group:"+groupID] = true
+		}
+	}
+	visibleNodes := map[string]bool{}
+	for _, nodeID := range projection.VisibleNodes {
+		visibleNodes[nodeID] = true
+	}
+	for _, node := range state.Graph.Spec.Nodes {
+		if visibleNodes[node.ID] && within(node.GroupID) {
+			refs["node:"+node.ID] = true
+		}
+	}
+	return refs
+}
+
 func aggregateEdgeIndex(projection grouping.Projection, cursor, limit int) ([]AggregateEdgeView, PageInfo, string) {
-	total := len(projection.AggregateEdges)
+	edges, page := aggregateEdgeViews(projection.AggregateEdges, cursor, limit)
+	ref := ""
+	if len(projection.AggregateEdges) > 0 {
+		ref = aggregateEdgeIndexRef(projection)
+	}
+	return edges, page, ref
+}
+
+func aggregateEdgeViews(source []grouping.AggregateEdge, cursor, limit int) ([]AggregateEdgeView, PageInfo) {
+	total := len(source)
 	if cursor > total {
 		cursor = total
 	}
@@ -848,14 +1175,63 @@ func aggregateEdgeIndex(projection grouping.Projection, cursor, limit int) ([]Ag
 		page.NextCursor = &next
 	}
 	edges := make([]AggregateEdgeView, 0, end-cursor)
-	for _, edge := range projection.AggregateEdges[cursor:end] {
+	for _, edge := range source[cursor:end] {
 		edges = append(edges, AggregateEdgeView{FromRef: edge.FromRef, ToRef: edge.ToRef, PredicateKind: edge.PredicateKind, OutcomeClass: edge.OutcomeClass, Count: edge.Count, EdgeDigest: edge.EdgeDigest, InspectRef: edge.InspectRef})
 	}
-	ref := ""
-	if total > 0 {
-		ref = aggregateEdgeIndexRef(projection)
+	return edges, page
+}
+
+func projectBackboneEdges(projection grouping.Projection, limit int) []AggregateEdgeView {
+	if limit <= 0 || len(projection.AggregateEdges) == 0 {
+		return []AggregateEdgeView{}
 	}
-	return edges, page, ref
+	selected := make([]bool, len(projection.AggregateEdges))
+	parent := map[string]string{}
+	var find func(string) string
+	find = func(value string) string {
+		if parent[value] == "" {
+			parent[value] = value
+		}
+		if parent[value] != value {
+			parent[value] = find(parent[value])
+		}
+		return parent[value]
+	}
+	union := func(left, right string) bool {
+		left, right = find(left), find(right)
+		if left == right {
+			return false
+		}
+		parent[right] = left
+		return true
+	}
+	count := 0
+	for index, edge := range projection.AggregateEdges {
+		if union(edge.FromRef, edge.ToRef) {
+			selected[index] = true
+			count++
+			if count == limit {
+				break
+			}
+		}
+	}
+	for index := range projection.AggregateEdges {
+		if count == limit {
+			break
+		}
+		if !selected[index] {
+			selected[index] = true
+			count++
+		}
+	}
+	result := make([]AggregateEdgeView, 0, count)
+	for index, edge := range projection.AggregateEdges {
+		if !selected[index] {
+			continue
+		}
+		result = append(result, AggregateEdgeView{FromRef: edge.FromRef, ToRef: edge.ToRef, PredicateKind: edge.PredicateKind, OutcomeClass: edge.OutcomeClass, Count: edge.Count, EdgeDigest: edge.EdgeDigest, InspectRef: edge.InspectRef})
+	}
+	return result
 }
 
 func aggregateEdgeIndexRef(projection grouping.Projection) string {

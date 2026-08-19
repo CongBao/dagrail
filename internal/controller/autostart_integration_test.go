@@ -1,0 +1,136 @@
+package controller_test
+
+import (
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+func TestTwentyConcurrentCLIStartsConvergeOnOneDaemon(t *testing.T) {
+	root := t.TempDir()
+	binary := filepath.Join(root, "dagrail")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	build := exec.Command("go", "build", "-o", binary, "../../cmd/dagrail")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build integration runtime: %v: %s", err, output)
+	}
+	environment := withEnvironment(os.Environ(), "DAGRAIL_HOME", filepath.Join(root, "runtime"))
+	cacheRoot := filepath.Join(root, "cache")
+	switch runtime.GOOS {
+	case "windows":
+		environment = withEnvironment(environment, "LOCALAPPDATA", cacheRoot)
+	case "darwin":
+		environment = withEnvironment(environment, "HOME", filepath.Join(root, "home"))
+	default:
+		environment = withEnvironment(environment, "XDG_CACHE_HOME", cacheRoot)
+	}
+	t.Cleanup(func() {
+		command := exec.Command(binary, "daemon", "stop")
+		command.Env = environment
+		_, _ = command.CombinedOutput()
+	})
+	type result struct {
+		PID           int    `json:"pid"`
+		DataNamespace string `json:"dataNamespace"`
+	}
+	results := make(chan result, 20)
+	errors := make(chan []byte, 20)
+	var wait sync.WaitGroup
+	for range 20 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			command := exec.Command(binary, "daemon", "start")
+			command.Env = environment
+			output, err := command.CombinedOutput()
+			if err != nil {
+				errors <- append([]byte(err.Error()+": "), output...)
+				return
+			}
+			var status result
+			if err := json.Unmarshal(output, &status); err != nil || status.PID <= 0 {
+				errors <- output
+				return
+			}
+			results <- status
+		}()
+	}
+	wait.Wait()
+	close(results)
+	close(errors)
+	for failure := range errors {
+		t.Fatalf("concurrent daemon start failed: %s", failure)
+	}
+	pids := map[int]bool{}
+	var first result
+	for status := range results {
+		if status.DataNamespace == "" {
+			t.Fatal("controller omitted its authority-data namespace digest")
+		}
+		if first.PID == 0 {
+			first = status
+		} else if status.DataNamespace != first.DataNamespace {
+			t.Fatalf("concurrent clients observed different namespaces: %q != %q", status.DataNamespace, first.DataNamespace)
+		}
+		pids[status.PID] = true
+	}
+	if len(pids) != 1 {
+		t.Fatalf("concurrent automatic starts produced %d daemons: %v", len(pids), pids)
+	}
+	// A singleton daemon may manage many Projects, but it must not reinterpret
+	// one locator through a different DAGRAIL_HOME. The client therefore drains
+	// and replaces the process when its authority-data namespace changes.
+	environmentB := withEnvironment(environment, "DAGRAIL_HOME", filepath.Join(root, "runtime-b"))
+	restart := exec.Command(binary, "daemon", "start")
+	restart.Env = environmentB
+	restartOutput, err := restart.CombinedOutput()
+	if err != nil {
+		t.Fatalf("restart daemon for data namespace: %v: %s", err, restartOutput)
+	}
+	var restarted result
+	if err := json.Unmarshal(restartOutput, &restarted); err != nil || restarted.PID <= 0 || restarted.DataNamespace == "" {
+		t.Fatalf("decode namespace restart: %v %s", err, restartOutput)
+	}
+	if restarted.PID == first.PID {
+		t.Fatalf("data namespace change reused daemon pid %d", restarted.PID)
+	}
+	environment = environmentB
+	stop := exec.Command(binary, "daemon", "stop")
+	stop.Env = environment
+	if output, err := stop.CombinedOutput(); err != nil {
+		t.Fatalf("stop daemon: %v: %s", err, output)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		status := exec.Command(binary, "daemon", "status")
+		status.Env = environment
+		output, err := status.CombinedOutput()
+		if err == nil {
+			var value map[string]any
+			if json.Unmarshal(output, &value) == nil && value["running"] == false {
+				return
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("daemon did not finish its drain after stop")
+}
+
+func withEnvironment(environment []string, key, value string) []string {
+	prefix := key + "="
+	filtered := make([]string, 0, len(environment)+1)
+	for _, entry := range environment {
+		if !strings.HasPrefix(entry, prefix) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return append(filtered, prefix+value)
+}

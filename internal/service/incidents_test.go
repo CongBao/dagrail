@@ -128,6 +128,9 @@ func TestEffectIncidentContextCancellationWhileWaitingDoesNotCommit(t *testing.T
 	if err != nil || prepared.Status != "unknown" {
 		t.Fatalf("manual Effect did not open an Incident: %+v %v", prepared, err)
 	}
+	if prepared.Continuation.SafeToWait || prepared.Continuation.Owner != "agent" || !contains(prepared.Continuation.ReasonCodes, "effect_pending") || !contains(prepared.Continuation.ReasonCodes, "incident_open") {
+		t.Fatalf("unknown Effect continuation was not actionable: %+v", prepared.Continuation)
+	}
 	incidentID := "effect:" + prepared.ActionID
 	release, err := svc.acquireEffectReconcileLock(context.Background(), prepared.ActionID)
 	if err != nil {

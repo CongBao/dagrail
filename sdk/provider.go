@@ -114,6 +114,13 @@ type EffectAdapter interface {
 	Reconcile(context.Context, EffectRequest, PreparedEffect, json.RawMessage) (EffectReceipt, error)
 }
 
+// OperationBudgetProvider optionally publishes a conservative upper bound for
+// one external provider operation. DAGrail uses it only for lease admission;
+// it never extends a Role lease or schedules the operation autonomously.
+type OperationBudgetProvider interface {
+	RequiredLeaseSeconds(operation string) int
+}
+
 type HarnessCapabilities struct {
 	ContextHook bool `json:"contextHook"`
 	Dispatch    bool `json:"dispatch"`

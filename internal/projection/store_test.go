@@ -95,6 +95,41 @@ func TestConcurrentOpenSerializesProjectionMigration(t *testing.T) {
 	}
 }
 
+func TestSealedSnapshotCheckpointBindsProjectedStateAndOwnerSecret(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataDir, "action-secret"), bytes.Repeat([]byte{0x42}, 32), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := domain.NewState("11111111-1111-4111-8111-111111111111")
+	if err := store.Sync(state, nil); err != nil {
+		t.Fatal(err)
+	}
+	report, err := store.VerifyCheckpoint()
+	if err != nil || !report.Present || !report.Valid || report.ProjectID != state.ProjectID {
+		t.Fatalf("checkpoint report = %+v, %v", report, err)
+	}
+	restored, prefix, restoredReport, err := store.RestoreCheckpoint()
+	if err != nil || !restoredReport.Valid || restored.ProjectID != state.ProjectID || len(prefix.Segments) != 0 || !prefix.Incremental {
+		t.Fatalf("restored checkpoint = state=%+v prefix=%+v report=%+v err=%v", restored, prefix, restoredReport, err)
+	}
+	path := filepath.Join(dataDir, "verified-snapshot-checkpoint.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[len(raw)/2] ^= 1
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if report, err := store.VerifyCheckpoint(); err == nil || !report.Present || report.Valid {
+		t.Fatalf("tampered checkpoint accepted: %+v, %v", report, err)
+	}
+}
+
 func TestOpenMigratesV2ProjectionAndPreservesCursor(t *testing.T) {
 	dataDir := t.TempDir()
 	path := filepath.Join(dataDir, "projection.sqlite")

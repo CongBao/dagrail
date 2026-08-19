@@ -501,12 +501,13 @@ func runHistorical(t *testing.T, binary, dataRoot string, args ...string) string
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	command := exec.CommandContext(ctx, binary, args...)
-	command.Env = append(os.Environ(), "DAGRAIL_HOME="+dataRoot)
+	command.Env = historicalEnvironment(dataRoot)
 	output := &boundedBuffer{remaining: 64 * 1024}
 	command.Stdout, command.Stderr = output, output
 	if err := command.Run(); err != nil {
 		t.Fatalf("%s %s: %v: %s", binary, strings.Join(args, " "), err, output.String())
 	}
+	registerHistoricalDaemonCleanup(t, binary, dataRoot)
 	return output.String()
 }
 
@@ -515,11 +516,30 @@ func runHistoricalFailure(t *testing.T, binary, dataRoot string, args ...string)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	command := exec.CommandContext(ctx, binary, args...)
-	command.Env = append(os.Environ(), "DAGRAIL_HOME="+dataRoot)
+	command.Env = historicalEnvironment(dataRoot)
 	output := &boundedBuffer{remaining: 64 * 1024}
 	command.Stdout, command.Stderr = output, output
 	if err := command.Run(); err == nil {
 		t.Fatalf("%s %s unexpectedly succeeded: %s", binary, strings.Join(args, " "), output.String())
 	}
+	registerHistoricalDaemonCleanup(t, binary, dataRoot)
 	return output.String()
+}
+
+func historicalEnvironment(dataRoot string) []string {
+	return append(os.Environ(),
+		"DAGRAIL_HOME="+dataRoot,
+		"DAGRAIL_TEST_CONTROLLER_DIR="+filepath.Join(dataRoot, "controller"),
+	)
+}
+
+func registerHistoricalDaemonCleanup(t *testing.T, binary, dataRoot string) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		command := exec.CommandContext(ctx, binary, "daemon", "stop")
+		command.Env = historicalEnvironment(dataRoot)
+		_, _ = command.CombinedOutput()
+	})
 }

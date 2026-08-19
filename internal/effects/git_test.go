@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/CongBao/dagrail/internal/cli"
 )
@@ -76,8 +77,22 @@ func TestGitMergeEffectCreatesOneAuditableMergeAndReconcilesWithoutRepeating(t *
 	if err := json.Unmarshal([]byte(resultRaw), &result); err != nil {
 		t.Fatal(err)
 	}
+	if result.Status != "confirmed" && result.Status != "dispatched" {
+		t.Fatalf("merge was neither confirmed nor transferred to the daemon outbox: %s", resultRaw)
+	}
+	if result.Status == "dispatched" {
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			observed, inspectErr := run("inspect", "--root", root, "effect:"+result.ActionID)
+			if inspectErr == nil && strings.Contains(observed, `"status":"confirmed"`) {
+				result.Status = "confirmed"
+				break
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
 	if result.Status != "confirmed" {
-		t.Fatalf("merge was not confirmed: %s", resultRaw)
+		t.Fatalf("daemon did not confirm the authorized merge effect")
 	}
 	mergeCommit := strings.TrimSpace(git(t, root, "rev-parse", "HEAD"))
 	parents := strings.Fields(strings.TrimSpace(git(t, root, "show", "-s", "--format=%P", "HEAD")))
