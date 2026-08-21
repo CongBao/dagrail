@@ -137,6 +137,23 @@ func (server *Server) Handler() http.Handler {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
+		request.Body = http.MaxBytesReader(w, request.Body, 16*1024)
+		decoder := json.NewDecoder(request.Body)
+		decoder.DisallowUnknownFields()
+		var input StopRequest
+		if err := decoder.Decode(&input); err != nil {
+			writeResponse(w, http.StatusBadRequest, ExecuteResponse{APIVersion: APIVersion, Error: "invalid controller stop request: " + err.Error(), ErrorCode: "invalid_request"})
+			return
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			writeResponse(w, http.StatusBadRequest, ExecuteResponse{APIVersion: APIVersion, Error: "controller stop request contains trailing content", ErrorCode: "invalid_request"})
+			return
+		}
+		if code, status, err := validateStopRequest(input, server.status()); err != nil {
+			writeResponse(w, status, ExecuteResponse{APIVersion: APIVersion, Error: err.Error(), ErrorCode: code, Hint: "Use the canonical installed DAGrail runtime; retained older binaries may inspect historical artifacts offline but cannot replace a newer live controller."})
+			return
+		}
 		server.draining.Store(true)
 		if server.uiStop != nil {
 			stopCtx, cancel := context.WithTimeout(request.Context(), 3*time.Second)
@@ -189,6 +206,33 @@ func (server *Server) Handler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		mux.ServeHTTP(w, request)
 	})
+}
+
+func validateStopRequest(input StopRequest, status Status) (string, int, error) {
+	switch input.Reason {
+	case "shutdown":
+		if input.TargetVersion != "" || input.TargetDataNamespace != "" {
+			return "invalid_request", http.StatusBadRequest, fmt.Errorf("explicit shutdown cannot name a replacement target")
+		}
+		return "", 0, nil
+	case "replace", "restart":
+		if input.TargetVersion == "" || input.TargetDataNamespace == "" {
+			return "invalid_request", http.StatusBadRequest, fmt.Errorf("controller %s requires targetVersion and targetDataNamespace", input.Reason)
+		}
+		comparison, valid := compareSemanticVersions(input.TargetVersion, status.Version)
+		if !valid {
+			return "controller_version_incompatible", http.StatusConflict, fmt.Errorf("replacement version %q cannot be safely compared with running version %q", input.TargetVersion, status.Version)
+		}
+		if comparison < 0 {
+			return "controller_downgrade_rejected", http.StatusConflict, fmt.Errorf("controller %s refuses replacement by older version %s", status.Version, input.TargetVersion)
+		}
+		if input.Reason == "replace" && comparison == 0 && input.TargetDataNamespace == status.DataNamespace {
+			return "controller_already_current", http.StatusConflict, fmt.Errorf("controller already serves version %s and the requested data namespace", status.Version)
+		}
+		return "", 0, nil
+	default:
+		return "invalid_request", http.StatusBadRequest, fmt.Errorf("controller stop reason must be shutdown, restart, or replace")
+	}
 }
 
 func classifyOperationError(err error) (string, string) {

@@ -124,6 +124,72 @@ func TestTwentyConcurrentCLIStartsConvergeOnOneDaemon(t *testing.T) {
 	t.Fatal("daemon did not finish its drain after stop")
 }
 
+func TestOlderCLIRestartCannotDowngradeNewerDaemon(t *testing.T) {
+	root := t.TempDir()
+	buildVersion := func(name, release string) string {
+		binary := filepath.Join(root, name)
+		if runtime.GOOS == "windows" {
+			binary += ".exe"
+		}
+		build := exec.Command("go", "build", "-ldflags", "-X github.com/CongBao/dagrail/internal/version.Version="+release, "-o", binary, "../../cmd/dagrail")
+		if output, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("build %s integration runtime: %v: %s", release, err, output)
+		}
+		return binary
+	}
+	older := buildVersion("dagrail-older", "0.26.3")
+	newer := buildVersion("dagrail-newer", "0.26.4")
+	environment := withEnvironment(os.Environ(), "DAGRAIL_HOME", filepath.Join(root, "runtime"))
+	switch runtime.GOOS {
+	case "windows":
+		environment = withEnvironment(environment, "LOCALAPPDATA", filepath.Join(root, "cache"))
+	case "darwin":
+		environment = withEnvironment(environment, "HOME", filepath.Join(root, "home"))
+	default:
+		environment = withEnvironment(environment, "XDG_CACHE_HOME", filepath.Join(root, "cache"))
+	}
+	t.Cleanup(func() {
+		command := exec.Command(newer, "daemon", "stop")
+		command.Env = environment
+		_, _ = command.CombinedOutput()
+	})
+
+	start := exec.Command(newer, "daemon", "start")
+	start.Env = environment
+	startOutput, err := start.CombinedOutput()
+	if err != nil {
+		t.Fatalf("start newer daemon: %v: %s", err, startOutput)
+	}
+	var before struct {
+		Version string `json:"version"`
+		PID     int    `json:"pid"`
+	}
+	if err := json.Unmarshal(startOutput, &before); err != nil || before.Version != "0.26.4" || before.PID <= 0 {
+		t.Fatalf("decode newer daemon status: err=%v output=%s", err, startOutput)
+	}
+
+	restart := exec.Command(older, "daemon", "restart")
+	restart.Env = environment
+	restartOutput, restartErr := restart.CombinedOutput()
+	if restartErr == nil || !strings.Contains(string(restartOutput), "refuses replacement by older version") {
+		t.Fatalf("older restart was not rejected: err=%v output=%s", restartErr, restartOutput)
+	}
+
+	status := exec.Command(newer, "daemon", "status")
+	status.Env = environment
+	statusOutput, err := status.CombinedOutput()
+	if err != nil {
+		t.Fatalf("query newer daemon after rejected restart: %v: %s", err, statusOutput)
+	}
+	var after struct {
+		Version string `json:"version"`
+		PID     int    `json:"pid"`
+	}
+	if err := json.Unmarshal(statusOutput, &after); err != nil || after.Version != before.Version || after.PID != before.PID {
+		t.Fatalf("rejected restart changed the newer daemon: before=%+v after=%+v err=%v output=%s", before, after, err, statusOutput)
+	}
+}
+
 func withEnvironment(environment []string, key, value string) []string {
 	prefix := key + "="
 	filtered := make([]string, 0, len(environment)+1)

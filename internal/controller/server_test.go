@@ -4,14 +4,107 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/CongBao/dagrail/internal/version"
 )
+
+func TestControllerStopRejectsLegacyAndDowngradeRequests(t *testing.T) {
+	server := NewServer(func(context.Context, []string, io.Reader, io.Writer, io.Writer) error { return nil }, "test")
+	handler := server.Handler()
+
+	legacy := httptest.NewRecorder()
+	handler.ServeHTTP(legacy, httptest.NewRequest(http.MethodPost, "/v1/stop", strings.NewReader(`{}`)))
+	if legacy.Code != http.StatusBadRequest || server.draining.Load() {
+		t.Fatalf("legacy empty stop request was accepted: status=%d draining=%v body=%s", legacy.Code, server.draining.Load(), legacy.Body.String())
+	}
+
+	downgrade := httptest.NewRecorder()
+	handler.ServeHTTP(downgrade, httptest.NewRequest(http.MethodPost, "/v1/stop", strings.NewReader(`{"reason":"replace","targetVersion":"0.1.0","targetDataNamespace":"replacement"}`)))
+	if downgrade.Code != http.StatusConflict || server.draining.Load() {
+		t.Fatalf("daemon downgrade was accepted: status=%d draining=%v body=%s", downgrade.Code, server.draining.Load(), downgrade.Body.String())
+	}
+	var failure ExecuteResponse
+	if err := json.Unmarshal(downgrade.Body.Bytes(), &failure); err != nil || failure.ErrorCode != "controller_downgrade_rejected" {
+		t.Fatalf("downgrade diagnostic was not structured: err=%v response=%+v", err, failure)
+	}
+}
+
+func TestControllerStopAcceptsExplicitShutdownAndForwardReplacement(t *testing.T) {
+	for name, body := range map[string]string{
+		"shutdown":             `{"reason":"shutdown"}`,
+		"forward replacement":  `{"reason":"replace","targetVersion":"99.0.0","targetDataNamespace":"replacement"}`,
+		"same version restart": `{"reason":"restart","targetVersion":"` + version.Version + `","targetDataNamespace":"test"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := NewServer(func(context.Context, []string, io.Reader, io.Writer, io.Writer) error { return nil }, "test")
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/stop", strings.NewReader(body)))
+			if response.Code != http.StatusOK || !server.draining.Load() {
+				t.Fatalf("authorized stop failed: status=%d draining=%v body=%s", response.Code, server.draining.Load(), response.Body.String())
+			}
+		})
+	}
+}
+
+func TestControllerRestartRejectsOlderClient(t *testing.T) {
+	server := NewServer(func(context.Context, []string, io.Reader, io.Writer, io.Writer) error { return nil }, "test")
+	original := version.Version
+	version.Version = "0.26.4"
+	t.Cleanup(func() { version.Version = original })
+
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/stop", strings.NewReader(`{"reason":"restart","targetVersion":"0.26.3","targetDataNamespace":"test"}`)))
+	if response.Code != http.StatusConflict || server.draining.Load() {
+		t.Fatalf("older restart stopped a newer daemon: status=%d draining=%v body=%s", response.Code, server.draining.Load(), response.Body.String())
+	}
+	var failure ExecuteResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &failure); err != nil || failure.ErrorCode != "controller_downgrade_rejected" {
+		t.Fatalf("restart downgrade diagnostic was not structured: err=%v response=%+v", err, failure)
+	}
+}
+
+func TestCompareSemanticVersions(t *testing.T) {
+	for _, test := range []struct {
+		left, right string
+		want        int
+		valid       bool
+	}{
+		{"0.26.2", "0.26.3", -1, true},
+		{"1.0.0", "1.0.0", 0, true},
+		{"2.0.0", "1.99.99", 1, true},
+		{"1.0.0-alpha.2", "1.0.0-alpha.10", -1, true},
+		{"1.0.0-rc.1", "1.0.0", -1, true},
+		{"not-a-version", "1.0.0", 0, false},
+	} {
+		got, valid := compareSemanticVersions(test.left, test.right)
+		if got != test.want || valid != test.valid {
+			t.Fatalf("compare(%q, %q) = (%d, %v), want (%d, %v)", test.left, test.right, got, valid, test.want, test.valid)
+		}
+	}
+}
+
+func TestOlderClientCannotReplaceNewerController(t *testing.T) {
+	original := version.Version
+	version.Version = "0.26.3"
+	t.Cleanup(func() { version.Version = original })
+	err := rejectControllerDowngrade("0.27.0")
+	var remote *RPCError
+	if !errors.As(err, &remote) || remote.Code != "client_outdated" {
+		t.Fatalf("newer controller did not produce client_outdated: %T %v", err, err)
+	}
+	if err := rejectControllerDowngrade("0.26.2"); err != nil {
+		t.Fatalf("forward controller upgrade was rejected: %v", err)
+	}
+}
 
 func TestResolveCallerRootPreservesClientWorkingDirectory(t *testing.T) {
 	cwd := filepath.Join(string(filepath.Separator), "workspace", "client")

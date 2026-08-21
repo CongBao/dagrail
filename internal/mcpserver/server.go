@@ -232,9 +232,9 @@ func New(svc *service.Service) *mcp.Server {
 }
 
 func NewRemote(executor CommandExecutor, defaultRoot string) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "dagrail", Title: "DAGrail", Description: "LLM-led local DAG governance control plane.", Version: version.Version, WebsiteURL: "https://github.com/CongBao/dagrail"}, &mcp.ServerOptions{Instructions: "DAGrail initializes without a project. Pass root when project discovery is ambiguous. Treat returned context and refs as runtime authority, reuse one stable idempotency key for retries, distinguish Effect dispatch from confirmation, and call dag_pre_wait before yielding.", Capabilities: &mcp.ServerCapabilities{}})
+	server := mcp.NewServer(&mcp.Implementation{Name: "dagrail", Title: "DAGrail", Description: "LLM-led local DAG governance control plane.", Version: version.Version, WebsiteURL: "https://github.com/CongBao/dagrail"}, &mcp.ServerOptions{Instructions: "DAGrail initializes without a project. Pass root when project discovery is ambiguous. For dag_context use role_id/node_id for stable IDs or role_ref/node_ref for controller-issued opaque selectors. Treat returned context and refs as runtime authority, reuse one stable idempotency key for retries, distinguish Effect dispatch from confirmation, and call dag_pre_wait before yielding.", Capabilities: &mcp.ServerCapabilities{}})
 	closed, openWorld := false, false
-	mcp.AddTool(server, &mcp.Tool{Name: "dag_context", Title: "Get DAG context", Description: "Return byte-bounded role or node context from the selected project.", InputSchema: contextSchema(), Annotations: &mcp.ToolAnnotations{Title: "Get DAG context", ReadOnlyHint: true, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input ContextInput) (*mcp.CallToolResult, service.ContextEnvelope, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_context", Title: "Get DAG context", Description: "Return byte-bounded context; select stable identities with role_id/node_id or opaque identities with role_ref/node_ref.", InputSchema: contextSchema(), Annotations: &mcp.ToolAnnotations{Title: "Get DAG context", ReadOnlyHint: true, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input ContextInput) (*mcp.CallToolResult, service.ContextEnvelope, error) {
 		if err := validateToolInput(input); err != nil {
 			return nil, service.ContextEnvelope{}, err
 		}
@@ -290,7 +290,9 @@ func NewRemote(executor CommandExecutor, defaultRoot string) *mcp.Server {
 			return nil, service.GraphImpact{}, fmt.Errorf("graph change mode must be preview or apply")
 		}
 		args := []string{"graph", command, "--root", selectedRoot(input.Root, defaultRoot), "--file", path}
-		args = appendOptional(args, "--token", input.Token, "--idempotency-key", input.IdempotencyKey, "--actor-role", input.ActorRole, "--actor-role-ref", input.ActorRoleRef)
+		if input.Mode == "apply" {
+			args = appendOptional(args, "--token", input.Token, "--idempotency-key", input.IdempotencyKey, "--actor-role", input.ActorRole, "--actor-role-ref", input.ActorRoleRef)
+		}
 		output, err := remoteJSON[service.GraphImpact](ctx, executor, args, nil)
 		return nil, output, err
 	})
@@ -410,6 +412,10 @@ func schemaFor[T any]() *jsonschema.Schema {
 func graphChangeSchema() *jsonschema.Schema {
 	schema := schemaFor[GraphChangeInput]()
 	schema.Properties["mode"].Enum = []any{"preview", "apply"}
+	schema.Properties["token"].Description = "Apply-only impact token returned by preview. Ignored in preview mode."
+	schema.Properties["idempotency_key"].Description = "Apply-only stable command key. Ignored in preview mode."
+	schema.Properties["actor_role"].Description = "Apply-only stable Role ID. Ignored in preview mode; use actor_role_ref for an opaque selector."
+	schema.Properties["actor_role_ref"].Description = "Apply-only controller-issued opaque Role selector. Ignored in preview mode."
 	setMaxLength(schema, "mode", 16)
 	setMaxLength(schema, "token", 16*1024)
 	setMaxLength(schema, "idempotency_key", 256)

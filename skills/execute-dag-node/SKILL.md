@@ -9,8 +9,8 @@ Operate only the stable Role and Node named by the work package. If neither is n
 do not guess a Role or acquire a lease; ask the DAG controller for an assignment.
 
 First verify that the DAGrail MCP tools are callable in this process. A visible skill can
-outlive an older harness process and does not prove MCP activation. `dagrail mcp probe`
-checks a fresh process, and `dagrail plugin status --harness <host>` tells you whether a
+outlive an older harness process and does not prove MCP activation. Run `dagrail mcp probe --root <project>`
+for a fresh project round trip; `dagrail plugin status --harness <host>` tells you whether a
 fresh session is required; neither proves this process loaded the tools. If tools are
 absent, also run `dagrail doctor install`, then start a fresh session or use `dagrail context`,
 `dagrail inspect`, `dagrail action apply`, `dagrail reconcile`, and `dagrail pre-wait`
@@ -19,9 +19,9 @@ as appropriate. Never replace a missing tool with a hand-authored lifecycle enve
 1. Bind that Role to this harness session. Never reuse a session bound to another
    formal Role. Use takeover only after the former lease expires.
 2. Call `dag_context` with `view: worker`, an explicit `root` when project discovery is
-   ambiguous, and the assigned Role/Node selectors. Use
-   `role_ref` or `node_ref` when DAGrail returned an opaque selector instead of a small
-   ID. Treat its cursor, checkpoint, resource refs, `authorization`, and
+   ambiguous, and `role_id`/`node_id` for the assigned stable IDs. Use `role_ref` or
+   `node_ref` only when DAGrail returned an opaque selector instead of a small ID; there
+   is no `role` or `node` MCP field. Treat its cursor, checkpoint, resource refs, `authorization`, and
    `allowedActions` as authority. Follow an opaque ref
    with `dag_inspect` only when the bounded package is insufficient.
 3. Apply only the current `allowedActions[].ref` with a stable idempotency key. In a CLI
@@ -64,3 +64,6 @@ as appropriate. Never replace a missing tool with a hand-authored lifecycle enve
 
 A native harness resume restores transport only. DAGrail's Role lease, Attempt,
 checkpoint, Decision records, and receipts remain the recoverable authority.
+Use the canonical installed `dagrail` runtime for live controller work; retained
+version-pinned binaries are historical/offline fixtures and must not replace the live
+daemon.

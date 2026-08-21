@@ -138,10 +138,12 @@ those stronger booleans to false and always carries the outstanding adoption gap
 `dagrail mcp --stdio` is project-independent during protocol initialization. It exposes
 the six tools from any working directory and opens a Project only on the first tool call;
 every tool accepts an optional `root`. `dagrail mcp probe` starts a fresh process,
-performs initialize plus tools/list, and checks all six input-schema digests. A successful
-probe proves the installed launcher, not that an already-running harness task hot-loaded
-new configuration; plugin diagnostics therefore keep `currentProcessVerified: false`
-and `freshSessionRequired: true` until the host itself calls a tool.
+performs initialize plus tools/list, and checks all six input-schema digests. With
+`--root`, it additionally calls `dag_pre_wait` through that fresh MCP process, so
+`projectRoundTripReady` proves the launcher-to-daemon-to-project path. A successful probe
+still does not prove that an already-running harness task hot-loaded new configuration;
+plugin diagnostics therefore keep `currentProcessVerified: false` and
+`freshSessionRequired: true` until the host itself calls a tool.
 
 The stdio server exposes only these high-level tools:
 
@@ -164,12 +166,16 @@ when a typed edge or `supersedes` declaration identifies an active/planned repai
 Effect continuity compares the prepared adapter ID, version, schema hash, and canonical
 request digest separately from unrelated journal-head advancement. A missing legacy
 binding or same-ID adapter upgrade fails reconciliation closed.
-`dag_context` accepts only `orchestrator`, `worker`, or `reviewer`; a caller may lower
-the byte budget to at least 512 bytes but cannot raise the fixed 12/8/12-KiB maximum.
+`dag_context` accepts only `orchestrator`, `worker`, or `reviewer`; stable selectors are
+named `role_id` and `node_id`, while `role_ref` and `node_ref` accept only
+controller-issued opaque selectors. There are no `role` or `node` MCP fields. A caller
+may lower the byte budget to at least 512 bytes but cannot raise the fixed 12/8/12-KiB maximum.
 When a schema-legal Role or Node ID is larger than the MCP selector limit, pass the
 controller-issued `role_ref` or `node_ref` instead of copying the identifier. Graph
 apply accepts `actor_role_ref`, and Effect reconcile accepts `effect_ref`; each is an
 opaque selector for the exact current authority object, not a caller-defined alias.
+`dag_graph_change` preview accepts the patch and root only; token, idempotency key,
+`actor_role`, and `actor_role_ref` are apply-only fields and are ignored during preview.
 When content must be truncated, compact authorization and a fixed-length opaque
 `operations:<key>` ref survive;
 following that opaque ref recovers bounded signed actions and remediation proposals.

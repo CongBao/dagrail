@@ -51,6 +51,12 @@ type ExecuteResponse struct {
 	Retryable  bool   `json:"retryable,omitempty"`
 }
 
+type StopRequest struct {
+	Reason              string `json:"reason"`
+	TargetVersion       string `json:"targetVersion,omitempty"`
+	TargetDataNamespace string `json:"targetDataNamespace,omitempty"`
+}
+
 type UIRequest struct {
 	Root   string `json:"root"`
 	Listen string `json:"listen"`

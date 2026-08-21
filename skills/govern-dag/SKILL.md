@@ -7,23 +7,21 @@ description: Govern a DAGrail project as the orchestration role. Use when inspec
 
 Treat DAGrail—not chat, a roadmap projection, or a harness thread—as runtime authority.
 
-Before binding a Role, verify that `dag_context`, `dag_inspect`, `dag_apply`,
-`dag_graph_change`, `dag_reconcile`, and `dag_pre_wait` are callable in this process.
-Skill discovery does not prove that a long-running harness loaded a newly registered MCP
-server. `dagrail mcp probe` proves a fresh server handshake and exact tool schemas, while
-`dagrail plugin status --harness <host>` reports whether a fresh session is still
-required; neither command may claim that this already-running process loaded MCP. If any
-tool is absent, run those diagnostics plus `dagrail doctor install` and start a fresh
-harness session; until then use
-the corresponding `dagrail context`, `dagrail inspect`,
-`dagrail action apply`, `dagrail graph preview-change|apply-change`, `dagrail reconcile`,
-or `dagrail pre-wait` command, never a hand-built transition.
+Before binding a Role, verify that all six DAGrail MCP tools are callable in this process.
+Skill discovery does not prove MCP activation. `dagrail mcp probe --root <project>` proves a
+fresh project round trip and exact schemas; `dagrail plugin status --harness <host>`
+reports the fresh-session boundary. Neither proves this process loaded MCP. If a tool is
+absent, run those diagnostics plus `dagrail doctor install`, then start a fresh session
+or use `dagrail context`, `dagrail inspect`, `dagrail action apply`, `dagrail graph
+preview-change|apply-change`, `dagrail reconcile`, and `dagrail pre-wait`—never a
+hand-built transition.
 
 1. Bind only the assigned control Role. It needs the capabilities for actions it will
    perform, such as `graph.change`; takeover is valid only after the former lease expires.
 2. Call `dag_context` with `view: orchestrator`, an explicit `root` when project
-   discovery is ambiguous, and a cursor when available. Inspect
-   opaque refs selectively; do not load the complete graph, journal, or artifact bodies.
+   discovery is ambiguous, `role_id`/`node_id` for stable IDs or `role_ref`/`node_ref`
+   for controller-issued opaque selectors, and a cursor. There is no `role` or `node`
+   MCP field. Inspect opaque refs selectively; do not load the complete graph, journal, or artifact bodies.
    When an ID is too large for a bounded tool input, pass the returned `role_ref`,
    `node_ref`, `actor_role_ref`, or `effect_ref`; do not reconstruct or paste the ID.
    Use its `authorization`, `remediations`, and `projectAllowedActions` as the bounded
@@ -98,3 +96,5 @@ cutover false until Graph/history bootstrap and parity checks pass.
 
 Never edit the journal, SQLite, action secret, or generated projections. Hooks may add
 bounded guidance but cannot assign, accept, merge, complete, or infer a lifecycle result.
+Use the canonical installed `dagrail` for live controller work. A version-pinned binary is
+historical/offline only and must not restart or replace the daemon; automatic replacement reports `client_outdated`, while restart is rejected by the live daemon.

@@ -20,6 +20,14 @@ journal verify/replay, projection rebuild, doctor, and security audit.
 The status carries only a digest of the selected authority-data namespace. Changing
 `DAGRAIL_HOME` causes the next normal command to drain and restart the daemon before it
 opens a Project, so one locator is never silently resolved through the previous home.
+Automatic replacement is monotonic by SemVer: a current client may drain an older
+daemon (or the same version under another authority-data namespace), but a retained old
+CLI is rejected without stopping a newer live daemon. A v0.26.3-or-newer client reports
+`client_outdated` when it observes a newer comparable daemon. `daemon restart` uses the
+same monotonic version admission; only `daemon stop` is an explicit operator shutdown. Use the canonical runtime
+reported by plugin diagnostics. Once no
+daemon is running, only the canonical current runtime should restart it because there is
+no live server left to enforce monotonic replacement.
 
 ## Observe
 

@@ -28,6 +28,11 @@ authority, or a store of conversation state.
   client whose `DAGRAIL_HOME` (or platform default data home) differs drains and
   restarts the process before opening a Project; a singleton must never reinterpret a
   locator against another data store merely because its version matches.
+- Automatic replacement is monotonic by SemVer. A newer client may drain an older
+  daemon, and the same version may replace a daemon for an authority-data namespace
+  change. An older client cannot stop and replace a newer daemon; unknown version
+  formats fail closed. `daemon restart` is version-constrained replacement; explicit
+  operator `daemon stop` remains separate.
 - The journal remains canonical authority. SQLite, sealed checkpoints, in-memory state,
   logs, sockets, and process IDs are disposable. A checkpoint HMAC binds its Project,
   head, GraphRevision, provider set, state digest, and segment-file identities. Any

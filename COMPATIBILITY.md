@@ -77,7 +77,7 @@ digests, context budgets, and command inventory implemented by the current binar
   additive in-version; the four broad error classes and their exit codes remain stable
   through the beta line. Completion is generated from the catalog, not an independent
   authority. Installation diagnostics remain path-free and omit raw host output.
-- HistoricalBinaryMatrix v1alpha1 closes the v0.10.0–v0.26.1 input window by exact commit.
+- HistoricalBinaryMatrix v1alpha1 closes the v0.10.0–v0.26.2 input window by exact commit.
 - LocalController v1alpha1 is an owner-local transport and cache boundary, not portable
   authority. A current CLI may drain and restart a prior daemon version; an unsafe
   in-flight Effect produces a blocker rather than a forced retry. Offline mutation is

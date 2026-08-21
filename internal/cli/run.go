@@ -328,7 +328,7 @@ func runDaemon(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		_, statusErr := client.Status(statusCtx)
 		cancel()
 		if statusErr == nil {
-			if err := client.Stop(ctx); err != nil {
+			if err := client.Restart(ctx); err != nil {
 				return err
 			}
 			time.Sleep(100 * time.Millisecond)
@@ -1164,7 +1164,7 @@ func runMCP(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 	if len(args) > 0 && args[0] == "probe" {
 		flags := flag.NewFlagSet("mcp probe", flag.ContinueOnError)
 		flags.SetOutput(stderr)
-		root := flags.String("root", "", "optional project root for future round-trip diagnostics")
+		root := flags.String("root", "", "optional project root for a real dag_pre_wait MCP round trip")
 		runtimePath := flags.String("runtime", "", "absolute DAGrail runtime; defaults to this executable")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err

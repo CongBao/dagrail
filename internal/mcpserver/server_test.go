@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,6 +25,84 @@ type missingProjectExecutor struct{ calls atomic.Int32 }
 func (executor *missingProjectExecutor) Execute(context.Context, []string, []byte) ([]byte, []byte, error) {
 	executor.calls.Add(1)
 	return nil, nil, &controller.RPCError{Code: "project_not_found", Message: ".dagrail/project.yaml was not found", Hint: "Pass an explicit root or initialize a project."}
+}
+
+type recordingExecutor struct {
+	mu    sync.Mutex
+	calls [][]string
+}
+
+func (executor *recordingExecutor) Execute(_ context.Context, args []string, _ []byte) ([]byte, []byte, error) {
+	executor.mu.Lock()
+	executor.calls = append(executor.calls, append([]string(nil), args...))
+	executor.mu.Unlock()
+	raw, _ := json.Marshal(service.GraphImpact{})
+	return raw, nil, nil
+}
+
+func (executor *recordingExecutor) lastCall() []string {
+	executor.mu.Lock()
+	defer executor.mu.Unlock()
+	if len(executor.calls) == 0 {
+		return nil
+	}
+	return append([]string(nil), executor.calls[len(executor.calls)-1]...)
+}
+
+func TestRemoteGraphChangeSeparatesPreviewAndApplyCLIContracts(t *testing.T) {
+	executor := &recordingExecutor{}
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	server := mcpserver.NewRemote(executor, ".")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- server.Run(ctx, serverTransport) }()
+	client := mcp.NewClient(&mcp.Implementation{Name: "graph-change-transport-test", Version: "1.0.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patch := map[string]any{"apiVersion": "dagrail.io/v1alpha1", "kind": "GraphPatch", "operations": []any{}}
+
+	preview, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "dag_graph_change", Arguments: map[string]any{
+		"mode": "preview", "patch": patch, "root": "/tmp/project", "actor_role": "controller", "actor_role_ref": "role-ref-that-preview-must-ignore",
+	}})
+	if err != nil || preview == nil || preview.IsError {
+		t.Fatalf("preview failed before CLI dispatch: result=%+v err=%v", preview, err)
+	}
+	previewArgs := executor.lastCall()
+	if len(previewArgs) != 6 || !reflect.DeepEqual(previewArgs[:5], []string{"graph", "preview-change", "--root", "/tmp/project", "--file"}) {
+		t.Fatalf("preview CLI prefix = %v", previewArgs)
+	}
+	for _, forbidden := range []string{"--token", "--idempotency-key", "--actor-role", "--actor-role-ref"} {
+		if slicesContain(previewArgs, forbidden) {
+			t.Fatalf("preview forwarded apply-only flag %s: %v", forbidden, previewArgs)
+		}
+	}
+
+	apply, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "dag_graph_change", Arguments: map[string]any{
+		"mode": "apply", "patch": patch, "root": "/tmp/project", "token": "impact-token", "idempotency_key": "graph/apply/1", "actor_role": "controller",
+	}})
+	if err != nil || apply == nil || apply.IsError {
+		t.Fatalf("apply failed before CLI dispatch: result=%+v err=%v", apply, err)
+	}
+	applyArgs := executor.lastCall()
+	if len(applyArgs) != 12 || !reflect.DeepEqual(applyArgs[:5], []string{"graph", "apply-change", "--root", "/tmp/project", "--file"}) || !reflect.DeepEqual(applyArgs[6:], []string{"--token", "impact-token", "--idempotency-key", "graph/apply/1", "--actor-role", "controller"}) {
+		t.Fatalf("apply CLI contract = %v", applyArgs)
+	}
+
+	_ = session.Close()
+	cancel()
+	<-done
+}
+
+func slicesContain(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRemoteMCPInitializesWithoutOpeningAProject(t *testing.T) {

@@ -2,6 +2,22 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.26.3 — 2026-08-21
+
+### Fixed
+
+- remote MCP `dag_graph_change` preview now invokes only the public preview CLI
+  contract; token, idempotency, and actor selectors remain apply-only instead of being
+  forwarded as undefined preview flags;
+- daemon replacement is monotonic by SemVer: legacy empty stop requests and older
+  automatic replacements fail closed, while explicit shutdown, forward upgrade, and
+  same-version authority-data namespace changes remain supported;
+- MCP instructions and all three bundled skills now name the exact `role_id`, `node_id`,
+  `role_ref`, and `node_ref` fields and warn against using retained historical binaries
+  for live controller work;
+- `mcp probe --root` documentation now reflects its real fresh-process `dag_pre_wait`
+  project round trip, distinct from current-harness activation.
+
 ## 0.26.2 — 2026-08-20
 
 ### Fixed

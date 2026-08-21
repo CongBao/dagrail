@@ -75,6 +75,11 @@ func (client *Client) Ensure(ctx context.Context) (Status, error) {
 	if err == nil && status.Version == version.Version && status.DataNamespace == expectedNamespace && !status.Draining {
 		return status, nil
 	}
+	if err == nil && !status.Draining {
+		if err := rejectControllerDowngrade(status.Version); err != nil {
+			return Status{}, err
+		}
+	}
 	directory, dirErr := ensureRuntimeDir()
 	if dirErr != nil {
 		return Status{}, dirErr
@@ -99,7 +104,10 @@ func (client *Client) Ensure(ctx context.Context) (Status, error) {
 			return status, nil
 		}
 		if !status.Draining {
-			if stopErr := client.Stop(ctx); stopErr != nil {
+			if versionErr := rejectControllerDowngrade(status.Version); versionErr != nil {
+				return Status{}, versionErr
+			}
+			if stopErr := client.replace(ctx, version.Version, expectedNamespace); stopErr != nil {
 				return Status{}, fmt.Errorf("controller %s cannot drain for version or data-namespace change to %s: %w", status.Version, version.Version, stopErr)
 			}
 		}
@@ -156,17 +164,53 @@ func (client *Client) spawn() error {
 }
 
 func (client *Client) Stop(ctx context.Context) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://dagrail.local/v1/stop", bytes.NewReader([]byte("{}")))
+	return client.requestStop(ctx, StopRequest{Reason: "shutdown"})
+}
+
+func (client *Client) Restart(ctx context.Context) error {
+	expectedNamespace, err := dataNamespaceIdentity()
+	if err != nil {
+		return fmt.Errorf("resolve controller data namespace: %w", err)
+	}
+	return client.requestStop(ctx, StopRequest{Reason: "restart", TargetVersion: version.Version, TargetDataNamespace: expectedNamespace})
+}
+
+func (client *Client) replace(ctx context.Context, targetVersion, targetDataNamespace string) error {
+	return client.requestStop(ctx, StopRequest{Reason: "replace", TargetVersion: targetVersion, TargetDataNamespace: targetDataNamespace})
+}
+
+func (client *Client) requestStop(ctx context.Context, input StopRequest) error {
+	payload, err := json.Marshal(input)
 	if err != nil {
 		return err
 	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://dagrail.local/v1/stop", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
 	response, err := client.http.Do(request)
 	if err != nil {
 		return err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
+		var failure ExecuteResponse
+		if decodeErr := decodeResponse(response.Body, &failure); decodeErr == nil && failure.Error != "" {
+			return &RPCError{Code: failure.ErrorCode, Message: failure.Error, Retryable: failure.Retryable, Hint: failure.Hint}
+		}
 		return fmt.Errorf("controller stop returned %s", response.Status)
+	}
+	return nil
+}
+
+func rejectControllerDowngrade(runningVersion string) error {
+	comparison, valid := compareSemanticVersions(runningVersion, version.Version)
+	if !valid {
+		return &RPCError{Code: "controller_version_incompatible", Message: fmt.Sprintf("running controller version %q cannot be safely compared with client version %q", runningVersion, version.Version), Hint: "Use the canonical installed DAGrail runtime and run 'dagrail plugin update --check'."}
+	}
+	if comparison > 0 {
+		return &RPCError{Code: "client_outdated", Message: fmt.Sprintf("DAGrail client %s cannot replace newer controller %s", version.Version, runningVersion), Hint: "Use the canonical installed runtime reported by 'dagrail plugin status'; do not use a retained version-pinned binary for live governance."}
 	}
 	return nil
 }

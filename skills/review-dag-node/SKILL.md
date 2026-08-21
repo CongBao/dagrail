@@ -9,15 +9,16 @@ Review only the Role, Node, candidate, and evidence boundary in the assigned pac
 
 First verify that the DAGrail MCP tools are callable in this process. Skill discovery is
 not proof that a long-running harness loaded an upgraded MCP registration. Use
-`dagrail mcp probe` for a fresh-process handshake and `dagrail plugin status --harness
-<host>` for the fresh-session boundary; neither proves the current process. If tools are
+`dagrail mcp probe --root <project>` for a fresh project round trip and
+`dagrail plugin status --harness <host>` for the fresh-session boundary; neither proves the current process. If tools are
 absent, also run `dagrail doctor install`, then start a fresh session or use `dagrail context`,
 `dagrail inspect`, `dagrail action apply`, and `dagrail pre-wait`; never construct a
 review transition manually.
 
 1. Bind the assigned review Role and call `dag_context` with `view: reviewer`, an
-   explicit `root` when project discovery is ambiguous, and its
-   Role/Node selectors. Use `role_ref` or `node_ref` for an opaque large identity.
+   explicit `root` when project discovery is ambiguous, and `role_id`/`node_id` for its
+   stable identities. Use `role_ref` or `node_ref` only for a controller-issued opaque
+   identity; there is no `role` or `node` MCP field.
    Never reuse a worker or controller session as the formal reviewer.
 2. Inspect only the candidate, actual artifact, Decision, policy result, or evidence refs
    required by the review contract. Artifact indexes and digests are not substitutes for
@@ -52,3 +53,6 @@ review transition manually.
 
 Never treat transport acceptance, session creation, visible delivery, another reviewer's
 opinion, or evidence reuse as this Node's approval.
+Use the canonical installed `dagrail` runtime for live controller work; retained
+version-pinned binaries are historical/offline fixtures and must not replace the live
+daemon.
