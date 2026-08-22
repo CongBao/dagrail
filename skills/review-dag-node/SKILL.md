@@ -49,7 +49,8 @@ review transition manually.
    while one previously authorized saga completes and never implies a review verdict.
 8. Call `dag_pre_wait` before becoming passive and report any unresolved item outside
    this review Role to the controller by bounded count/target; do not expand unrelated
-   paginated blocker or dependency-cut detail.
+   paginated blocker or dependency-cut detail. Do not revive a passive Role merely
+   because `status` retains its inert expired lease for audit.
 
 Never treat transport acceptance, session creation, visible delivery, another reviewer's
 opinion, or evidence reuse as this Node's approval.

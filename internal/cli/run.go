@@ -1164,27 +1164,7 @@ func runHook(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 
 func runMCP(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) > 0 && args[0] == "probe" {
-		flags := flag.NewFlagSet("mcp probe", flag.ContinueOnError)
-		flags.SetOutput(stderr)
-		root := flags.String("root", "", "optional project root for a real dag_pre_wait MCP round trip")
-		runtimePath := flags.String("runtime", "", "absolute DAGrail runtime; defaults to this executable")
-		if err := flags.Parse(args[1:]); err != nil {
-			return err
-		}
-		if *runtimePath == "" {
-			resolved, err := os.Executable()
-			if err != nil {
-				return err
-			}
-			*runtimePath = resolved
-		}
-		probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		report, err := mcpserver.Probe(probeCtx, *runtimePath, *root)
-		if err != nil {
-			return err
-		}
-		return writeJSON(stdout, report)
+		return runMCPProbe(ctx, args[1:], stdout, stderr, mcpserver.ProbeWithOptions)
 	}
 	flags := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -1201,6 +1181,35 @@ func runMCP(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 		return err
 	}
 	return mcpserver.RunRemote(ctx, client, *root)
+}
+
+type mcpProbeRunner func(context.Context, string, string, mcpserver.ProbeOptions) (mcpserver.ProbeReport, error)
+
+func runMCPProbe(ctx context.Context, args []string, stdout, stderr io.Writer, probe mcpProbeRunner) error {
+	flags := flag.NewFlagSet("mcp probe", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	root := flags.String("root", "", "optional project root for a real dag_pre_wait MCP round trip")
+	runtimePath := flags.String("runtime", "", "absolute DAGrail runtime; defaults to this executable")
+	handshakeTimeout := flags.Duration("handshake-timeout", mcpserver.DefaultProbeHandshakeTimeout, "fresh-process initialize and tools/list timeout")
+	projectTimeout := flags.Duration("project-timeout", mcpserver.DefaultProbeProjectRoundTripTimeout, "project dag_pre_wait round-trip timeout")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *runtimePath == "" {
+		resolved, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		*runtimePath = resolved
+	}
+	report, err := probe(ctx, *runtimePath, *root, mcpserver.ProbeOptions{
+		HandshakeTimeout:        *handshakeTimeout,
+		ProjectRoundTripTimeout: *projectTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, report)
 }
 
 func runReconcile(ctx context.Context, args []string, stdout, stderr io.Writer) error {

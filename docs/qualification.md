@@ -109,7 +109,7 @@ reports drift if that independently active source advances later.
 
 The `historical-binary-compatibility` CI and tag-release job uses a full Git history and
 the closed manifest in `internal/compatibility/beta-window.json`. Unlike reducer-only
-fixtures, it compiles and executes each real v0.10.0–v0.26.3 source snapshot. The test is
+fixtures, it compiles and executes each real v0.10.0–v0.26.4 source snapshot. The test is
 behind the `historical` build tag so normal unit loops remain fast:
 
 ```sh

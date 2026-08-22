@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/CongBao/dagrail/internal/domain"
 	"github.com/gowebpki/jcs"
@@ -387,11 +388,11 @@ func validateArtifact(value domain.ArtifactRef) error {
 		}
 	}
 	if value.URI != "" {
-		if len(value.URI) > 2048 {
-			return fmt.Errorf("artifact URI cannot exceed 2048 bytes")
+		if utf8.RuneCountInString(value.URI) > 2048 {
+			return fmt.Errorf("artifact URI cannot exceed 2048 characters")
 		}
 		parsed, err := url.Parse(value.URI)
-		if err != nil || !parsed.IsAbs() || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		if err != nil || !parsed.IsAbs() || parsed.User != nil || strings.ContainsAny(value.URI, "?#") {
 			return fmt.Errorf("artifact URI must be absolute and cannot contain userinfo, query or fragment")
 		}
 		allowedSchemes := map[string]bool{"file": true, "http": true, "https": true, "s3": true, "gs": true, "az": true, "git": true, "oci": true}

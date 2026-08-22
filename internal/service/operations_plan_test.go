@@ -895,6 +895,157 @@ func TestPreWaitPageRejectsHeadAndTimeDependentInventoryDrift(t *testing.T) {
 	}
 }
 
+func TestPreWaitIgnoresExpiredRoleWithoutLiveResponsibility(t *testing.T) {
+	now := time.Date(2026, 8, 22, 2, 0, 0, 0, time.UTC)
+	graph := domain.GraphDefinition{
+		APIVersion: domain.GraphAPIVersion,
+		Kind:       domain.GraphKind,
+		Metadata:   domain.GraphMetadata{Name: "passive terminal role"},
+		Spec: domain.GraphSpec{
+			Roles: []domain.RoleDefinition{{ID: "worker", Capabilities: []string{domain.CapabilityNodeRun}}},
+			Nodes: []domain.NodeDefinition{{ID: "work", Kind: "task", Role: "worker", Title: "work", Outcomes: []domain.Outcome{{ID: "returned", Class: "failure"}}}},
+		},
+	}
+	state := domain.State{
+		ProjectID:     "project",
+		GraphRevision: "revision",
+		HeadSequence:  7,
+		HeadHash:      strings.Repeat("a", 64),
+		Graph:         &graph,
+		Nodes:         map[string]domain.NodeRuntime{"work": {Status: "terminal", Outcome: "returned"}},
+		Attempts:      map[string]domain.Attempt{"attempt": {ID: "attempt", NodeID: "work", RoleID: "worker", Status: "terminal", Outcome: "returned", UpdatedAt: now.Add(-time.Hour).Format(time.RFC3339Nano)}},
+		NodeAttempts:  map[string][]string{"work": {"attempt"}},
+		Leases: map[string]domain.RoleLease{"worker": {
+			RoleID: "worker", Harness: "codex", SessionID: "passive-session", Active: true,
+			ExpiresAt: now.Add(-time.Minute).Format(time.RFC3339Nano),
+		}},
+		Effects:   map[string]domain.EffectAction{},
+		Resources: map[string]domain.ResourceLease{},
+		Incidents: map[string]domain.Incident{},
+	}
+	svc := &Service{Now: func() time.Time { return now }}
+
+	audit, err := svc.preWaitFromStateContext(context.Background(), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !audit.SafeToWait || audit.Counts.ExpiredRoles != 0 || len(audit.Remediations) != 0 {
+		t.Fatalf("passive terminal role still blocked pre-wait: %#v", audit)
+	}
+	status, err := operationalStatusFromStateContext(context.Background(), state, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(status.ExpiredRoleLeases, []string{"worker"}) {
+		t.Fatalf("status lost diagnostic visibility of the expired lease: %#v", status.ExpiredRoleLeases)
+	}
+}
+
+func TestPreWaitKeepsExpiredRoleWithLiveResponsibilityActionable(t *testing.T) {
+	now := time.Date(2026, 8, 22, 2, 0, 0, 0, time.UTC)
+	graph := domain.GraphDefinition{
+		APIVersion: domain.GraphAPIVersion,
+		Kind:       domain.GraphKind,
+		Metadata:   domain.GraphMetadata{Name: "active role"},
+		Spec: domain.GraphSpec{
+			Roles: []domain.RoleDefinition{{ID: "worker", Capabilities: []string{domain.CapabilityNodeRun}}},
+			Nodes: []domain.NodeDefinition{{ID: "work", Kind: "task", Role: "worker", Title: "work", Outcomes: []domain.Outcome{{ID: "done", Class: "success"}}}},
+		},
+	}
+	state := domain.State{
+		ProjectID:     "project",
+		GraphRevision: "revision",
+		HeadSequence:  8,
+		HeadHash:      strings.Repeat("b", 64),
+		Graph:         &graph,
+		Nodes:         map[string]domain.NodeRuntime{"work": {Status: "active"}},
+		Attempts:      map[string]domain.Attempt{"attempt": {ID: "attempt", NodeID: "work", RoleID: "worker", Status: "running", UpdatedAt: now.Format(time.RFC3339Nano)}},
+		NodeAttempts:  map[string][]string{"work": {"attempt"}},
+		Leases: map[string]domain.RoleLease{"worker": {
+			RoleID: "worker", Harness: "codex", SessionID: "interrupted-session", Active: true,
+			ExpiresAt: now.Add(-time.Minute).Format(time.RFC3339Nano),
+		}},
+		Effects:   map[string]domain.EffectAction{},
+		Resources: map[string]domain.ResourceLease{},
+		Incidents: map[string]domain.Incident{},
+	}
+	svc := &Service{Now: func() time.Time { return now }}
+
+	audit, err := svc.preWaitFromStateContext(context.Background(), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if audit.SafeToWait || audit.Counts.ExpiredRoles != 1 || !reflect.DeepEqual(audit.ExpiredRoles, []string{"worker"}) {
+		t.Fatalf("live responsibility lost its expired-role blocker: %#v", audit)
+	}
+	found := false
+	for _, remediation := range audit.Remediations {
+		if remediation.Code == "renew_or_takeover_role" && remediation.OwnerRole == "worker" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("live responsibility omitted renewal/takeover remediation: %#v", audit.Remediations)
+	}
+}
+
+func TestPreWaitExpiredRoleResponsibilityIndexCoversEveryLiveOwnerSurface(t *testing.T) {
+	now := time.Date(2026, 8, 22, 2, 0, 0, 0, time.UTC)
+	baseState := func() domain.State {
+		graph := domain.GraphDefinition{
+			APIVersion: domain.GraphAPIVersion,
+			Kind:       domain.GraphKind,
+			Metadata:   domain.GraphMetadata{Name: "role responsibility index"},
+			Spec: domain.GraphSpec{
+				Roles: []domain.RoleDefinition{{ID: "worker", Capabilities: []string{domain.CapabilityNodeRun}}},
+				Nodes: []domain.NodeDefinition{{ID: "work", Kind: "task", Role: "worker", Title: "work", Outcomes: []domain.Outcome{{ID: "returned", Class: "failure"}}}},
+			},
+		}
+		return domain.State{
+			ProjectID: "project", GraphRevision: "revision", HeadSequence: 9, HeadHash: strings.Repeat("c", 64), Graph: &graph,
+			Nodes:        map[string]domain.NodeRuntime{"work": {Status: "terminal", Outcome: "returned"}},
+			Attempts:     map[string]domain.Attempt{"attempt": {ID: "attempt", NodeID: "work", RoleID: "worker", Status: "terminal", Outcome: "returned", UpdatedAt: now.Format(time.RFC3339Nano)}},
+			NodeAttempts: map[string][]string{"work": {"attempt"}},
+			Leases:       map[string]domain.RoleLease{"worker": {RoleID: "worker", Active: true, ExpiresAt: now.Add(-time.Minute).Format(time.RFC3339Nano)}},
+			Effects:      map[string]domain.EffectAction{}, Resources: map[string]domain.ResourceLease{}, Incidents: map[string]domain.Incident{},
+		}
+	}
+	tests := map[string]func(*domain.State){
+		"ready node": func(state *domain.State) {
+			state.Nodes["work"] = domain.NodeRuntime{Status: "planned"}
+			state.Attempts = map[string]domain.Attempt{}
+			state.NodeAttempts = map[string][]string{}
+		},
+		"active attempt": func(state *domain.State) {
+			state.Nodes["work"] = domain.NodeRuntime{Status: "active"}
+			state.Attempts["attempt"] = domain.Attempt{ID: "attempt", NodeID: "work", RoleID: "worker", Status: "running", UpdatedAt: now.Format(time.RFC3339Nano)}
+		},
+		"pending effect": func(state *domain.State) {
+			state.Effects["effect"] = domain.EffectAction{ID: "effect", NodeID: "work", OwnerRole: "worker", Status: "unknown"}
+		},
+		"active resource": func(state *domain.State) {
+			state.Resources["resource"] = domain.ResourceLease{ID: "resource", NodeID: "work", AttemptID: "attempt", RoleID: "worker", Status: "active"}
+		},
+		"open incident": func(state *domain.State) {
+			state.Incidents["attempt:attempt"] = domain.Incident{ID: "attempt:attempt", SourceType: "attempt", SourceID: "attempt", OwnerRole: "worker", Status: "open", Deadline: now.Add(time.Hour).Format(time.RFC3339Nano)}
+		},
+	}
+	svc := &Service{Now: func() time.Time { return now }}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			state := baseState()
+			mutate(&state)
+			inventory, err := svc.collectPreWait(context.Background(), state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(inventory.expiredRoles, []string{"worker"}) {
+				t.Fatalf("expired role with %s was not actionable: %#v", name, inventory)
+			}
+		})
+	}
+}
+
 type cancelOnErrContext struct {
 	context.Context
 	calls       int
@@ -1781,5 +1932,93 @@ func TestAllowedActionRuntimeEnforcesPublishedSchemasWithoutJournalMutation(t *t
 	}
 	if _, err := svc.ApplyAction(findActionRef(t, svc, "worker", "work", "attempt.checkpoint"), json.RawMessage(`{"summary":"valid checkpoint"}`), "checkpoint"); err != nil {
 		t.Fatalf("runtime rejected schema-valid checkpoint: %v", err)
+	}
+}
+
+func TestEvidencePublishArtifactURISchemaMatchesRuntimePolicy(t *testing.T) {
+	artifact := func(uri string, includeURI bool) map[string]any {
+		value := map[string]any{
+			"digest":     testDigest("a"),
+			"type":       "candidate",
+			"size":       1,
+			"provenance": map[string]any{"producer": "test"},
+		}
+		if includeURI {
+			value["uri"] = uri
+		}
+		return value
+	}
+	input := func(uri string, includeURI bool) json.RawMessage {
+		encoded, err := json.Marshal(map[string]any{
+			"candidate":          artifact(uri, includeURI),
+			"prospectiveTree":    artifact("file:///tmp/prospective-tree", true),
+			"commandGraphDigest": testDigest("b"),
+			"protectedInputs":    []map[string]any{{"name": "source", "digest": testDigest("c")}},
+			"observations": map[string]bool{
+				"exact": true, "clean": true, "depthComplete": true,
+				"sourceUnmodified": true, "resourcesClosed": true,
+			},
+			"artifacts": []map[string]any{},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+	schema := actionInputSchema("evidence.publish", domain.NodeDefinition{})
+	tests := []struct {
+		name       string
+		uri        string
+		includeURI bool
+		valid      bool
+	}{
+		{name: "omitted", valid: true},
+		{name: "explicit empty", includeURI: true, valid: true},
+		{name: "file", uri: "file:///tmp/candidate", includeURI: true, valid: true},
+		{name: "http", uri: "http://example.test/candidate", includeURI: true, valid: true},
+		{name: "https", uri: "https://example.test/candidate", includeURI: true, valid: true},
+		{name: "s3", uri: "s3://bucket/candidate", includeURI: true, valid: true},
+		{name: "gs", uri: "gs://bucket/candidate", includeURI: true, valid: true},
+		{name: "az", uri: "az://container/candidate", includeURI: true, valid: true},
+		{name: "git", uri: "git://example.test/candidate", includeURI: true, valid: true},
+		{name: "oci", uri: "oci://registry.test/candidate", includeURI: true, valid: true},
+		{name: "uppercase scheme", uri: "FILE:///tmp/candidate", includeURI: true, valid: true},
+		{name: "at sign outside userinfo", uri: "file:///tmp/@cache/candidate", includeURI: true, valid: true},
+		{name: "2048 ASCII characters", uri: "file:" + strings.Repeat("a", 2043), includeURI: true, valid: true},
+		{name: "2048 Unicode characters", uri: "file:" + strings.Repeat("é", 2043), includeURI: true, valid: true},
+		{name: "relative", uri: "artifacts/candidate.json", includeURI: true},
+		{name: "unsupported scheme", uri: "ftp://example.test/candidate", includeURI: true},
+		{name: "userinfo", uri: "https://user@example.test/candidate", includeURI: true},
+		{name: "query", uri: "https://example.test/candidate?download=1", includeURI: true},
+		{name: "bare query delimiter", uri: "file:///tmp/candidate?", includeURI: true},
+		{name: "fragment", uri: "https://example.test/candidate#part", includeURI: true},
+		{name: "bare fragment delimiter", uri: "file:///tmp/candidate#", includeURI: true},
+		{name: "invalid escape", uri: "file:///tmp/%zz", includeURI: true},
+		{name: "control character", uri: "file:///tmp/candidate\n", includeURI: true},
+		{name: "2049 ASCII characters", uri: "file:" + strings.Repeat("a", 2044), includeURI: true},
+		{name: "2049 Unicode characters", uri: "file:" + strings.Repeat("é", 2044), includeURI: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			schemaErr := validateAllowedActionInput(schema, input(test.uri, test.includeURI))
+			runtimeErr := validateArtifact(domain.ArtifactRef{
+				Digest: testDigest("a"), Type: "candidate", Size: 1, URI: test.uri,
+				Provenance: domain.ArtifactProvenance{Producer: "test"},
+			})
+			if (schemaErr == nil) != test.valid {
+				t.Fatalf("schema validity = %t, want %t: %v", schemaErr == nil, test.valid, schemaErr)
+			}
+			if (runtimeErr == nil) != test.valid {
+				t.Fatalf("runtime validity = %t, want %t: %v", runtimeErr == nil, test.valid, runtimeErr)
+			}
+		})
+	}
+}
+
+func TestEvidenceReferenceURISchemaRetainsRelativeCompatibility(t *testing.T) {
+	schema := actionInputSchema("attempt.checkpoint", domain.NodeDefinition{})
+	input := json.RawMessage(`{"summary":"checkpoint","evidenceRefs":[{"digest":"` + testDigest("a") + `","type":"report","size":1,"uri":"artifacts/report.json"}]}`)
+	if err := validateAllowedActionInput(schema, input); err != nil {
+		t.Fatalf("checkpoint schema rejected a legacy relative EvidenceRef URI: %v", err)
 	}
 }

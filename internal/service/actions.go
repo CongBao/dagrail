@@ -1699,9 +1699,10 @@ func actionInputSchemaForState(state domain.State, kind string, node domain.Node
 
 func actionInputSchema(kind string, node domain.NodeDefinition) map[string]any {
 	digest := map[string]any{"type": "string", "pattern": `^sha256:[a-f0-9]{64}$`}
+	artifactURI := artifactURIInputSchema()
 	evidenceRef := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"digest", "type", "size"}, "properties": map[string]any{"digest": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}, "type": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "size": map[string]any{"type": "integer", "minimum": 0}, "uri": map[string]any{"type": "string", "maxLength": 2048}}}
 	provenance := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"producer"}, "properties": map[string]any{"producer": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}, "revision": map[string]any{"type": "string", "maxLength": 256}, "invocationDigest": digest}}
-	artifact := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"digest", "type", "size", "provenance"}, "properties": map[string]any{"digest": digest, "type": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "size": map[string]any{"type": "integer", "minimum": 0}, "uri": map[string]any{"type": "string", "maxLength": 2048}, "provenance": provenance}}
+	artifact := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"digest", "type", "size", "provenance"}, "properties": map[string]any{"digest": digest, "type": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "size": map[string]any{"type": "integer", "minimum": 0}, "uri": artifactURI, "provenance": provenance}}
 	protectedInput := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"name", "digest"}, "properties": map[string]any{"name": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "digest": digest}}
 	switch kind {
 	case "role.renew":
@@ -1732,6 +1733,24 @@ func actionInputSchema(kind string, node domain.NodeDefinition) map[string]any {
 		return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"packageId", "policy", "candidateDigest", "prospectiveTreeDigest", "commandGraphDigest", "protectedInputs"}, "properties": map[string]any{"packageId": map[string]any{"type": "string", "pattern": `^epkg_[a-f0-9]{64}$`}, "policy": policy, "candidateDigest": digest, "prospectiveTreeDigest": digest, "commandGraphDigest": digest, "protectedInputs": map[string]any{"type": "array", "minItems": 1, "maxItems": 128, "items": protectedInput}}}
 	default:
 		return map[string]any{"type": "object", "additionalProperties": false}
+	}
+}
+
+func artifactURIInputSchema() map[string]any {
+	return map[string]any{
+		"type":      "string",
+		"maxLength": 2048,
+		"anyOf": []any{
+			map[string]any{"const": ""},
+			map[string]any{
+				"minLength": 1,
+				"format":    "uri",
+				"pattern":   `^(?:[Ff][Ii][Ll][Ee]|[Hh][Tt][Tt][Pp]|[Hh][Tt][Tt][Pp][Ss]|[Ss]3|[Gg][Ss]|[Aa][Zz]|[Gg][Ii][Tt]|[Oo][Cc][Ii]):[^?#]*$`,
+				"not": map[string]any{
+					"pattern": `^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*@`,
+				},
+			},
+		},
 	}
 }
 
@@ -1775,6 +1794,7 @@ func validateAllowedActionInput(schemaDocument map[string]any, input json.RawMes
 	}
 	compiler := jsonschema.NewCompiler()
 	compiler.DefaultDraft(jsonschema.Draft2020)
+	compiler.AssertFormat()
 	resource := "urn:dagrail:allowed-action-runtime:" + cacheKey
 	if err := compiler.AddResource(resource, normalizedSchema); err != nil {
 		return fmt.Errorf("compile allowed action input schema: %w", err)

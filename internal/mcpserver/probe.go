@@ -16,31 +16,70 @@ import (
 )
 
 type ProbeReport struct {
-	APIVersion            string         `json:"apiVersion"`
-	Kind                  string         `json:"kind"`
-	ServerHandshakeReady  bool           `json:"serverHandshakeReady"`
-	ProjectRoundTripReady bool           `json:"projectRoundTripReady"`
-	ToolCount             int            `json:"toolCount"`
-	ToolContracts         []ToolContract `json:"toolContracts"`
-	DurationMillis        int64          `json:"durationMillis"`
+	APIVersion                     string         `json:"apiVersion"`
+	Kind                           string         `json:"kind"`
+	ServerHandshakeReady           bool           `json:"serverHandshakeReady"`
+	ProjectRoundTripReady          bool           `json:"projectRoundTripReady"`
+	ToolCount                      int            `json:"toolCount"`
+	ToolContracts                  []ToolContract `json:"toolContracts"`
+	HandshakeDurationMillis        int64          `json:"handshakeDurationMillis"`
+	ProjectRoundTripDurationMillis int64          `json:"projectRoundTripDurationMillis,omitempty"`
+	DurationMillis                 int64          `json:"durationMillis"`
+}
+
+const (
+	DefaultProbeHandshakeTimeout        = 10 * time.Second
+	DefaultProbeProjectRoundTripTimeout = 60 * time.Second
+)
+
+type ProbeOptions struct {
+	HandshakeTimeout        time.Duration
+	ProjectRoundTripTimeout time.Duration
 }
 
 func Probe(ctx context.Context, executable, defaultRoot string) (ProbeReport, error) {
-	started := time.Now()
+	return ProbeWithOptions(ctx, executable, defaultRoot, ProbeOptions{
+		HandshakeTimeout:        DefaultProbeHandshakeTimeout,
+		ProjectRoundTripTimeout: DefaultProbeProjectRoundTripTimeout,
+	})
+}
+
+func ProbeWithOptions(ctx context.Context, executable, defaultRoot string, options ProbeOptions) (ProbeReport, error) {
 	args := []string{"mcp", "--stdio"}
 	if defaultRoot != "" {
 		args = append(args, "--root", defaultRoot)
 	}
-	client := mcp.NewClient(&mcp.Implementation{Name: "dagrail-probe", Version: "v" + version.Version}, nil)
-	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: exec.CommandContext(ctx, executable, args...)}, nil)
+	return probeWithConnector(ctx, defaultRoot, options, func(handshakeCtx context.Context) (*mcp.ClientSession, error) {
+		client := mcp.NewClient(&mcp.Implementation{Name: "dagrail-probe", Version: "v" + version.Version}, nil)
+		return client.Connect(handshakeCtx, &mcp.CommandTransport{Command: exec.CommandContext(ctx, executable, args...)}, nil)
+	})
+}
+
+type probeConnector func(context.Context) (*mcp.ClientSession, error)
+
+func probeWithConnector(ctx context.Context, defaultRoot string, options ProbeOptions, connect probeConnector) (ProbeReport, error) {
+	started := time.Now()
+	if options.HandshakeTimeout <= 0 {
+		return ProbeReport{}, fmt.Errorf("MCP probe handshake timeout must be positive")
+	}
+	if options.ProjectRoundTripTimeout <= 0 {
+		return ProbeReport{}, fmt.Errorf("MCP probe project round-trip timeout must be positive")
+	}
+	handshakeStarted := time.Now()
+	handshakeCtx, cancelHandshake := context.WithTimeout(ctx, options.HandshakeTimeout)
+	session, err := connect(handshakeCtx)
 	if err != nil {
+		cancelHandshake()
 		return ProbeReport{}, fmt.Errorf("initialize fresh DAGrail MCP process: %w", err)
 	}
 	defer session.Close()
-	listed, err := session.ListTools(ctx, nil)
+	listed, err := session.ListTools(handshakeCtx, nil)
 	if err != nil {
+		cancelHandshake()
 		return ProbeReport{}, fmt.Errorf("list DAGrail MCP tools: %w", err)
 	}
+	handshakeDuration := time.Since(handshakeStarted)
+	cancelHandshake()
 	expected := ToolContracts()
 	want := map[string]string{}
 	for _, contract := range expected {
@@ -73,8 +112,13 @@ func Probe(ctx context.Context, executable, defaultRoot string) (ProbeReport, er
 		return ProbeReport{}, fmt.Errorf("MCP tool inventory mismatch: got %v want %v", seen, wantNames)
 	}
 	projectReady := false
+	var projectDuration time.Duration
 	if defaultRoot != "" {
-		result, callErr := session.CallTool(ctx, &mcp.CallToolParams{Name: "dag_pre_wait", Arguments: map[string]any{"root": defaultRoot}})
+		projectStarted := time.Now()
+		projectCtx, cancelProject := context.WithTimeout(ctx, options.ProjectRoundTripTimeout)
+		result, callErr := session.CallTool(projectCtx, &mcp.CallToolParams{Name: "dag_pre_wait", Arguments: map[string]any{"root": defaultRoot}})
+		projectDuration = time.Since(projectStarted)
+		cancelProject()
 		if callErr != nil {
 			return ProbeReport{}, fmt.Errorf("DAGrail MCP project round trip: %w", callErr)
 		}
@@ -83,5 +127,12 @@ func Probe(ctx context.Context, executable, defaultRoot string) (ProbeReport, er
 		}
 		projectReady = true
 	}
-	return ProbeReport{APIVersion: "dagrail.io/mcp-probe/v1alpha1", Kind: "MCPProbe", ServerHandshakeReady: true, ProjectRoundTripReady: projectReady, ToolCount: len(seen), ToolContracts: expected, DurationMillis: time.Since(started).Milliseconds()}, nil
+	return ProbeReport{
+		APIVersion: "dagrail.io/mcp-probe/v1alpha1", Kind: "MCPProbe",
+		ServerHandshakeReady: true, ProjectRoundTripReady: projectReady,
+		ToolCount: len(seen), ToolContracts: expected,
+		HandshakeDurationMillis:        handshakeDuration.Milliseconds(),
+		ProjectRoundTripDurationMillis: projectDuration.Milliseconds(),
+		DurationMillis:                 time.Since(started).Milliseconds(),
+	}, nil
 }

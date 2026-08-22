@@ -2,6 +2,21 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.26.5 — 2026-08-22
+
+### Fixed
+
+- `mcp probe` now keeps the 10-second fresh-process initialize/tools-list deadline
+  separate from a configurable 60-second project round-trip deadline, so a cold large
+  Project can verify through `dag_pre_wait` without weakening the host startup bound;
+- pre-wait now treats an expired Role lease as blocking only while that Role still owns
+  a ready Node, non-terminal Attempt, pending Effect, active Resource, or open Incident.
+  Inert expired leases remain visible in `status` but no longer instruct an
+  orchestrator to revive a successfully delivered passive sender;
+- `evidence.publish` now advertises the same absolute, scheme-limited, query-free and
+  fragment-free artifact URI contract that the runtime enforces, so MCP and other
+  schema-aware callers reject repository-relative candidates before applying an action.
+
 ## 0.26.4 — 2026-08-22
 
 ### Added

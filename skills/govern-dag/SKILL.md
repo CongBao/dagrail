@@ -70,14 +70,16 @@ hand-built transition.
    Role may use returned `incident.control-resolve` without impersonating or rebinding
    the owner. Never use it for Resource/Effect Incidents or instead of supersession.
 10. Call `dag_pre_wait` before yielding, waiting, or declaring blocked. Do not wait while
-   ready Nodes, submitted Attempts, stale/expired leases, incidents, resource closure,
+   ready Nodes, submitted Attempts, stale Attempts, responsibility-bearing expired
+   leases, incidents, resource closure,
    or unreconciled effects still require a bounded action. Read exact `counts` first;
    when `truncated` is true, follow only the relevant operations-action, pre-wait, or
    dependency-cut inspect page rather than expanding every blocker into conversation
    context. If a snapshot-bound page reports stale, refresh context/pre-wait; never
    reuse its numeric offset against a new head or liveness inventory. Decode an
    oversized detail in order from its base64 chunks and verify the shared digest; do not
-   paste every chunk into the conversation when the compact signed action ref is enough.
+   paste every chunk into the conversation when the compact signed action ref is enough;
+   never revive a passive Role for a status-only expired lease that pre-wait does not return.
 
 Historical lifecycle import is an operator bootstrap, not an MCP lifecycle action. Use
 the CLI only for a pristine graph-only project, require a separately trusted source
@@ -94,7 +96,5 @@ established under the wrong local runtime, use the documented
 claims, journals, locators, or SQLite to simulate reattachment. After relocation, keep
 cutover false until Graph/history bootstrap and parity checks pass.
 
-Never edit the journal, SQLite, action secret, or generated projections. Hooks may add
-bounded guidance but cannot assign, accept, merge, complete, or infer a lifecycle result.
-Use the canonical installed `dagrail` for live controller work. A version-pinned binary is
-historical/offline only and must not restart or replace the daemon; automatic replacement reports `client_outdated`, while restart is rejected by the live daemon.
+Never edit the journal, SQLite, action secret, or generated projections; hooks cannot assign, accept, merge, complete, or infer a lifecycle result.
+Use canonical installed `dagrail` for live work; version-pinned binaries are historical/offline and cannot replace the daemon (`client_outdated`).

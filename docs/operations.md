@@ -47,6 +47,10 @@ follow its snapshot-bound `pre-wait-page:<head>:<digest>:<offset>` and dependenc
 inspect refs only when detail is needed. Refresh `pre-wait` when a page reports stale;
 never apply an offset to a changed liveness inventory. The opaque `operations:<key>`
 index and its action pages are independently capped at 24 KiB and preserve exact counts.
+An expired Role lease blocks pre-wait only when the Role still owns a ready Node,
+non-terminal Attempt, pending Effect, active Resource, or open Incident. `status` retains
+all expired leases for audit visibility; a terminal, resource-closed, incident-free
+sender is inert and must not be renewed merely to make pre-wait green.
 For an unusually large declared identifier or input schema, follow the returned detail
 ref and concatenate its base64-decoded chunks, checking the common SHA-256 digest and
 total byte count. The signed action ref itself remains compact and applies the exact

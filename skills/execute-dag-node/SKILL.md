@@ -60,7 +60,9 @@ as appropriate. Never replace a missing tool with a hand-authored lifecycle enve
    - custom kind: the exact terminal action returned by DAGrail.
 9. Call `dag_pre_wait` before becoming passive. Address work owned by this Role; report
    other ready, submitted, incident, lease, or effect counts to the controller. Follow
-   a paginated inspect ref only for an item this Role must act on.
+   a paginated inspect ref only for an item this Role must act on. A status-only expired
+   lease with no live responsibility is audit information and does not authorize
+   reactivating a passive sender.
 
 A native harness resume restores transport only. DAGrail's Role lease, Attempt,
 checkpoint, Decision records, and receipts remain the recoverable authority.

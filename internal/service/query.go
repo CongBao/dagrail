@@ -2006,6 +2006,12 @@ func (s *Service) collectPreWait(ctx context.Context, state domain.State) (preWa
 		return preWaitInventory{}, err
 	}
 	inventory := preWaitInventory{readyNodes: append([]string(nil), frontier.Ready...)}
+	responsibleRoles := map[string]bool{}
+	for _, nodeID := range frontier.Ready {
+		if node, ok := state.NodeDefinition(nodeID); ok && node.Role != "" {
+			responsibleRoles[node.Role] = true
+		}
+	}
 	now := s.Now().UTC()
 	for _, attempt := range state.Attempts {
 		if err := ctx.Err(); err != nil {
@@ -2014,8 +2020,10 @@ func (s *Service) collectPreWait(ctx context.Context, state domain.State) (preWa
 		switch attempt.Status {
 		case "submitted":
 			inventory.submittedAttempts = append(inventory.submittedAttempts, attempt.ID)
+			responsibleRoles[attempt.RoleID] = true
 		case "running", "leased":
 			inventory.activeAttempts = append(inventory.activeAttempts, attempt.ID)
+			responsibleRoles[attempt.RoleID] = true
 			updated, parseErr := time.Parse(time.RFC3339Nano, attempt.UpdatedAt)
 			if parseErr != nil || now.Sub(updated) > 30*time.Minute {
 				inventory.staleAttempts = append(inventory.staleAttempts, attempt.ID)
@@ -2023,18 +2031,7 @@ func (s *Service) collectPreWait(ctx context.Context, state domain.State) (preWa
 		case "waiting":
 			inventory.activeAttempts = append(inventory.activeAttempts, attempt.ID)
 			inventory.waitingAttempts = append(inventory.waitingAttempts, attempt.ID)
-		}
-	}
-	for roleID, lease := range state.Leases {
-		if err := ctx.Err(); err != nil {
-			return preWaitInventory{}, err
-		}
-		if !lease.Active {
-			continue
-		}
-		expires, parseErr := time.Parse(time.RFC3339Nano, lease.ExpiresAt)
-		if parseErr != nil || !now.Before(expires) {
-			inventory.expiredRoles = append(inventory.expiredRoles, roleID)
+			responsibleRoles[attempt.RoleID] = true
 		}
 	}
 	for actionID, effect := range state.Effects {
@@ -2044,6 +2041,7 @@ func (s *Service) collectPreWait(ctx context.Context, state domain.State) (preWa
 		switch effect.Status {
 		case "prepared", "dispatched", "unknown", "reconciling":
 			inventory.pendingEffects = append(inventory.pendingEffects, actionID)
+			responsibleRoles[effect.OwnerRole] = true
 		}
 	}
 	for resourceID, lease := range state.Resources {
@@ -2052,6 +2050,7 @@ func (s *Service) collectPreWait(ctx context.Context, state domain.State) (preWa
 		}
 		if lease.Status == "active" {
 			inventory.activeResources = append(inventory.activeResources, resourceID)
+			responsibleRoles[lease.RoleID] = true
 			attempt, ok := state.Attempts[lease.AttemptID]
 			if !ok || attempt.Status == "terminal" {
 				inventory.orphanedResources = append(inventory.orphanedResources, resourceID)
@@ -2064,6 +2063,7 @@ func (s *Service) collectPreWait(ctx context.Context, state domain.State) (preWa
 		}
 		if incident.Status != "resolved" {
 			inventory.openIncidents = append(inventory.openIncidents, incidentID)
+			responsibleRoles[incident.OwnerRole] = true
 		}
 		if incident.Status == "circuit-open" {
 			inventory.circuitIncidents = append(inventory.circuitIncidents, incidentID)
@@ -2072,6 +2072,18 @@ func (s *Service) collectPreWait(ctx context.Context, state domain.State) (preWa
 			if deadline, parseErr := time.Parse(time.RFC3339Nano, incident.Deadline); parseErr == nil && !now.Before(deadline) {
 				inventory.overdueIncidents = append(inventory.overdueIncidents, incidentID)
 			}
+		}
+	}
+	for roleID, lease := range state.Leases {
+		if err := ctx.Err(); err != nil {
+			return preWaitInventory{}, err
+		}
+		if !lease.Active || !responsibleRoles[roleID] {
+			continue
+		}
+		expires, parseErr := time.Parse(time.RFC3339Nano, lease.ExpiresAt)
+		if parseErr != nil || !now.Before(expires) {
+			inventory.expiredRoles = append(inventory.expiredRoles, roleID)
 		}
 	}
 	if len(frontier.Ready) == 0 && len(frontier.Blocked) > 0 && len(inventory.activeAttempts) == 0 && len(inventory.pendingEffects) == 0 {

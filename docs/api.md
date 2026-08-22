@@ -145,6 +145,12 @@ still does not prove that an already-running harness task hot-loaded new configu
 plugin diagnostics therefore keep `currentProcessVerified: false` and
 `freshSessionRequired: true` until the host itself calls a tool.
 
+The probe has independent deadlines: `--handshake-timeout` defaults to 10 seconds for
+initialize/tools-list, while `--project-timeout` defaults to 60 seconds for the optional
+cold Project round trip. Its report exposes both phase durations. Extending the Project
+deadline never weakens the host MCP startup deadline because the stdio server opens no
+Project during initialization.
+
 The stdio server exposes only these high-level tools:
 
 | Tool | Purpose | Mutation |
