@@ -88,15 +88,26 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 			return clientErr
 		}
 		remoteOut, remoteErr, executeErr := client.Execute(ctx, args, nil)
-		if len(remoteOut) > 0 {
-			_, _ = stdout.Write(remoteOut)
-		}
-		if len(remoteErr) > 0 {
-			_, _ = stderr.Write(remoteErr)
+		if writeErr := writeControllerStreams(stdout, stderr, remoteOut, remoteErr); writeErr != nil {
+			return writeErr
 		}
 		return executeErr
 	}
 	return runDirectContext(ctx, args, stdin, stdout, stderr)
+}
+
+func writeControllerStreams(stdout, stderr io.Writer, remoteOut, remoteErr []byte) error {
+	if len(remoteOut) > 0 {
+		if _, err := stdout.Write(remoteOut); err != nil {
+			return fmt.Errorf("write controller receipt: %w", err)
+		}
+	}
+	if len(remoteErr) > 0 {
+		if _, err := stderr.Write(remoteErr); err != nil {
+			return fmt.Errorf("write controller diagnostic: %w", err)
+		}
+	}
+	return nil
 }
 
 func runDirectContext(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {

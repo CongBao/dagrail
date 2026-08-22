@@ -12,8 +12,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/CongBao/dagrail/internal/commandcatalog"
 	"github.com/CongBao/dagrail/internal/version"
 	"github.com/gofrs/flock"
 )
@@ -23,6 +25,8 @@ type Client struct {
 	executable string
 	http       *http.Client
 }
+
+const controllerStartupTimeout = 30 * time.Second
 
 func NewClient() (*Client, error) {
 	endpoint, err := Endpoint()
@@ -115,52 +119,115 @@ func (client *Client) Ensure(ctx context.Context) (Status, error) {
 			return Status{}, waitErr
 		}
 	}
-	if err := client.spawn(); err != nil {
+	readyPath, err := client.spawn()
+	if err != nil {
 		return Status{}, err
 	}
-	deadline := time.Now().Add(8 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := ctx.Err(); err != nil {
-			return Status{}, err
-		}
-		probeCtx, cancel = context.WithTimeout(ctx, 300*time.Millisecond)
-		status, err = client.Status(probeCtx)
-		cancel()
-		if err == nil {
-			if status.Version != version.Version {
-				return Status{}, fmt.Errorf("started controller version %s, expected %s", status.Version, version.Version)
-			}
-			if status.DataNamespace != expectedNamespace {
-				return Status{}, fmt.Errorf("started controller uses a different authority-data namespace")
-			}
-			return status, nil
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	return Status{}, fmt.Errorf("controller did not become ready within 8 seconds")
+	defer os.Remove(readyPath)
+	return client.waitReady(ctx, readyPath, expectedNamespace)
 }
 
-func (client *Client) spawn() error {
+func (client *Client) waitReady(ctx context.Context, readyPath, expectedNamespace string) (Status, error) {
+	deadline := time.NewTimer(controllerStartupTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	readyObserved := false
+	for {
+		if !readyObserved {
+			if _, err := os.Stat(readyPath); err == nil {
+				readyObserved = true
+			} else if !os.IsNotExist(err) {
+				return Status{}, fmt.Errorf("inspect controller startup readiness: %w", err)
+			}
+		}
+		if readyObserved {
+			probeCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+			status, err := client.Status(probeCtx)
+			cancel()
+			if err == nil {
+				if status.Version != version.Version {
+					return Status{}, fmt.Errorf("started controller version %s, expected %s", status.Version, version.Version)
+				}
+				if status.DataNamespace != expectedNamespace {
+					return Status{}, fmt.Errorf("started controller uses a different authority-data namespace")
+				}
+				return status, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return Status{}, ctx.Err()
+		case <-deadline.C:
+			return Status{}, fmt.Errorf("controller did not publish readiness within %s", controllerStartupTimeout)
+		case <-ticker.C:
+		}
+	}
+}
+
+func (client *Client) spawn() (string, error) {
+	directory, err := ensureRuntimeDir()
+	if err != nil {
+		return "", err
+	}
+	readyFile, err := os.CreateTemp(directory, ".controller-ready-*")
+	if err != nil {
+		return "", fmt.Errorf("reserve controller startup readiness: %w", err)
+	}
+	readyPath := readyFile.Name()
+	if closeErr := readyFile.Close(); closeErr != nil {
+		_ = os.Remove(readyPath)
+		return "", closeErr
+	}
+	if err := os.Remove(readyPath); err != nil {
+		return "", err
+	}
 	logName, err := logPath()
 	if err != nil {
-		return err
+		return "", err
 	}
 	logFile, err := os.OpenFile(logName, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
-		return err
+		return "", err
 	}
 	command := exec.Command(client.executable, "daemon", "serve")
 	command.Stdin = nil
 	command.Stdout = logFile
 	command.Stderr = logFile
-	command.Env = append(os.Environ(), "DAGRAIL_DAEMON_CHILD=1")
+	command.Env = controllerChildEnvironment(os.Environ(), readyPath)
 	detach(command)
 	if err := command.Start(); err != nil {
 		_ = logFile.Close()
-		return fmt.Errorf("start DAGrail controller: %w", err)
+		_ = os.Remove(readyPath)
+		return "", fmt.Errorf("start DAGrail controller: %w", err)
 	}
 	_ = logFile.Close()
-	return command.Process.Release()
+	if err := command.Process.Release(); err != nil {
+		_ = os.Remove(readyPath)
+		return "", err
+	}
+	return readyPath, nil
+}
+
+func controllerChildEnvironment(environment []string, readyPath string) []string {
+	values := map[string]string{
+		"DAGRAIL_DAEMON_CHILD":      "1",
+		"DAGRAIL_DAEMON_READY_FILE": readyPath,
+	}
+	filtered := make([]string, 0, len(environment)+len(values))
+	for _, entry := range environment {
+		name, _, found := strings.Cut(entry, "=")
+		if found {
+			if _, replace := values[name]; replace {
+				continue
+			}
+		}
+		filtered = append(filtered, entry)
+	}
+	for name, value := range values {
+		filtered = append(filtered, name+"="+value)
+	}
+	return filtered
 }
 
 func (client *Client) Stop(ctx context.Context) error {
@@ -311,6 +378,17 @@ func (client *Client) Execute(ctx context.Context, args []string, stdin []byte) 
 	}
 	if result.Error != "" {
 		return result.Stdout, result.Stderr, &RPCError{Code: result.ErrorCode, Message: result.Error, Retryable: result.Retryable, Hint: result.Hint}
+	}
+	if response.StatusCode != http.StatusOK {
+		return result.Stdout, result.Stderr, fmt.Errorf("controller execute returned %s without a structured error", response.Status)
+	}
+	if !commandcatalog.ProjectReadOnly(args) && len(result.Stdout) == 0 {
+		return nil, result.Stderr, &RPCError{
+			Code:      "ambiguous_result",
+			Message:   "controller mutation returned no receipt",
+			Retryable: true,
+			Hint:      "Inspect current state before continuing; if an idempotent retry is required, reuse the exact original key and inputs.",
+		}
 	}
 	return result.Stdout, result.Stderr, nil
 }

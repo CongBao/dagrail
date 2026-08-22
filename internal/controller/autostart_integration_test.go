@@ -18,11 +18,16 @@ func TestTwentyConcurrentCLIStartsConvergeOnOneDaemon(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		binary += ".exe"
 	}
-	build := exec.Command("go", "build", "-o", binary, "../../cmd/dagrail")
+	// This integration test executes real project mutations. The explicit test
+	// tag is mandatory: production binaries intentionally ignore environment-
+	// selected authority and controller roots.
+	build := exec.Command("go", "build", "-tags=dagrail_testauthority", "-o", binary, "../../cmd/dagrail")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build integration runtime: %v: %s", err, output)
 	}
 	environment := withEnvironment(os.Environ(), "DAGRAIL_HOME", filepath.Join(root, "runtime"))
+	environment = withEnvironment(environment, "DAGRAIL_TEST_AUTHORITY_HOME", filepath.Join(root, "authority"))
+	environment = withEnvironment(environment, "DAGRAIL_TEST_CONTROLLER_DIR", filepath.Join(root, "controller"))
 	cacheRoot := filepath.Join(root, "cache")
 	switch runtime.GOOS {
 	case "windows":
@@ -103,6 +108,28 @@ func TestTwentyConcurrentCLIStartsConvergeOnOneDaemon(t *testing.T) {
 		t.Fatalf("data namespace change reused daemon pid %d", restarted.PID)
 	}
 	environment = environmentB
+	projectRoot := filepath.Join(root, "project")
+	graphPath, err := filepath.Abs(filepath.Join("..", "..", "examples", "development-dag.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runMutation := func(label string, args ...string) []byte {
+		command := exec.Command(binary, args...)
+		command.Env = environment
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v: %s", label, err, output)
+		}
+		if len(strings.TrimSpace(string(output))) == 0 || !json.Valid(output) {
+			t.Fatalf("%s returned no JSON receipt: %q", label, output)
+		}
+		return output
+	}
+	runMutation("initialize project", "init", "--root", projectRoot, "--name", "receipt-test")
+	runMutation("import graph", "graph", "import", "--root", projectRoot, "--file", graphPath, "--idempotency-key", "graph-import")
+	runMutation("bind role", "role", "bind", "--root", projectRoot, "--role", "developer", "--harness", "codex", "--session", "receipt-session", "--ttl", "15m", "--idempotency-key", "role-bind")
+	runMutation("start node", "action", "apply", "--root", projectRoot, "--kind", "node.start", "--role", "developer", "--node", "implement", "--input", "{}", "--idempotency-key", "node-start")
+
 	stop := exec.Command(binary, "daemon", "stop")
 	stop.Env = environment
 	if output, err := stop.CombinedOutput(); err != nil {

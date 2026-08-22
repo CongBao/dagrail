@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -16,6 +17,80 @@ import (
 
 	"github.com/CongBao/dagrail/internal/version"
 )
+
+func TestPublishStartupReadinessIsOwnerRuntimeBoundAndExclusive(t *testing.T) {
+	originalRuntime, err := RuntimeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeDir := t.TempDir()
+	if err := SetRuntimeDirForTesting(runtimeDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = SetRuntimeDirForTesting(originalRuntime) })
+
+	readyPath := filepath.Join(runtimeDir, ".controller-ready-test")
+	t.Setenv("DAGRAIL_DAEMON_READY_FILE", readyPath)
+	status := Status{APIVersion: APIVersion, Kind: "ControllerStatus", Version: "test", PID: 42, DataNamespace: "sha256:test"}
+	if err := publishStartupReadiness(status); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(readyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var observed Status
+	if err := json.Unmarshal(data, &observed); err != nil || observed.PID != status.PID || observed.DataNamespace != status.DataNamespace {
+		t.Fatalf("unexpected readiness receipt: value=%+v err=%v", observed, err)
+	}
+	if err := publishStartupReadiness(status); err == nil {
+		t.Fatal("readiness publication unexpectedly replaced an existing receipt")
+	}
+
+	t.Setenv("DAGRAIL_DAEMON_READY_FILE", filepath.Join(t.TempDir(), ".controller-ready-outside"))
+	if err := publishStartupReadiness(status); err == nil {
+		t.Fatal("readiness publication escaped the owner-private runtime directory")
+	}
+}
+
+func TestControllerChildEnvironmentReplacesCallerStartupValues(t *testing.T) {
+	environment := controllerChildEnvironment([]string{
+		"PATH=/bin",
+		"DAGRAIL_DAEMON_CHILD=stale",
+		"DAGRAIL_DAEMON_READY_FILE=/tmp/stale",
+	}, "/private/runtime/.controller-ready-current")
+	joined := "\n" + strings.Join(environment, "\n") + "\n"
+	for _, expected := range []string{
+		"\nPATH=/bin\n",
+		"\nDAGRAIL_DAEMON_CHILD=1\n",
+		"\nDAGRAIL_DAEMON_READY_FILE=/private/runtime/.controller-ready-current\n",
+	} {
+		if strings.Count(joined, expected) != 1 {
+			t.Fatalf("expected exactly one %q in %q", expected, joined)
+		}
+	}
+}
+
+func TestServerRejectsSuccessfulMutationWithoutReceipt(t *testing.T) {
+	server := NewServer(func(context.Context, []string, io.Reader, io.Writer, io.Writer) error { return nil }, "test")
+	requestBody, err := json.Marshal(ExecuteRequest{
+		APIVersion: APIVersion,
+		Args:       []string{"role", "bind", "--root", t.TempDir()},
+		CWD:        t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/execute", bytes.NewReader(requestBody)))
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("missing mutation receipt returned HTTP %d: %s", response.Code, response.Body.String())
+	}
+	var failure ExecuteResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &failure); err != nil || failure.ErrorCode != "ambiguous_result" || !failure.Retryable {
+		t.Fatalf("unexpected missing-receipt response: value=%+v err=%v", failure, err)
+	}
+}
 
 func TestControllerStopRejectsLegacyAndDowngradeRequests(t *testing.T) {
 	server := NewServer(func(context.Context, []string, io.Reader, io.Writer, io.Writer) error { return nil }, "test")

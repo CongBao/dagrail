@@ -121,6 +121,17 @@ func (server *Server) Handler() http.Handler {
 			writeResponse(w, http.StatusRequestEntityTooLarge, ExecuteResponse{APIVersion: APIVersion, Error: "controller command output exceeds bounded response limit", ErrorCode: "response_too_large"})
 			return
 		}
+		if err == nil && !readOnly && stdout.Len() == 0 {
+			logControllerOperation(operationID, input.Args[0], time.Since(started), "ambiguous_result")
+			writeResponse(w, http.StatusInternalServerError, ExecuteResponse{
+				APIVersion: APIVersion,
+				Error:      "controller mutation completed without a receipt",
+				ErrorCode:  "ambiguous_result",
+				Hint:       "Inspect current state before continuing; if an idempotent retry is required, reuse the exact original key and inputs.",
+				Retryable:  true,
+			})
+			return
+		}
 		response := ExecuteResponse{APIVersion: APIVersion, Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
 		status := http.StatusOK
 		if err != nil {
@@ -276,6 +287,9 @@ func (server *Server) Serve(ctx context.Context) error {
 		_ = listener.Close()
 		removeEndpoint(server.endpoint)
 	}()
+	if err := publishStartupReadiness(server.status()); err != nil {
+		return err
+	}
 	httpServer := &http.Server{Handler: server.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second}
 	shutdown := make(chan struct{})
 	go func() {
@@ -303,6 +317,39 @@ func (server *Server) Serve(ctx context.Context) error {
 		return nil
 	}
 	return err
+}
+
+func publishStartupReadiness(status Status) error {
+	path := os.Getenv("DAGRAIL_DAEMON_READY_FILE")
+	if path == "" {
+		return nil
+	}
+	directory, err := RuntimeDir()
+	if err != nil {
+		return err
+	}
+	clean := filepath.Clean(path)
+	if filepath.Dir(clean) != filepath.Clean(directory) || !strings.HasPrefix(filepath.Base(clean), ".controller-ready-") {
+		return fmt.Errorf("controller startup readiness path is outside the private runtime directory")
+	}
+	payload, err := json.Marshal(status)
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(clean, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("publish controller startup readiness: %w", err)
+	}
+	if _, err := file.Write(payload); err != nil {
+		_ = file.Close()
+		_ = os.Remove(clean)
+		return fmt.Errorf("publish controller startup readiness: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(clean)
+		return fmt.Errorf("publish controller startup readiness: %w", err)
+	}
+	return nil
 }
 
 func logControllerOperation(id uint64, command string, elapsed time.Duration, code string) {

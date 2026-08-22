@@ -12,6 +12,12 @@ All notable changes to DAGrail are documented here. The project follows Semantic
 - `assign_ready_node` is emitted only after the Role has a valid lease and now points
   to an exact `action.list` lookup for `node.start`, so every remediation is executable
   from the state that produced it.
+- daemon startup now publishes an owner-private readiness receipt after binding its
+  endpoint; clients wait for that observable handshake instead of failing on a fixed
+  eight-second polling window under loaded hosts or release qualification.
+- successful mutating controller calls must carry a non-empty receipt at both server
+  and client boundaries; a missing receipt is now an explicit `ambiguous_result`
+  instead of a silent exit-zero response.
 
 ## 0.26.6 — 2026-08-22
 
