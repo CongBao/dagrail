@@ -185,7 +185,7 @@ jobs:
           go-version: '1.26.6'
           cache: true
       - name: Run bounded fuzz target
-        run: go test ${{ matrix.package }} -run '^$' -fuzz '^${{ matrix.fuzz }}$' -fuzztime=5s
+        run: go test ${{ matrix.package }} -run '^$' -fuzz '^${{ matrix.fuzz }}$' -fuzztime=1000000x
 
   security:
     runs-on: ubuntu-latest

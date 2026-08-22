@@ -52,14 +52,14 @@ jobs:
       - name: Run bounded fuzz qualification
         shell: bash
         run: |
-          go test ./internal/domain -run '^$' -fuzz '^FuzzValidateGraphJSON$' -fuzztime=5s
-          go test ./internal/journal -run '^$' -fuzz '^FuzzValidateSegments$' -fuzztime=5s
-          go test ./internal/service -run '^$' -fuzz '^FuzzDecodeGraphDefinition$' -fuzztime=5s
-          go test ./internal/service -run '^$' -fuzz '^FuzzDecodeGraphPatch$' -fuzztime=5s
-          go test ./internal/service -run '^$' -fuzz '^FuzzDecodeLifecycleMigrationAuthority$' -fuzztime=5s
-          go test ./internal/harness -run '^$' -fuzz '^FuzzNativeReceiptConformance$' -fuzztime=5s
-          go test ./internal/release -run '^$' -fuzz '^FuzzReleaseMetadataInputs$' -fuzztime=5s
-          go test ./internal/gitartifact -run '^$' -fuzz '^FuzzDecodeClosureManifest$' -fuzztime=5s
+          go test ./internal/domain -run '^$' -fuzz '^FuzzValidateGraphJSON$' -fuzztime=1000000x
+          go test ./internal/journal -run '^$' -fuzz '^FuzzValidateSegments$' -fuzztime=1000000x
+          go test ./internal/service -run '^$' -fuzz '^FuzzDecodeGraphDefinition$' -fuzztime=1000000x
+          go test ./internal/service -run '^$' -fuzz '^FuzzDecodeGraphPatch$' -fuzztime=1000000x
+          go test ./internal/service -run '^$' -fuzz '^FuzzDecodeLifecycleMigrationAuthority$' -fuzztime=1000000x
+          go test ./internal/harness -run '^$' -fuzz '^FuzzNativeReceiptConformance$' -fuzztime=1000000x
+          go test ./internal/release -run '^$' -fuzz '^FuzzReleaseMetadataInputs$' -fuzztime=1000000x
+          go test ./internal/gitartifact -run '^$' -fuzz '^FuzzDecodeClosureManifest$' -fuzztime=1000000x
       - name: Verify structural release qualification
         run: go run ./cmd/dagrail qualify release --source .
 
