@@ -182,7 +182,7 @@ func TestOlderClientCannotReplaceNewerController(t *testing.T) {
 }
 
 func TestResolveCallerRootPreservesClientWorkingDirectory(t *testing.T) {
-	cwd := filepath.Join(string(filepath.Separator), "workspace", "client")
+	cwd := filepath.Join(t.TempDir(), "workspace", "client")
 	for _, test := range []struct {
 		args []string
 		want string
