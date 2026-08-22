@@ -151,6 +151,46 @@ func applyValidatedLifecycleEvent(state *domain.State, event LifecycleMigrationE
 		}
 		state.Leases[lease.RoleID] = lease
 		context.roleBindings[lease.RoleID] = lease
+	case "role.transferred":
+		var transfer domain.RoleTransfer
+		if err := json.Unmarshal(event.Payload, &transfer); err != nil {
+			return err
+		}
+		if transfer.Authority != roleControlAuthority || transfer.ActorRole == "" || transfer.ActorSessionID == "" || transfer.ActorRole == transfer.Next.RoleID || transfer.Previous.RoleID == "" || transfer.Previous.RoleID != transfer.Next.RoleID || !transfer.Previous.Active || !transfer.Next.Active || transfer.Previous.Harness == "" || transfer.Previous.SessionID == "" || transfer.Next.Harness == "" || transfer.Next.SessionID == "" || transfer.Previous.SessionID == transfer.Next.SessionID || transfer.ActorSessionID == transfer.Previous.SessionID || transfer.ActorSessionID == transfer.Next.SessionID {
+			return fmt.Errorf("role transfer identity is invalid")
+		}
+		if err := validateRoleTransferReason(transfer.Reason); err != nil {
+			return err
+		}
+		transferredAt, transferErr := time.Parse(time.RFC3339Nano, transfer.TransferredAt)
+		previousBound, previousBoundErr := time.Parse(time.RFC3339Nano, transfer.Previous.BoundAt)
+		previousExpiry, previousExpiryErr := time.Parse(time.RFC3339Nano, transfer.Previous.ExpiresAt)
+		nextBound, nextBoundErr := time.Parse(time.RFC3339Nano, transfer.Next.BoundAt)
+		nextExpiry, nextExpiryErr := time.Parse(time.RFC3339Nano, transfer.Next.ExpiresAt)
+		if transferErr != nil || previousBoundErr != nil || previousExpiryErr != nil || nextBoundErr != nil || nextExpiryErr != nil || transfer.Next.BoundAt != transfer.TransferredAt || transfer.TransferredAt != occurredAt || nextBound != transferredAt || !previousBound.Before(previousExpiry) || transferredAt.Before(previousBound) || !transferredAt.Before(previousExpiry) || !nextExpiry.After(nextBound) || nextExpiry.Sub(nextBound) < time.Second || nextExpiry.Sub(nextBound)%time.Second != 0 || nextExpiry.Sub(nextBound) > 24*time.Hour {
+			return fmt.Errorf("role transfer timestamps are invalid")
+		}
+		actorLease, actorOK := state.Leases[transfer.ActorRole]
+		actorBound, actorBoundErr := time.Parse(time.RFC3339Nano, actorLease.BoundAt)
+		actorExpiry, actorExpiryErr := time.Parse(time.RFC3339Nano, actorLease.ExpiresAt)
+		if !actorOK || !actorLease.Active || actorLease.SessionID != transfer.ActorSessionID || actorBoundErr != nil || actorExpiryErr != nil || transferredAt.Before(actorBound) || !transferredAt.Before(actorExpiry) || !domain.RoleHasCapability(state.Graph, transfer.ActorRole, domain.CapabilityRoleControl) {
+			return fmt.Errorf("role transfer is outside controller authority")
+		}
+		current, currentOK := state.Leases[transfer.Previous.RoleID]
+		if !currentOK || !reflect.DeepEqual(current, transfer.Previous) {
+			return fmt.Errorf("role transfer prior binding does not match current state")
+		}
+		for otherRoleID, otherLease := range state.Leases {
+			if otherRoleID == transfer.Next.RoleID || !otherLease.Active || otherLease.SessionID != transfer.Next.SessionID {
+				continue
+			}
+			otherBound, boundErr := time.Parse(time.RFC3339Nano, otherLease.BoundAt)
+			otherExpiry, expiryErr := time.Parse(time.RFC3339Nano, otherLease.ExpiresAt)
+			if boundErr != nil || expiryErr != nil || (!transferredAt.Before(otherBound) && transferredAt.Before(otherExpiry)) {
+				return fmt.Errorf("role transfer successor session is already bound to another active role")
+			}
+		}
+		state.Leases[transfer.Next.RoleID] = transfer.Next
 	case "role.released":
 		var value struct {
 			RoleID     string `json:"roleId"`
@@ -680,11 +720,13 @@ func validateLifecycleAction(action domain.ActionRecord, state domain.State, con
 		}
 		before, hadBefore := context.roleBefore[node.Role]
 		renewed, renewedHere := context.roleBindings[node.Role]
+		beforeBound, beforeBoundErr := time.Parse(time.RFC3339Nano, before.BoundAt)
+		beforeExpires, beforeExpiresErr := time.Parse(time.RFC3339Nano, before.ExpiresAt)
 		boundAt, boundErr := time.Parse(time.RFC3339Nano, renewed.BoundAt)
 		expiresAt, expiresErr := time.Parse(time.RFC3339Nano, renewed.ExpiresAt)
-		if !hadBefore || !renewedHere || boundErr != nil || expiresErr != nil ||
+		if !hadBefore || !renewedHere || beforeBoundErr != nil || beforeExpiresErr != nil || boundErr != nil || expiresErr != nil ||
 			before.RoleID != renewed.RoleID || before.SessionID != renewed.SessionID ||
-			before.Harness != renewed.Harness || expiresAt.Sub(boundAt) != time.Duration(input.TTLSeconds)*time.Second {
+			before.Harness != renewed.Harness || boundAt.Before(beforeBound) || !boundAt.Before(beforeExpires) || expiresAt.Sub(boundAt) != time.Duration(input.TTLSeconds)*time.Second {
 			return fmt.Errorf("role renewal action has no matching binding")
 		}
 		delete(context.roleBefore, node.Role)
@@ -915,7 +957,7 @@ func validateLifecycleRecordClosed(state *domain.State, context *lifecycleRecord
 		return ensureLifecycleProofLedgerEmpty(context)
 	}
 
-	if len(context.eventTypes) == 1 && oneOf(context.eventTypes[0], "role.bound", "role.released", "effect.dispatched", "effect.reconciling") {
+	if len(context.eventTypes) == 1 && oneOf(context.eventTypes[0], "role.bound", "role.transferred", "role.released", "effect.dispatched", "effect.reconciling") {
 		return ensureLifecycleProofLedgerEmpty(context)
 	}
 	return fmt.Errorf("native events do not form one closed current-writer command")

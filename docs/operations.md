@@ -60,6 +60,39 @@ For a declared terminal outcome that cannot fit in an action input, choose its s
 `outcomeRef` from `x-dagrailOutcomeOptions`; follow `idDetailRef` only when the full
 outcome identifier is actually needed.
 
+An ordinary Role takeover remains valid only after the former lease expires. When a
+reviewed controller must replace an unavailable session before expiry, grant its stable
+Role the narrow `role.control` capability and use the exact current sessions as a
+compare-and-swap boundary:
+
+```sh
+dagrail role transfer --root . --role WORKER \
+  --actor-role CONTROLLER --actor-session CONTROLLER_SESSION \
+  --expected-session OLD_WORKER_SESSION --harness codex \
+  --session NEW_WORKER_SESSION --ttl 30m \
+  --reason "authorized replacement of unavailable executor" \
+  --idempotency-key role-transfer-1
+```
+
+Use `--role-ref` or `--actor-role-ref` instead when the corresponding stable ID is
+returned only as a bounded opaque selector.
+
+The resulting `role.transferred` event retains both leases and the truthful controller.
+It does not complete, restart, or rewrite an Attempt. A stale old-session action ref is
+invalid after transfer; the successor obtains fresh actions and resumes the existing
+checkpoint. Expired targets continue to use ordinary takeover.
+
+The current owner can explicitly renew its own unexpired lease without selecting a
+Node action:
+
+```sh
+dagrail role renew --root . --role WORKER --harness codex \
+  --session CURRENT_WORKER_SESSION --ttl 15m --idempotency-key role-renew-1
+```
+
+Renew is not bind, takeover, or transfer: missing, expired, cross-harness, and
+cross-session leases fail closed.
+
 Schema-legal identifiers may be larger than a CLI or MCP selector. Use the opaque refs
 returned by context, pre-wait, operations, or inspect: `--role-ref`, `--node-ref`,
 `--attempt-ref`, `--incident-ref`, `--effect-ref`, and `--actor-role-ref`. Do not paste

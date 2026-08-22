@@ -16,8 +16,10 @@ or use `dagrail context`, `dagrail inspect`, `dagrail action apply`, `dagrail gr
 preview-change|apply-change`, `dagrail reconcile`, and `dagrail pre-wait`—never a
 hand-built transition.
 
-1. Bind only the assigned control Role. It needs the capabilities for actions it will
-   perform, such as `graph.change`; takeover is valid only after the former lease expires.
+1. Bind only the assigned control Role and capabilities. Takeover is expiry-only. For an
+   unavailable executor with an unexpired lease, a distinct `role.control` controller may
+   apply only the returned exact-session `role.control-transfer`; it records both sessions
+   and the truthful actor without rewriting the active Attempt. Never impersonate it.
 2. Call `dag_context` with `view: orchestrator`, an explicit `root` when project
    discovery is ambiguous, `role_id`/`node_id` for stable IDs or `role_ref`/`node_ref`
    for controller-issued opaque selectors, and a cursor. There is no `role` or `node`
@@ -70,8 +72,7 @@ hand-built transition.
    Role may use returned `incident.control-resolve` without impersonating or rebinding
    the owner. Never use it for Resource/Effect Incidents or instead of supersession.
 10. Call `dag_pre_wait` before yielding, waiting, or declaring blocked. Do not wait while
-   ready Nodes, submitted Attempts, stale Attempts, responsibility-bearing expired
-   leases, incidents, resource closure,
+   ready Nodes, submitted Attempts, stale Attempts, responsibility-bearing expired leases, incidents, resource closure,
    or unreconciled effects still require a bounded action. Read exact `counts` first;
    when `truncated` is true, follow only the relevant operations-action, pre-wait, or
    dependency-cut inspect page rather than expanding every blocker into conversation
@@ -96,5 +97,4 @@ established under the wrong local runtime, use the documented
 claims, journals, locators, or SQLite to simulate reattachment. After relocation, keep
 cutover false until Graph/history bootstrap and parity checks pass.
 
-Never edit the journal, SQLite, action secret, or generated projections; hooks cannot assign, accept, merge, complete, or infer a lifecycle result.
-Use canonical installed `dagrail` for live work; version-pinned binaries are historical/offline and cannot replace the daemon (`client_outdated`).
+Never edit journal/SQLite/action-secret/projections; hooks cannot assign, accept, merge, complete, or infer results. Use canonical installed `dagrail`; version-pinned binaries are historical/offline and cannot replace the daemon (`client_outdated`).

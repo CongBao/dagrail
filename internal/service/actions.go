@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/CongBao/dagrail/internal/domain"
 	"github.com/CongBao/dagrail/internal/journal"
@@ -99,6 +100,9 @@ func boundedActionResult(state domain.State, result ActionResult) ActionResult {
 			case kind == "incident":
 				result.ObjectInspectRef = incidentRefForIncident(state, id)
 				result.ObjectRefDetailRef = objectReferenceDetailRef(state, kind, id, hex.EncodeToString(sum[:]), 0)
+			case kind == "role":
+				result.ObjectInspectRef = roleRefForRole(state, id)
+				result.ObjectRefDetailRef = objectReferenceDetailRef(state, kind, id, hex.EncodeToString(sum[:]), 0)
 			case boundedStoredObjectKinds[kind]:
 				result.ObjectInspectRef = storedObjectRef(state, kind, id)
 				result.ObjectRefDetailRef = objectReferenceDetailRef(state, kind, id, hex.EncodeToString(sum[:]), 0)
@@ -115,33 +119,77 @@ func boundedActionResult(state domain.State, result ActionResult) ActionResult {
 var allowedActionSchemaCache sync.Map
 
 type actionRefPayload struct {
-	ActionID        string `json:"actionId"`
-	ProjectID       string `json:"projectId"`
-	GraphRevision   string `json:"graphRevision"`
-	ProviderSet     string `json:"providerSet"`
-	HeadHash        string `json:"headHash"`
-	RoleID          string `json:"roleId,omitempty"`
-	SessionID       string `json:"sessionId,omitempty"`
-	NodeID          string `json:"nodeId,omitempty"`
-	AttemptID       string `json:"attemptId,omitempty"`
-	ResourceID      string `json:"resourceId,omitempty"`
-	IncidentID      string `json:"incidentId,omitempty"`
-	SuccessorNodeID string `json:"successorNodeId,omitempty"`
-	Kind            string `json:"kind"`
-	ExpiresAt       string `json:"expiresAt"`
-	Compact         bool   `json:"compact,omitempty"`
-	RoleKey         string `json:"roleKey,omitempty"`
-	SessionKey      string `json:"sessionKey,omitempty"`
-	NodeKey         string `json:"nodeKey,omitempty"`
-	AttemptKey      string `json:"attemptKey,omitempty"`
-	ResourceKey     string `json:"resourceKey,omitempty"`
-	IncidentKey     string `json:"incidentKey,omitempty"`
-	SuccessorKey    string `json:"successorKey,omitempty"`
+	ActionID           string `json:"actionId"`
+	ProjectID          string `json:"projectId"`
+	GraphRevision      string `json:"graphRevision"`
+	ProviderSet        string `json:"providerSet"`
+	HeadHash           string `json:"headHash"`
+	RoleID             string `json:"roleId,omitempty"`
+	SessionID          string `json:"sessionId,omitempty"`
+	NodeID             string `json:"nodeId,omitempty"`
+	AttemptID          string `json:"attemptId,omitempty"`
+	ResourceID         string `json:"resourceId,omitempty"`
+	IncidentID         string `json:"incidentId,omitempty"`
+	SuccessorNodeID    string `json:"successorNodeId,omitempty"`
+	TargetRoleID       string `json:"targetRoleId,omitempty"`
+	PreviousSessionID  string `json:"previousSessionId,omitempty"`
+	Kind               string `json:"kind"`
+	ExpiresAt          string `json:"expiresAt"`
+	Compact            bool   `json:"compact,omitempty"`
+	RoleKey            string `json:"roleKey,omitempty"`
+	SessionKey         string `json:"sessionKey,omitempty"`
+	NodeKey            string `json:"nodeKey,omitempty"`
+	AttemptKey         string `json:"attemptKey,omitempty"`
+	ResourceKey        string `json:"resourceKey,omitempty"`
+	IncidentKey        string `json:"incidentKey,omitempty"`
+	SuccessorKey       string `json:"successorKey,omitempty"`
+	TargetRoleKey      string `json:"targetRoleKey,omitempty"`
+	PreviousSessionKey string `json:"previousSessionKey,omitempty"`
 }
 
 const maxInlineActionRefPayloadBytes = 8 * 1024
 
+const roleControlAuthority = "role.control"
+
+type roleControlTransferInput struct {
+	Harness    string `json:"harness"`
+	SessionID  string `json:"sessionId"`
+	TTLSeconds int64  `json:"ttlSeconds"`
+	Reason     string `json:"reason"`
+}
+
+func roleTransferRequestDigest(actorRole, actorSessionID, roleID, expectedSessionID string, input roleControlTransferInput) (string, error) {
+	requestRaw, err := json.Marshal(struct {
+		ActorRole       string `json:"actorRole"`
+		ActorSessionID  string `json:"actorSessionId"`
+		RoleID          string `json:"roleId"`
+		ExpectedSession string `json:"expectedSessionId"`
+		Harness         string `json:"harness"`
+		SessionID       string `json:"sessionId"`
+		TTLSeconds      int64  `json:"ttlSeconds"`
+		Reason          string `json:"reason"`
+	}{actorRole, actorSessionID, roleID, expectedSessionID, input.Harness, input.SessionID, input.TTLSeconds, input.Reason})
+	if err != nil {
+		return "", err
+	}
+	return authorityRequestDigest("role.control-transfer", requestRaw)
+}
+
 func (s *Service) BindRole(roleID, harness, sessionID string, ttl time.Duration, takeover bool, idempotencyKey string) (domain.RoleLease, error) {
+	return s.bindRole(roleID, harness, sessionID, ttl, takeover, false, idempotencyKey)
+}
+
+// RenewRole extends the current session's still-active lease. It cannot create
+// a missing binding, revive an expired lease, change harness/session identity,
+// or replace another session; those remain bind, takeover, and transfer.
+func (s *Service) RenewRole(roleID, harness, sessionID string, ttl time.Duration, idempotencyKey string) (domain.RoleLease, error) {
+	if ttl < time.Second || ttl%time.Second != 0 {
+		return domain.RoleLease{}, fmt.Errorf("role renewal lease TTL must be a whole number of seconds")
+	}
+	return s.bindRole(roleID, harness, sessionID, ttl, false, true, idempotencyKey)
+}
+
+func (s *Service) bindRole(roleID, harness, sessionID string, ttl time.Duration, takeover, renewOnly bool, idempotencyKey string) (domain.RoleLease, error) {
 	if idempotencyKey == "" {
 		return domain.RoleLease{}, fmt.Errorf("idempotency key is required")
 	}
@@ -167,11 +215,15 @@ func (s *Service) BindRole(roleID, harness, sessionID string, ttl time.Duration,
 	if err := domain.RejectSensitiveFields(bindingRaw); err != nil {
 		return domain.RoleLease{}, fmt.Errorf("role binding contains prohibited material: %w", err)
 	}
-	requestDigest, err := authorityRequestDigest("role.bind", bindingRaw)
+	digestDomain := "role.bind"
+	if renewOnly {
+		digestDomain = "role.renew-cli"
+	}
+	requestDigest, err := authorityRequestDigest(digestDomain, bindingRaw)
 	if err != nil {
 		return domain.RoleLease{}, err
 	}
-	state, _, err := s.load()
+	state, segments, err := s.load()
 	if err != nil {
 		return domain.RoleLease{}, err
 	}
@@ -179,9 +231,29 @@ func (s *Service) BindRole(roleID, harness, sessionID string, ttl time.Duration,
 		if command.Kind != "role.bind" || command.ActorRole != roleID || command.ObjectRef != "role:"+roleID || (command.RequestDigest != "" && command.RequestDigest != requestDigest) {
 			return domain.RoleLease{}, fmt.Errorf("idempotency key is already bound to another command")
 		}
+		if renewOnly {
+			return roleLeaseForSequence(segments, command.Sequence)
+		}
 		lease, exists := state.Leases[roleID]
 		if exists {
 			return lease, nil
+		}
+	}
+	now := s.Now().UTC()
+	if renewOnly {
+		current, exists := state.Leases[roleID]
+		if !exists || !current.Active {
+			return domain.RoleLease{}, fmt.Errorf("role %s has no active lease to renew", roleID)
+		}
+		expires, parseErr := time.Parse(time.RFC3339Nano, current.ExpiresAt)
+		if parseErr != nil {
+			return domain.RoleLease{}, parseErr
+		}
+		if !now.Before(expires) {
+			return domain.RoleLease{}, fmt.Errorf("role %s lease is expired; use role takeover", roleID)
+		}
+		if current.SessionID != sessionID || current.Harness != harness {
+			return domain.RoleLease{}, fmt.Errorf("role renewal identity does not own the active lease")
 		}
 	}
 	found := false
@@ -193,13 +265,15 @@ func (s *Service) BindRole(roleID, harness, sessionID string, ttl time.Duration,
 	if !found {
 		return domain.RoleLease{}, fmt.Errorf("unknown role %s", roleID)
 	}
-	now := s.Now().UTC()
 	if current, ok := state.Leases[roleID]; ok && current.Active {
 		expires, parseErr := time.Parse(time.RFC3339Nano, current.ExpiresAt)
 		if parseErr != nil {
 			return domain.RoleLease{}, parseErr
 		}
 		if now.Before(expires) && current.SessionID != sessionID {
+			if takeover {
+				return domain.RoleLease{}, fmt.Errorf("role %s already has an active lease; a distinct role.control controller must use role transfer or wait for expiry", roleID)
+			}
 			return domain.RoleLease{}, fmt.Errorf("role %s already has an active lease", roleID)
 		}
 		if takeover && now.Before(expires) {
@@ -212,7 +286,7 @@ func (s *Service) BindRole(roleID, harness, sessionID string, ttl time.Duration,
 	if _, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "role.bind", ActorRole: roleID, IdempotencyKey: idempotencyKey, ObjectRef: "role:" + roleID, RequestDigest: requestDigest}, []journal.Event{{Type: "role.bound", Payload: payload}}, now, &expectedHead); err != nil {
 		return domain.RoleLease{}, err
 	}
-	state, segments, err := s.load()
+	state, segments, err = s.load()
 	if err != nil {
 		return domain.RoleLease{}, err
 	}
@@ -220,6 +294,167 @@ func (s *Service) BindRole(roleID, harness, sessionID string, ttl time.Duration,
 		return domain.RoleLease{}, err
 	}
 	return state.Leases[roleID], nil
+}
+
+func roleLeaseForSequence(segments []journal.Segment, sequence uint64) (domain.RoleLease, error) {
+	for _, segment := range segments {
+		if segment.Sequence != sequence {
+			continue
+		}
+		for _, event := range segment.Events {
+			if event.Type != "role.bound" {
+				continue
+			}
+			var lease domain.RoleLease
+			if err := json.Unmarshal(event.Payload, &lease); err != nil {
+				return domain.RoleLease{}, err
+			}
+			return lease, nil
+		}
+	}
+	return domain.RoleLease{}, fmt.Errorf("role lease receipt is unavailable at sequence %d", sequence)
+}
+
+// TransferRole replaces one unexpired Role lease under a distinct, explicitly
+// leased controller Role. It is deliberately separate from BindRole takeover:
+// takeover remains available only after expiry, while transfer records the
+// truthful actor and exact prior binding used as the compare-and-swap guard.
+func (s *Service) TransferRole(actorRole, actorSessionID, roleID, expectedSessionID, harness, sessionID string, ttl time.Duration, reason, idempotencyKey string) (domain.RoleTransfer, error) {
+	return s.transferRole(actorRole, actorSessionID, roleID, expectedSessionID, harness, sessionID, ttl, reason, idempotencyKey, "")
+}
+
+func (s *Service) transferRole(actorRole, actorSessionID, roleID, expectedSessionID, harness, sessionID string, ttl time.Duration, reason, idempotencyKey, actionHead string) (domain.RoleTransfer, error) {
+	if idempotencyKey == "" {
+		return domain.RoleTransfer{}, fmt.Errorf("idempotency key is required")
+	}
+	if actorRole == "" || actorSessionID == "" || roleID == "" || expectedSessionID == "" || harness == "" || sessionID == "" {
+		return domain.RoleTransfer{}, fmt.Errorf("actor role/session, target role/expected session, harness and new session are required")
+	}
+	if actorRole == roleID {
+		return domain.RoleTransfer{}, fmt.Errorf("role controller must be distinct from the transferred role")
+	}
+	if expectedSessionID == sessionID {
+		return domain.RoleTransfer{}, fmt.Errorf("role transfer requires a distinct successor session")
+	}
+	if actorSessionID == expectedSessionID {
+		return domain.RoleTransfer{}, fmt.Errorf("role controller session cannot also own the target lease")
+	}
+	if actorSessionID == sessionID {
+		return domain.RoleTransfer{}, fmt.Errorf("role transfer successor session cannot reuse the controller session")
+	}
+	if ttl <= 0 {
+		ttl = 15 * time.Minute
+	}
+	if ttl < time.Second || ttl%time.Second != 0 {
+		return domain.RoleTransfer{}, fmt.Errorf("role transfer lease TTL must be a whole number of seconds")
+	}
+	if ttl > 24*time.Hour {
+		return domain.RoleTransfer{}, fmt.Errorf("lease TTL cannot exceed 24 hours")
+	}
+	if err := validateRoleTransferReason(reason); err != nil {
+		return domain.RoleTransfer{}, err
+	}
+	input := roleControlTransferInput{Harness: harness, SessionID: sessionID, TTLSeconds: int64(ttl / time.Second), Reason: reason}
+	requestRaw, err := json.Marshal(input)
+	if err != nil {
+		return domain.RoleTransfer{}, err
+	}
+	if err := domain.RejectSensitiveFields(requestRaw); err != nil {
+		return domain.RoleTransfer{}, fmt.Errorf("role transfer contains prohibited material: %w", err)
+	}
+	requestDigest, err := roleTransferRequestDigest(actorRole, actorSessionID, roleID, expectedSessionID, input)
+	if err != nil {
+		return domain.RoleTransfer{}, err
+	}
+	state, segments, err := s.load()
+	if err != nil {
+		return domain.RoleTransfer{}, err
+	}
+	if command, ok := state.Commands[idempotencyKey]; ok {
+		if command.Kind != "role.control-transfer" || command.ActorRole != actorRole || command.ObjectRef != "role:"+roleID || (command.RequestDigest != "" && command.RequestDigest != requestDigest) {
+			return domain.RoleTransfer{}, fmt.Errorf("idempotency key is already bound to another command")
+		}
+		return roleTransferForSequence(segments, command.Sequence)
+	}
+	if actionHead != "" && state.HeadHash != actionHead {
+		return domain.RoleTransfer{}, fmt.Errorf("role control transfer action reference is stale")
+	}
+	now := s.Now().UTC()
+	actorLease, err := validLeaseAt(state, actorRole, now)
+	if err != nil {
+		return domain.RoleTransfer{}, err
+	}
+	if actorLease.SessionID != actorSessionID {
+		return domain.RoleTransfer{}, fmt.Errorf("role controller session does not own actor role %s", actorRole)
+	}
+	if !domain.RoleHasCapability(state.Graph, actorRole, domain.CapabilityRoleControl) {
+		return domain.RoleTransfer{}, fmt.Errorf("role %s lacks role control capability", actorRole)
+	}
+	previous, exists := state.Leases[roleID]
+	if !exists || !previous.Active {
+		return domain.RoleTransfer{}, fmt.Errorf("role %s has no active lease to transfer", roleID)
+	}
+	previousBound, boundErr := time.Parse(time.RFC3339Nano, previous.BoundAt)
+	previousExpiry, expiryErr := time.Parse(time.RFC3339Nano, previous.ExpiresAt)
+	if boundErr != nil || expiryErr != nil {
+		return domain.RoleTransfer{}, fmt.Errorf("role %s lease timestamps are invalid", roleID)
+	}
+	if now.Before(previousBound) {
+		return domain.RoleTransfer{}, fmt.Errorf("role %s lease has not begun", roleID)
+	}
+	if !now.Before(previousExpiry) {
+		return domain.RoleTransfer{}, fmt.Errorf("role %s lease is expired; use role takeover", roleID)
+	}
+	if previous.SessionID != expectedSessionID {
+		return domain.RoleTransfer{}, fmt.Errorf("role %s active lease session changed", roleID)
+	}
+	for otherRoleID, otherLease := range state.Leases {
+		if otherRoleID == roleID || !otherLease.Active || otherLease.SessionID != sessionID {
+			continue
+		}
+		otherExpiry, expiryErr := time.Parse(time.RFC3339Nano, otherLease.ExpiresAt)
+		if expiryErr != nil {
+			return domain.RoleTransfer{}, expiryErr
+		}
+		if now.Before(otherExpiry) {
+			return domain.RoleTransfer{}, fmt.Errorf("role transfer successor session is already bound to active role %s", otherRoleID)
+		}
+	}
+	next := domain.RoleLease{RoleID: roleID, Harness: harness, SessionID: sessionID, BoundAt: now.Format(time.RFC3339Nano), ExpiresAt: now.Add(ttl).Format(time.RFC3339Nano), Active: true}
+	transfer := domain.RoleTransfer{Authority: roleControlAuthority, ActorRole: actorRole, ActorSessionID: actorSessionID, Previous: previous, Next: next, Reason: reason, TransferredAt: now.Format(time.RFC3339Nano)}
+	payload, _ := json.Marshal(transfer)
+	appendHead := state.HeadHash
+	segment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "role.control-transfer", ActorRole: actorRole, IdempotencyKey: idempotencyKey, ObjectRef: "role:" + roleID, RequestDigest: requestDigest}, []journal.Event{{Type: "role.transferred", Payload: payload}}, now, &appendHead)
+	if err != nil {
+		return domain.RoleTransfer{}, err
+	}
+	state, segments, err = s.load()
+	if err != nil {
+		return domain.RoleTransfer{}, err
+	}
+	if err := s.Projection.Sync(state, segments); err != nil {
+		return domain.RoleTransfer{}, err
+	}
+	return roleTransferForSequence(segments, segment.Sequence)
+}
+
+func roleTransferForSequence(segments []journal.Segment, sequence uint64) (domain.RoleTransfer, error) {
+	for _, segment := range segments {
+		if segment.Sequence != sequence {
+			continue
+		}
+		for _, event := range segment.Events {
+			if event.Type != "role.transferred" {
+				continue
+			}
+			var transfer domain.RoleTransfer
+			if err := json.Unmarshal(event.Payload, &transfer); err != nil {
+				return domain.RoleTransfer{}, err
+			}
+			return transfer, nil
+		}
+	}
+	return domain.RoleTransfer{}, fmt.Errorf("role transfer receipt is unavailable at sequence %d", sequence)
 }
 
 func (s *Service) applyIncidentSupersedeAction(ctx context.Context, state domain.State, payload actionRefPayload, input json.RawMessage, idempotencyKey string) (ActionResult, error) {
@@ -777,7 +1012,7 @@ func (s *Service) applyActionContext(ctx context.Context, ref string, input json
 	if err != nil {
 		return ActionResult{}, err
 	}
-	state, _, err := s.load()
+	state, segments, err := s.load()
 	if err != nil {
 		return ActionResult{}, err
 	}
@@ -844,7 +1079,33 @@ func (s *Service) applyActionContext(ctx context.Context, ref string, input json
 			return boundedActionResult(state, ActionResult{ActionID: payload.ActionID, Kind: payload.Kind, NodeID: incident.NodeID, ObjectRef: command.ObjectRef, Status: incident.Status, Sequence: command.Sequence}), nil
 		}
 	}
-	if payload.Kind != "incident.supersede" && payload.Kind != "incident.control-resolve" {
+	if payload.Kind == "role.control-transfer" {
+		if command, ok := state.Commands[idempotencyKey]; ok {
+			transfer, receiptErr := roleTransferForSequence(segments, command.Sequence)
+			if receiptErr != nil {
+				return ActionResult{}, receiptErr
+			}
+			value, decodeErr := decodeRoleControlTransferInput(input)
+			if decodeErr != nil {
+				return ActionResult{}, decodeErr
+			}
+			transferDigest, digestErr := roleTransferRequestDigest(transfer.ActorRole, transfer.ActorSessionID, transfer.Next.RoleID, transfer.Previous.SessionID, value)
+			if digestErr != nil {
+				return ActionResult{}, digestErr
+			}
+			roleMatches := payload.RoleID == transfer.ActorRole && payload.SessionID == transfer.ActorSessionID
+			targetMatches := payload.TargetRoleID == transfer.Next.RoleID && payload.PreviousSessionID == transfer.Previous.SessionID
+			if payload.Compact {
+				roleMatches = payload.RoleKey == actionBindingKey(state.ProjectID, "role", transfer.ActorRole) && payload.SessionKey == actionBindingKey(state.ProjectID, "session:"+transfer.ActorRole, transfer.ActorSessionID)
+				targetMatches = payload.TargetRoleKey == actionBindingKey(state.ProjectID, "role", transfer.Next.RoleID) && payload.PreviousSessionKey == actionBindingKey(state.ProjectID, "session:"+transfer.Next.RoleID, transfer.Previous.SessionID)
+			}
+			if command.Kind != "role.control-transfer" || command.ObjectRef != "role:"+transfer.Next.RoleID || !roleMatches || !targetMatches || (command.RequestDigest != "" && command.RequestDigest != transferDigest) {
+				return ActionResult{}, fmt.Errorf("idempotency key is already bound to another command")
+			}
+			return boundedActionResult(state, ActionResult{ActionID: payload.ActionID, Kind: payload.Kind, ObjectRef: command.ObjectRef, Status: "transferred", Sequence: command.Sequence}), nil
+		}
+	}
+	if payload.Kind != "incident.supersede" && payload.Kind != "incident.control-resolve" && payload.Kind != "role.control-transfer" {
 		if command, ok := state.Commands[idempotencyKey]; ok {
 			result, resultErr := actionResultForSequence(state, command.Sequence)
 			if resultErr != nil || result.ActionID != payload.ActionID || result.Kind != payload.Kind || (command.RequestDigest != "" && command.RequestDigest != requestDigest) {
@@ -879,6 +1140,21 @@ func (s *Service) applyActionContext(ctx context.Context, ref string, input json
 	}
 	if lease.SessionID != payload.SessionID {
 		return ActionResult{}, fmt.Errorf("action reference session no longer owns the role")
+	}
+	if payload.Kind == "role.control-transfer" {
+		value, decodeErr := decodeRoleControlTransferInput(input)
+		if decodeErr != nil {
+			return ActionResult{}, decodeErr
+		}
+		transfer, transferErr := s.transferRole(payload.RoleID, payload.SessionID, payload.TargetRoleID, payload.PreviousSessionID, value.Harness, value.SessionID, time.Duration(value.TTLSeconds)*time.Second, value.Reason, idempotencyKey, payload.HeadHash)
+		if transferErr != nil {
+			return ActionResult{}, transferErr
+		}
+		state, _, loadErr := s.load()
+		if loadErr != nil {
+			return ActionResult{}, loadErr
+		}
+		return boundedActionResult(state, ActionResult{ActionID: payload.ActionID, Kind: payload.Kind, ObjectRef: "role:" + transfer.Next.RoleID, Status: "transferred", Sequence: state.Commands[idempotencyKey].Sequence}), nil
 	}
 	node, ok := state.NodeDefinition(payload.NodeID)
 	if !ok || node.Role != payload.RoleID {
@@ -1107,7 +1383,7 @@ func (s *Service) applyActionContext(ctx context.Context, ref string, input json
 	if err := s.settleAutomatic(); err != nil {
 		return ActionResult{}, err
 	}
-	state, segments, err := s.load()
+	state, segments, err = s.load()
 	if err != nil {
 		return ActionResult{}, err
 	}
@@ -1486,7 +1762,7 @@ func resolveCompactActionRef(ctx context.Context, state domain.State, payload ac
 	if !payload.Compact {
 		return payload, nil
 	}
-	if payload.ProjectID != state.ProjectID || state.Graph == nil || payload.RoleKey == "" || payload.NodeKey == "" {
+	if payload.ProjectID != state.ProjectID || state.Graph == nil || payload.RoleKey == "" || (payload.Kind != "role.control-transfer" && payload.NodeKey == "") {
 		return actionRefPayload{}, fmt.Errorf("compact action reference is stale or incomplete")
 	}
 	resolve := func(kind, key string, values func(func(string) bool)) (string, error) {
@@ -1531,6 +1807,23 @@ func resolveCompactActionRef(ctx context.Context, state domain.State, payload ac
 		return actionRefPayload{}, fmt.Errorf("compact action reference session binding is stale")
 	}
 	payload.SessionID = lease.SessionID
+	payload.TargetRoleID, err = resolve("role", payload.TargetRoleKey, func(yield func(string) bool) {
+		for _, role := range state.Graph.Spec.Roles {
+			if !yield(role.ID) {
+				return
+			}
+		}
+	})
+	if err != nil {
+		return actionRefPayload{}, err
+	}
+	if payload.TargetRoleID != "" {
+		targetLease, exists := state.Leases[payload.TargetRoleID]
+		if !exists || actionBindingKey(payload.ProjectID, "session:"+payload.TargetRoleID, targetLease.SessionID) != payload.PreviousSessionKey {
+			return actionRefPayload{}, fmt.Errorf("compact action reference previous target session binding is stale")
+		}
+		payload.PreviousSessionID = targetLease.SessionID
+	}
 	payload.NodeID, err = resolve("node", payload.NodeKey, func(yield func(string) bool) {
 		for _, node := range state.Graph.Spec.Nodes {
 			if !yield(node.ID) {
@@ -1586,21 +1879,23 @@ func resolveCompactActionRef(ctx context.Context, state domain.State, payload ac
 
 func compactActionRef(payload actionRefPayload) actionRefPayload {
 	return actionRefPayload{
-		ActionID:      payload.ActionID,
-		ProjectID:     payload.ProjectID,
-		GraphRevision: payload.GraphRevision,
-		ProviderSet:   payload.ProviderSet,
-		HeadHash:      payload.HeadHash,
-		Kind:          payload.Kind,
-		ExpiresAt:     payload.ExpiresAt,
-		Compact:       true,
-		RoleKey:       actionBindingKey(payload.ProjectID, "role", payload.RoleID),
-		SessionKey:    actionBindingKey(payload.ProjectID, "session:"+payload.RoleID, payload.SessionID),
-		NodeKey:       actionBindingKey(payload.ProjectID, "node", payload.NodeID),
-		AttemptKey:    actionBindingKey(payload.ProjectID, "attempt", payload.AttemptID),
-		ResourceKey:   actionBindingKey(payload.ProjectID, "resource", payload.ResourceID),
-		IncidentKey:   actionBindingKey(payload.ProjectID, "incident", payload.IncidentID),
-		SuccessorKey:  actionBindingKey(payload.ProjectID, "node", payload.SuccessorNodeID),
+		ActionID:           payload.ActionID,
+		ProjectID:          payload.ProjectID,
+		GraphRevision:      payload.GraphRevision,
+		ProviderSet:        payload.ProviderSet,
+		HeadHash:           payload.HeadHash,
+		Kind:               payload.Kind,
+		ExpiresAt:          payload.ExpiresAt,
+		Compact:            true,
+		RoleKey:            actionBindingKey(payload.ProjectID, "role", payload.RoleID),
+		SessionKey:         actionBindingKey(payload.ProjectID, "session:"+payload.RoleID, payload.SessionID),
+		NodeKey:            actionBindingKey(payload.ProjectID, "node", payload.NodeID),
+		AttemptKey:         actionBindingKey(payload.ProjectID, "attempt", payload.AttemptID),
+		ResourceKey:        actionBindingKey(payload.ProjectID, "resource", payload.ResourceID),
+		IncidentKey:        actionBindingKey(payload.ProjectID, "incident", payload.IncidentID),
+		SuccessorKey:       actionBindingKey(payload.ProjectID, "node", payload.SuccessorNodeID),
+		TargetRoleKey:      actionBindingKey(payload.ProjectID, "role", payload.TargetRoleID),
+		PreviousSessionKey: actionBindingKey(payload.ProjectID, "session:"+payload.TargetRoleID, payload.PreviousSessionID),
 	}
 }
 
@@ -1769,6 +2064,54 @@ func incidentControlResolveInputSchema() map[string]any {
 			"note":        map[string]any{"type": "string", "minLength": 1, "maxLength": 1024},
 		},
 	}
+}
+
+func roleControlTransferInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"harness", "sessionId", "ttlSeconds", "reason"},
+		"properties": map[string]any{
+			"harness":    map[string]any{"type": "string", "minLength": 1},
+			"sessionId":  map[string]any{"type": "string", "minLength": 1},
+			"ttlSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 86400},
+			"reason":     map[string]any{"type": "string", "minLength": 1, "maxLength": 1024},
+		},
+	}
+}
+
+func decodeRoleControlTransferInput(input json.RawMessage) (roleControlTransferInput, error) {
+	if err := validateAllowedActionInput(roleControlTransferInputSchema(), input); err != nil {
+		return roleControlTransferInput{}, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(input))
+	decoder.DisallowUnknownFields()
+	var value roleControlTransferInput
+	if err := decoder.Decode(&value); err != nil {
+		return roleControlTransferInput{}, fmt.Errorf("decode role control transfer input: %w", err)
+	}
+	if err := validateRoleTransferReason(value.Reason); err != nil {
+		return roleControlTransferInput{}, err
+	}
+	return value, nil
+}
+
+// validateRoleTransferReason deliberately uses Unicode code points because the
+// public JSON Schemas express maxLength with that unit. The surrounding
+// authority limits still bound the encoded event size, while this keeps the
+// writer and lifecycle-import contract identical for multilingual reasons.
+func validateRoleTransferReason(reason string) error {
+	if strings.TrimSpace(reason) == "" || utf8.RuneCountInString(reason) > 1024 {
+		return fmt.Errorf("role transfer reason must be 1..1024 characters")
+	}
+	raw, err := json.Marshal(map[string]string{"reason": reason})
+	if err != nil {
+		return err
+	}
+	if err := domain.RejectSensitiveFields(raw); err != nil {
+		return fmt.Errorf("role transfer reason contains prohibited material: %w", err)
+	}
+	return nil
 }
 
 func validateAllowedActionInput(schemaDocument map[string]any, input json.RawMessage) error {

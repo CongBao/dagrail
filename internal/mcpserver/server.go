@@ -48,7 +48,7 @@ type InspectOutput struct {
 type ApplyInput struct {
 	Root           string         `json:"root,omitempty"`
 	ActionRef      string         `json:"action_ref"`
-	Input          map[string]any `json:"input,omitempty"`
+	Input          map[string]any `json:"input"`
 	IdempotencyKey string         `json:"idempotency_key"`
 }
 type GraphChangeInput struct {
@@ -109,7 +109,7 @@ func runServer(ctx context.Context, server *mcp.Server) error {
 }
 
 func New(svc *service.Service) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "dagrail", Title: "DAGrail", Description: "LLM-led local DAG governance control plane.", Version: version.Version, WebsiteURL: "https://github.com/CongBao/dagrail"}, &mcp.ServerOptions{Instructions: "Treat DAGrail as runtime authority. Read bounded context, use returned opaque refs instead of copying oversized identifiers, follow its authorization and remediation plan, apply only a current returned action ref with one stable idempotency key, use NodeKind-specific outcomes, close or reconcile resources, and call dag_pre_wait before yielding. A returned incident.control-resolve action closes a terminal failed/cancelled Attempt under truthful controller authority; never impersonate its original owner or substitute it for incident.supersede or observation closure.", Capabilities: &mcp.ServerCapabilities{}})
+	server := mcp.NewServer(&mcp.Implementation{Name: "dagrail", Title: "DAGrail", Description: "LLM-led local DAG governance control plane.", Version: version.Version, WebsiteURL: "https://github.com/CongBao/dagrail"}, &mcp.ServerOptions{Instructions: "Treat DAGrail as runtime authority. Read bounded context, use returned opaque refs instead of copying oversized identifiers, follow its authorization and remediation plan, apply only a current returned action ref with one stable idempotency key, use NodeKind-specific outcomes, close or reconcile resources, and call dag_pre_wait before yielding. A returned incident.control-resolve action closes a terminal failed/cancelled Attempt under truthful controller authority; never impersonate its original owner or substitute it for incident.supersede or observation closure. A returned role.control-transfer action replaces one exact unexpired session under a distinct truthful controller; ordinary takeover remains expiry-only.", Capabilities: &mcp.ServerCapabilities{}})
 	closed, openWorld := false, false
 	readOnly := true
 	mcp.AddTool(server, &mcp.Tool{Name: "dag_context", Title: "Get DAG context", Description: "Return byte-bounded role or node context with authorization, typed remediations, and signed allowed actions; use role_ref/node_ref for returned opaque identities.", InputSchema: contextSchema(), Annotations: &mcp.ToolAnnotations{Title: "Get DAG context", ReadOnlyHint: true, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input ContextInput) (*mcp.CallToolResult, service.ContextEnvelope, error) {
@@ -152,7 +152,7 @@ func New(svc *service.Service) *mcp.Server {
 		value, err := svc.InspectContext(ctx, input.Ref)
 		return nil, InspectOutput{Value: value}, err
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "dag_apply", Title: "Apply allowed DAG action", Description: "Apply exactly one controller-issued action ref; its Role, Node, Attempt, resource, provider set, revision, head, and expiry are already bound.", InputSchema: applySchema(), Annotations: &mcp.ToolAnnotations{Title: "Apply allowed DAG action", ReadOnlyHint: false, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input ApplyInput) (*mcp.CallToolResult, service.ActionResult, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_apply", Title: "Apply allowed DAG action", Description: "Apply exactly one controller-issued action ref with an explicit input JSON object (use {} for a zero-field action); its Role, Node, Attempt, resource, provider set, revision, head, and expiry are already bound.", InputSchema: applySchema(), Annotations: &mcp.ToolAnnotations{Title: "Apply allowed DAG action", ReadOnlyHint: false, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input ApplyInput) (*mcp.CallToolResult, service.ActionResult, error) {
 		if err := validateToolInput(input); err != nil {
 			return nil, service.ActionResult{}, err
 		}
@@ -232,7 +232,7 @@ func New(svc *service.Service) *mcp.Server {
 }
 
 func NewRemote(executor CommandExecutor, defaultRoot string) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "dagrail", Title: "DAGrail", Description: "LLM-led local DAG governance control plane.", Version: version.Version, WebsiteURL: "https://github.com/CongBao/dagrail"}, &mcp.ServerOptions{Instructions: "DAGrail initializes without a project. Pass root when project discovery is ambiguous. For dag_context use role_id/node_id for stable IDs or role_ref/node_ref for controller-issued opaque selectors. Treat returned context and refs as runtime authority, reuse one stable idempotency key for retries, distinguish Effect dispatch from confirmation, and call dag_pre_wait before yielding. Use incident.control-resolve only when returned to a truthful controller Role for a terminal failed/cancelled Attempt; never impersonate the original owner.", Capabilities: &mcp.ServerCapabilities{}})
+	server := mcp.NewServer(&mcp.Implementation{Name: "dagrail", Title: "DAGrail", Description: "LLM-led local DAG governance control plane.", Version: version.Version, WebsiteURL: "https://github.com/CongBao/dagrail"}, &mcp.ServerOptions{Instructions: "DAGrail initializes without a project. Pass root when project discovery is ambiguous. For dag_context use role_id/node_id for stable IDs or role_ref/node_ref for controller-issued opaque selectors. Treat returned context and refs as runtime authority, reuse one stable idempotency key for retries, distinguish Effect dispatch from confirmation, and call dag_pre_wait before yielding. Use incident.control-resolve only when returned to a truthful controller Role for a terminal failed/cancelled Attempt; never impersonate the original owner. Use role.control-transfer only when returned to a distinct truthful controller for the exact active prior session; takeover remains expiry-only.", Capabilities: &mcp.ServerCapabilities{}})
 	closed, openWorld := false, false
 	mcp.AddTool(server, &mcp.Tool{Name: "dag_context", Title: "Get DAG context", Description: "Return byte-bounded context; select stable identities with role_id/node_id or opaque identities with role_ref/node_ref.", InputSchema: contextSchema(), Annotations: &mcp.ToolAnnotations{Title: "Get DAG context", ReadOnlyHint: true, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input ContextInput) (*mcp.CallToolResult, service.ContextEnvelope, error) {
 		if err := validateToolInput(input); err != nil {
@@ -256,7 +256,7 @@ func NewRemote(executor CommandExecutor, defaultRoot string) *mcp.Server {
 		value, err := remoteAny(ctx, executor, []string{"inspect", "--root", selectedRoot(input.Root, defaultRoot), "--ref", input.Ref})
 		return nil, InspectOutput{Value: value}, err
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "dag_apply", Title: "Apply allowed DAG action", Description: "Apply exactly one controller-issued action ref.", InputSchema: applySchema(), Annotations: &mcp.ToolAnnotations{Title: "Apply allowed DAG action", ReadOnlyHint: false, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input ApplyInput) (*mcp.CallToolResult, service.ActionResult, error) {
+	mcp.AddTool(server, &mcp.Tool{Name: "dag_apply", Title: "Apply allowed DAG action", Description: "Apply exactly one controller-issued action ref with an explicit input JSON object; use {} for a zero-field action.", InputSchema: applySchema(), Annotations: &mcp.ToolAnnotations{Title: "Apply allowed DAG action", ReadOnlyHint: false, DestructiveHint: &closed, IdempotentHint: true, OpenWorldHint: &openWorld}}, func(ctx context.Context, _ *mcp.CallToolRequest, input ApplyInput) (*mcp.CallToolResult, service.ActionResult, error) {
 		if err := validateToolInput(input); err != nil {
 			return nil, service.ActionResult{}, err
 		}

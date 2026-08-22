@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/CongBao/dagrail/internal/domain"
+	"github.com/CongBao/dagrail/internal/journal"
 )
 
 type PreWaitAudit struct {
@@ -1549,6 +1550,83 @@ func roleDetailRef(state domain.State, roleID string, offset int) string {
 	return fmt.Sprintf("role-detail:%s:%s:%d", state.HeadHash, opaqueEntityKey(state, "role", roleID), offset)
 }
 
+func roleReceiptDetailRef(eventType string, sequence uint64, digest string, offset int) string {
+	return fmt.Sprintf("role-receipt-detail:%s:%d:%s:%d", eventType, sequence, digest, offset)
+}
+
+func roleEventPayloadForSequence(segments []journal.Segment, sequence uint64, eventType string) ([]byte, error) {
+	for _, segment := range segments {
+		if segment.Sequence != sequence {
+			continue
+		}
+		for _, event := range segment.Events {
+			if event.Type == eventType {
+				return append([]byte(nil), event.Payload...), nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("%s receipt is unavailable at sequence %d", eventType, sequence)
+}
+
+func roleReceiptDetailPage(segments []journal.Segment, eventType string, sequence uint64, expectedDigest string, offset int) (BoundedDetailChunk, error) {
+	raw, err := roleEventPayloadForSequence(segments, sequence, eventType)
+	if err != nil {
+		return BoundedDetailChunk{}, err
+	}
+	sum := sha256.Sum256(raw)
+	digest := hex.EncodeToString(sum[:])
+	if digest != expectedDigest {
+		return BoundedDetailChunk{}, fmt.Errorf("stale role receipt detail")
+	}
+	return boundedDetailChunk(raw, "sha256:"+digest, offset, func(next int) string {
+		return roleReceiptDetailRef(eventType, sequence, digest, next)
+	})
+}
+
+func (s *Service) BoundedRoleLeaseReceipt(idempotencyKey string) (any, error) {
+	state, segments, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	command, exists := state.Commands[idempotencyKey]
+	if !exists || command.Kind != "role.bind" {
+		return nil, fmt.Errorf("role lease receipt is unavailable")
+	}
+	raw, err := roleEventPayloadForSequence(segments, command.Sequence, "role.bound")
+	if err != nil {
+		return nil, err
+	}
+	var lease domain.RoleLease
+	if err := json.Unmarshal(raw, &lease); err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(raw)
+	digest := hex.EncodeToString(sum[:])
+	return map[string]any{"kind": "RoleLeaseReceipt", "sequence": command.Sequence, "roleRef": roleRefForRole(state, lease.RoleID), "receiptDigest": "sha256:" + digest, "receiptBytes": len(raw), "receiptDetailRef": roleReceiptDetailRef("role.bound", command.Sequence, digest, 0), "truncated": true}, nil
+}
+
+func (s *Service) BoundedRoleTransferReceipt(idempotencyKey string) (any, error) {
+	state, segments, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	command, exists := state.Commands[idempotencyKey]
+	if !exists || command.Kind != "role.control-transfer" {
+		return nil, fmt.Errorf("role transfer receipt is unavailable")
+	}
+	raw, err := roleEventPayloadForSequence(segments, command.Sequence, "role.transferred")
+	if err != nil {
+		return nil, err
+	}
+	var transfer domain.RoleTransfer
+	if err := json.Unmarshal(raw, &transfer); err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(raw)
+	digest := hex.EncodeToString(sum[:])
+	return map[string]any{"kind": "RoleTransferReceipt", "sequence": command.Sequence, "actorRoleRef": roleRefForRole(state, transfer.ActorRole), "targetRoleRef": roleRefForRole(state, transfer.Next.RoleID), "transferredAt": transfer.TransferredAt, "receiptDigest": "sha256:" + digest, "receiptBytes": len(raw), "receiptDetailRef": roleReceiptDetailRef("role.transferred", command.Sequence, digest, 0), "truncated": true}, nil
+}
+
 func attemptDetailRef(state domain.State, attemptID string, offset int) string {
 	return fmt.Sprintf("attempt-detail:%s:%s:%d", state.HeadHash, opaqueEntityKey(state, "attempt", attemptID), offset)
 }
@@ -1870,6 +1948,9 @@ func objectReferenceDetailRef(state domain.State, kind, id, digest string, offse
 func objectReferenceIDForKey(state domain.State, kind, key string) (string, bool) {
 	if kind == "incident" {
 		return incidentIDForOpaqueKey(state, key)
+	}
+	if kind == "role" {
+		return roleIDForOpaqueKey(state, key)
 	}
 	if boundedStoredObjectKinds[kind] {
 		return storedObjectIDForOpaqueKey(state, kind, key)
@@ -2209,12 +2290,43 @@ func (s *Service) buildRemediationsContext(ctx context.Context, state domain.Sta
 		bindDependencyCut(&remediation, cut)
 		items = append(items, remediation)
 	}
+	now := time.Now().UTC()
+	if s.Now != nil {
+		now = s.Now().UTC()
+	}
+	roleControlRoles := make([]string, 0)
+	if state.Graph != nil {
+		for _, role := range state.Graph.Spec.Roles {
+			if !domain.RoleHasCapability(state.Graph, role.ID, domain.CapabilityRoleControl) {
+				continue
+			}
+			lease, leaseErr := validLeaseAt(state, role.ID, now)
+			expires, expiryErr := time.Parse(time.RFC3339Nano, lease.ExpiresAt)
+			if leaseErr == nil && expiryErr == nil && expires.Sub(now) >= 5*time.Second {
+				roleControlRoles = append(roleControlRoles, role.ID)
+			}
+		}
+	}
+	sort.Strings(roleControlRoles)
 	for _, nodeID := range inventory.readyNodes {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		node, _ := state.NodeDefinition(nodeID)
 		add("assign_ready_node", "node:"+nodeID, node.Role, nodeID, nil, "role.bind_then_node.start", map[string]any{"roleId": node.Role, "nodeId": nodeID})
+		if lease, leaseErr := validLeaseAt(state, node.Role, now); leaseErr == nil {
+			leaseExpiry, expiryErr := time.Parse(time.RFC3339Nano, lease.ExpiresAt)
+			if expiryErr == nil && now.Before(leaseExpiry) {
+				for _, controllerRole := range roleControlRoles {
+					controllerLease := state.Leases[controllerRole]
+					if controllerRole == node.Role || controllerLease.SessionID == lease.SessionID {
+						continue
+					}
+					add("control_transfer_active_role", "role:"+node.Role, controllerRole, nodeID, nil, "action.list", map[string]any{"actorRole": controllerRole, "targetRoleId": node.Role, "previousSessionId": lease.SessionID, "actionKind": "role.control-transfer"})
+					break
+				}
+			}
+		}
 	}
 	for _, attemptID := range inventory.submittedAttempts {
 		if err := ctx.Err(); err != nil {
@@ -2278,11 +2390,11 @@ func (s *Service) buildRemediationsContext(ctx context.Context, state domain.Sta
 		}
 	}
 	sort.Strings(controlRoles)
-	now := time.Time{}
+	incidentNow := time.Time{}
 	if len(controlRoles) > 0 {
-		now = time.Now().UTC()
+		incidentNow = time.Now().UTC()
 		if s.Now != nil {
-			now = s.Now().UTC()
+			incidentNow = s.Now().UTC()
 		}
 	}
 	for _, incidentID := range inventory.openIncidents {
@@ -2291,9 +2403,9 @@ func (s *Service) buildRemediationsContext(ctx context.Context, state domain.Sta
 		}
 		incident := state.Incidents[incidentID]
 		for _, roleID := range controlRoles {
-			lease, leaseErr := validLeaseAt(state, roleID, now)
+			lease, leaseErr := validLeaseAt(state, roleID, incidentNow)
 			expires, expiryErr := time.Parse(time.RFC3339Nano, lease.ExpiresAt)
-			if leaseErr != nil || expiryErr != nil || expires.Sub(now) < 5*time.Second || controlResolvableIncident(state, incident, roleID) != nil {
+			if leaseErr != nil || expiryErr != nil || expires.Sub(incidentNow) < 5*time.Second || controlResolvableIncident(state, incident, roleID) != nil {
 				continue
 			}
 			add("control_terminal_attempt_incident", "incident:"+incidentID, roleID, incident.NodeID, incident.DependencyCut, "incident.control-resolve", map[string]any{"incidentId": incidentID, "actorRole": roleID, "allowedDispositions": []string{"rollback", "lkg", "quarantine", "off-critical-path"}})
@@ -2349,6 +2461,8 @@ func remediationPriority(code string) int {
 	case "checkpoint_stale_attempt":
 		return 5
 	case "renew_or_takeover_role":
+		return 6
+	case "control_transfer_active_role":
 		return 6
 	case "assign_ready_node":
 		return 7
@@ -2439,7 +2553,7 @@ func validIncidentSuccessor(state domain.State, incident domain.Incident, succes
 }
 
 func authorizationForRole(state domain.State, roleID string, now time.Time) AuthorizationEnvelope {
-	envelope := AuthorizationEnvelope{RoleID: roleID, LeaseState: "missing", RoutineActions: []string{"read_context", "inspect", "pre_wait"}, EscalationRequired: []string{"irreversible_external_effect", "new_authority", "scope_expansion"}}
+	envelope := AuthorizationEnvelope{RoleID: roleID, LeaseState: "missing", RoutineActions: []string{"read_context", "inspect", "pre_wait"}, EscalationRequired: []string{"active_role_transfer", "irreversible_external_effect", "new_authority", "scope_expansion"}}
 	if state.Graph != nil {
 		for _, role := range state.Graph.Spec.Roles {
 			if role.ID == roleID {
@@ -2492,7 +2606,57 @@ func (s *Service) projectAllowedActionsContext(ctx context.Context, state domain
 	if err != nil {
 		return nil, err
 	}
+	frontier, err := domain.ComputeFrontierSummaryContext(ctx, state)
+	if err != nil {
+		return nil, err
+	}
+	ready := make(map[string]bool, len(frontier.Ready))
+	responsibleRoles := make(map[string]bool)
+	for _, nodeID := range frontier.Ready {
+		ready[nodeID] = true
+		if node, ok := state.NodeDefinition(nodeID); ok && node.Role != "" {
+			responsibleRoles[node.Role] = true
+		}
+	}
+	for _, attempt := range state.Attempts {
+		if attempt.Status != "terminal" {
+			responsibleRoles[attempt.RoleID] = true
+		}
+	}
+	for _, effect := range state.Effects {
+		if oneOf(effect.Status, "prepared", "dispatched", "unknown", "reconciling") {
+			responsibleRoles[effect.OwnerRole] = true
+		}
+	}
+	for _, resource := range state.Resources {
+		if resource.Status == "active" {
+			responsibleRoles[resource.RoleID] = true
+		}
+	}
 	result := []AllowedAction{}
+	controlRoleIDs := make([]string, 0)
+	if planning.capabilities[domain.CapabilityRoleControl] {
+		for targetRoleID := range state.Leases {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			_, leaseErr := validLeaseAt(state, targetRoleID, now)
+			if targetRoleID != roleID && responsibleRoles[targetRoleID] && leaseErr == nil {
+				controlRoleIDs = append(controlRoleIDs, targetRoleID)
+			}
+		}
+	}
+	sort.Strings(controlRoleIDs)
+	for _, targetRoleID := range controlRoleIDs {
+		action, actionErr := s.roleControlTransferAllowedActionAtWithIndex(state, state.Leases[targetRoleID], now, planning)
+		if actionErr != nil {
+			continue
+		}
+		result = append(result, action)
+		if limit > 0 && len(result) == limit {
+			return result, nil
+		}
+	}
 	controlIncidentIDs := make([]string, 0)
 	if planning.capabilities[domain.CapabilityIncidentControl] {
 		for incidentID, incident := range state.Incidents {
@@ -2552,14 +2716,6 @@ func (s *Service) projectAllowedActionsContext(ctx context.Context, state domain
 		}
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
-	frontier, err := domain.ComputeFrontierSummaryContext(ctx, state)
-	if err != nil {
-		return nil, err
-	}
-	ready := make(map[string]bool, len(frontier.Ready))
-	for _, nodeID := range frontier.Ready {
-		ready[nodeID] = true
-	}
 	for _, node := range nodes {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -2606,6 +2762,43 @@ func (s *Service) incidentControlResolveAllowedActionAtWithIndex(state domain.St
 		return AllowedAction{}, fmt.Errorf("role %s lease is too short for incident controller action", index.roleID)
 	}
 	return AllowedAction{ID: payload.ActionID, Kind: payload.Kind, Ref: ref, NodeID: incident.NodeID, TargetRef: "incident:" + incident.ID, InputSchema: incidentControlResolveInputSchema(), LeaseRemainingSeconds: remaining, RequiredLeaseSeconds: required}, nil
+}
+
+func (s *Service) roleControlTransferAllowedActionAtWithIndex(state domain.State, target domain.RoleLease, now time.Time, index actionPlanningIndex) (AllowedAction, error) {
+	if !index.capabilities[domain.CapabilityRoleControl] {
+		return AllowedAction{}, fmt.Errorf("role %s lacks role control capability", index.roleID)
+	}
+	if target.RoleID == "" || target.RoleID == index.roleID || !target.Active {
+		return AllowedAction{}, fmt.Errorf("target role does not have a distinct active lease")
+	}
+	if target.SessionID == index.lease.SessionID {
+		return AllowedAction{}, fmt.Errorf("role controller session also owns the target lease")
+	}
+	targetExpiry, targetExpiryErr := time.Parse(time.RFC3339Nano, target.ExpiresAt)
+	targetBound, targetBoundErr := time.Parse(time.RFC3339Nano, target.BoundAt)
+	if targetExpiryErr != nil || targetBoundErr != nil || now.Before(targetBound) || !now.Before(targetExpiry) {
+		return AllowedAction{}, fmt.Errorf("target role lease is expired")
+	}
+	expires := now.Add(5 * time.Minute)
+	if leaseExpiry, parseErr := time.Parse(time.RFC3339Nano, index.lease.ExpiresAt); parseErr == nil && leaseExpiry.Before(expires) {
+		expires = leaseExpiry
+	}
+	if targetExpiry.Before(expires) {
+		expires = targetExpiry
+	}
+	identity := strings.Join([]string{state.ProjectID, state.HeadHash, state.GraphRevision, index.providerSet, index.roleID, index.lease.SessionID, target.RoleID, target.SessionID, "role.control-transfer"}, "\x00")
+	sum := sha256.Sum256([]byte(identity))
+	payload := actionRefPayload{ActionID: hex.EncodeToString(sum[:]), ProjectID: state.ProjectID, GraphRevision: state.GraphRevision, ProviderSet: index.providerSet, HeadHash: state.HeadHash, RoleID: index.roleID, SessionID: index.lease.SessionID, TargetRoleID: target.RoleID, PreviousSessionID: target.SessionID, Kind: "role.control-transfer", ExpiresAt: expires.Format(time.RFC3339Nano)}
+	ref, err := signActionRef(payload, index.secret)
+	if err != nil {
+		return AllowedAction{}, err
+	}
+	remaining := max(0, int(expires.Sub(now).Seconds()))
+	required := s.requiredLeaseSeconds(payload.Kind, domain.NodeDefinition{})
+	if remaining < required {
+		return AllowedAction{}, fmt.Errorf("role %s lease is too short for role controller action", index.roleID)
+	}
+	return AllowedAction{ID: payload.ActionID, Kind: payload.Kind, Ref: ref, TargetRef: "role:" + target.RoleID, InputSchema: roleControlTransferInputSchema(), LeaseRemainingSeconds: remaining, RequiredLeaseSeconds: required}, nil
 }
 
 func (s *Service) incidentSupersedeAllowedActionAt(state domain.State, incident domain.Incident, successorNodeID string, now time.Time) (AllowedAction, error) {
@@ -2858,7 +3051,7 @@ func (s *Service) InspectContext(ctx context.Context, ref string) (any, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	state, _, err := s.load()
+	state, segments, err := s.load()
 	if err != nil {
 		return nil, err
 	}
@@ -2895,7 +3088,7 @@ func (s *Service) InspectContext(ctx context.Context, ref string) (any, error) {
 	}
 	if prefix == "object-ref-detail" {
 		parts := strings.Split(id, ":")
-		if len(parts) != 4 || (parts[0] != "incident" && !boundedStoredObjectKinds[parts[0]]) || len(parts[1]) != 64 || len(parts[2]) != 64 {
+		if len(parts) != 4 || (parts[0] != "incident" && parts[0] != "role" && !boundedStoredObjectKinds[parts[0]]) || len(parts[1]) != 64 || len(parts[2]) != 64 {
 			return nil, fmt.Errorf("invalid object reference detail")
 		}
 		offset, err := strconv.Atoi(parts[3])
@@ -2905,6 +3098,17 @@ func (s *Service) InspectContext(ctx context.Context, ref string) (any, error) {
 		return objectReferenceDetailPage(state, parts[0], parts[1], parts[2], offset)
 	}
 	switch prefix {
+	case "role-receipt-detail":
+		parts := strings.Split(id, ":")
+		if len(parts) != 4 || !oneOf(parts[0], "role.bound", "role.transferred") || len(parts[2]) != 64 {
+			return nil, fmt.Errorf("invalid role receipt detail reference")
+		}
+		sequence, sequenceErr := strconv.ParseUint(parts[1], 10, 64)
+		offset, offsetErr := strconv.Atoi(parts[3])
+		if sequenceErr != nil || sequence == 0 || offsetErr != nil || offset < 0 {
+			return nil, fmt.Errorf("invalid role receipt detail position")
+		}
+		return roleReceiptDetailPage(segments, parts[0], sequence, parts[2], offset)
 	case "status-detail":
 		parts := strings.Split(id, ":")
 		if len(parts) != 3 || len(parts[0]) != 64 || len(parts[1]) != 64 {

@@ -128,6 +128,10 @@ typed receipt only after the recipient-visible state is independently known.
 Role identity is separate from the Codex thread ID. A worker checkpoints the Attempt,
 releases its Role lease when possible, and the replacement binds that stable Role to its
 new thread. If the old process disappeared, takeover is allowed only after lease expiry.
+For an explicitly authorized replacement before expiry, a separate currently leased
+controller with `role.control` may apply a signed `role.control-transfer` action bound to
+the old session. The successor must not start or resume work until the resulting lease
+names its exact harness session; the active Attempt and checkpoint remain unchanged.
 The replacement calls `dag_context` and continues from the durable checkpoint; chat
 history is neither required nor authoritative.
 

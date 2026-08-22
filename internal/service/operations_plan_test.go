@@ -1324,6 +1324,7 @@ func TestIncidentAndRemediationSurfacesBoundSchemaLegalLargeIdentity(t *testing.
 func TestStoredAuthorityClassesUseOneBoundedRecoverableInspectionProtocol(t *testing.T) {
 	state := domain.NewState("bounded-authority-classes")
 	state.HeadHash = strings.Repeat("a", 64)
+	state.Graph = &domain.GraphDefinition{}
 	long := strings.Repeat("x", 30_000)
 	evidenceDigest := "sha256:" + strings.Repeat("e", 64)
 	state.Checkpoints["checkpoint"] = domain.Checkpoint{ID: "checkpoint", AttemptID: long, Summary: "summary", EvidenceRefs: []domain.EvidenceRef{{Digest: evidenceDigest, Type: "report", Size: 1}}}
@@ -1420,6 +1421,30 @@ func TestStoredAuthorityClassesUseOneBoundedRecoverableInspectionProtocol(t *tes
 	}
 	if string(recoveredObjectRef) != "resource:"+longResourceID {
 		t.Fatal("large action-result object reference changed during detail recovery")
+	}
+	longRoleID := "role-" + long
+	state.Graph.Spec.Roles = append(state.Graph.Spec.Roles, domain.RoleDefinition{ID: longRoleID, Capabilities: []string{domain.CapabilityNodeRun}})
+	roleResult := boundedActionResult(state, ActionResult{ObjectRef: "role:" + longRoleID})
+	if !roleResult.ObjectRefTruncated || roleResult.ObjectInspectRef == "" || roleResult.ObjectRefDetailRef == "" || roleResult.ObjectRef != "" {
+		t.Fatalf("large Role action-result object reference was not bounded and recoverable: %#v", roleResult)
+	}
+	recoveredRoleRef := []byte{}
+	roleRefDigest := strings.TrimPrefix(roleResult.ObjectRefDigest, "sha256:")
+	roleKey := opaqueEntityKey(state, "role", longRoleID)
+	for offset := 0; offset < roleResult.ObjectRefBytes; {
+		chunk, err := objectReferenceDetailPage(state, "role", roleKey, roleRefDigest, offset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := base64.RawStdEncoding.DecodeString(chunk.Chunk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recoveredRoleRef = append(recoveredRoleRef, decoded...)
+		offset += len(decoded)
+	}
+	if string(recoveredRoleRef) != "role:"+longRoleID {
+		t.Fatal("large Role action-result object reference changed during detail recovery")
 	}
 	longEffectID := "effect-" + long
 	state.Effects[longEffectID] = domain.EffectAction{ID: longEffectID, NodeID: "missing", Status: "unknown"}

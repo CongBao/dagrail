@@ -2,6 +2,40 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.26.6 — 2026-08-22
+
+### Added
+
+- a distinct `role.control` capability and typed `role.control-transfer` action allow a
+  truthful controller to replace one exact unexpired executor session without waiting
+  for lease expiry or impersonating the worker;
+- the append-only transfer audit retains the controller Role/session, complete previous
+  and successor leases, reason, and timestamp while preserving active Attempts and
+  durable checkpoints.
+
+### Fixed
+
+- `dagrail role renew` now implements the command previously shown by CLI help. It can
+  extend only the same harness/session's unexpired active lease; it cannot bind a
+  missing Role, revive an expired lease, or replace another session.
+- Role renewal replay now proves that the prior lease was still valid at the renewal
+  instant, and controller transfer rejects target leases whose `BoundAt` is still in
+  the future.
+- oversized bind, renewal, and controller-transfer CLI receipts are derived from their
+  immutable journal sequence and expose a digest-bound detail ref; later Role changes
+  cannot replace the receipt returned by an exact idempotent retry.
+- MCP `dag_apply` now requires its `input` member explicitly; callers use `{}` for a
+  zero-field action, so omission is rejected by the advertised tool schema instead of
+  reaching action validation as JSON `null`.
+
+### Security
+
+- ordinary takeover remains expiry-only; controller transfer rejects self-transfer,
+  stale actor or target sessions, expired leases, changed idempotency intent, and Roles
+  without the explicit capability;
+- lifecycle import, projection rebuild, portable backup, CLI, MCP allowed actions, and
+  pre-wait remediation share the same replay-verifiable compare-and-swap contract.
+
 ## 0.26.5 — 2026-08-22
 
 ### Fixed

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,7 +29,7 @@ func TestV026CLIConsistencyAndSelectorFallback(t *testing.T) {
 		err := cli.Run(args, strings.NewReader(""), &stdout, &stderr)
 		return stdout.String(), stderr.String(), err
 	}
-	for _, args := range [][]string{{}, {"--help"}, {"role", "--help"}, {"role", "bind", "--help"}, {"action", "apply", "--help"}} {
+	for _, args := range [][]string{{}, {"--help"}, {"role", "--help"}, {"role", "bind", "--help"}, {"role", "renew", "--help"}, {"action", "apply", "--help"}} {
 		stdout, stderr, err := run(args...)
 		if err != nil || (stdout == "" && stderr == "") {
 			t.Fatalf("help form failed: args=%v stdout=%q stderr=%q err=%v", args, stdout, stderr, err)
@@ -62,6 +63,10 @@ func TestV026CLIConsistencyAndSelectorFallback(t *testing.T) {
 	status, _, err := run("role", "status", "--root", root, "--role", "worker")
 	if err != nil || !strings.Contains(status, `"sessionId":"session"`) {
 		t.Fatalf("role status failed: %s %v", status, err)
+	}
+	renewed, _, err := run("role", "renew", "--root", root, "--role", "worker", "--harness", "codex", "--session", "session", "--ttl", "30m", "--idempotency-key", "renew")
+	if err != nil || !strings.Contains(renewed, `"sessionId":"session"`) {
+		t.Fatalf("role renew failed: %s %v", renewed, err)
 	}
 	positional, _, err := run("inspect", "--root", root, "node:task")
 	if err != nil {
@@ -113,6 +118,122 @@ func TestIncidentControlResolveCLIUsesTruthfulControllerAuthority(t *testing.T) 
 	err = cli.Run([]string{"incident", "control-resolve", "--root", root, "--incident", incidentID, "--actor-role", "controller", "--disposition", "off-critical-path", "--resolution", "delivered terminal sender remains passive", "--note", "controller closes the terminal lane", "--idempotency-key", "control-close"}, strings.NewReader(""), &stdout, &stderr)
 	if err != nil || !strings.Contains(stdout.String(), `"ownerRole":"worker"`) || !strings.Contains(stdout.String(), `"actorRole":"controller"`) || !strings.Contains(stdout.String(), `"status":"resolved"`) {
 		t.Fatalf("controller incident CLI failed: stdout=%s stderr=%s err=%v", stdout.String(), stderr.String(), err)
+	}
+}
+
+func TestRoleCLIReceiptsStayBoundedAndExactAcrossLaterChanges(t *testing.T) {
+	t.Setenv("DAGRAIL_HOME", filepath.Join(t.TempDir(), "runtime"))
+	run := func(args ...string) (string, error) {
+		var stdout, stderr bytes.Buffer
+		err := cli.Run(args, strings.NewReader(""), &stdout, &stderr)
+		return stdout.String(), err
+	}
+
+	t.Run("renew exact retry returns original receipt", func(t *testing.T) {
+		root := t.TempDir()
+		svc, err := service.Init(root, "bounded role renewal")
+		if err != nil {
+			t.Fatal(err)
+		}
+		graphPath := filepath.Join(root, "graph.json")
+		graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"bounded-renew"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"work","kind":"task","role":"worker","title":"work","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
+		if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.ImportGraph(graphPath, "graph", "controller"); err != nil {
+			t.Fatal(err)
+		}
+		longSession := strings.Repeat("long-session/", 2500)
+		if _, err := svc.BindRole("worker", "codex", longSession, time.Hour, false, "bind"); err != nil {
+			t.Fatal(err)
+		}
+		first, err := run("role", "renew", "--root", root, "--role", "worker", "--harness", "codex", "--session", longSession, "--ttl", "20m", "--idempotency-key", "renew/one")
+		if err != nil || len(first) > 24*1024 || strings.Contains(first, longSession) || !strings.Contains(first, `"receiptDetailRef"`) {
+			t.Fatalf("first large renewal receipt was not bounded: bytes=%d err=%v output=%s", len(first), err, first)
+		}
+		var firstSummary map[string]any
+		if err := json.Unmarshal([]byte(first), &firstSummary); err != nil {
+			t.Fatal(err)
+		}
+		if detail, err := run("inspect", "--root", root, "--ref", firstSummary["receiptDetailRef"].(string)); err != nil || !strings.Contains(detail, `"chunk"`) {
+			t.Fatalf("large renewal receipt detail was not recoverable: %s %v", detail, err)
+		}
+		if _, err := run("role", "renew", "--root", root, "--role", "worker", "--harness", "codex", "--session", longSession, "--ttl", "30m", "--idempotency-key", "renew/two"); err != nil {
+			t.Fatal(err)
+		}
+		replayed, err := run("role", "renew", "--root", root, "--role", "worker", "--harness", "codex", "--session", longSession, "--ttl", "20m", "--idempotency-key", "renew/one")
+		if err != nil || replayed != first {
+			t.Fatalf("large renewal retry returned a later lease instead of the original receipt: first=%s replay=%s err=%v", first, replayed, err)
+		}
+	})
+
+	t.Run("transfer hides long controller identity behind recoverable receipt", func(t *testing.T) {
+		root := t.TempDir()
+		svc, err := service.Init(root, "bounded role transfer")
+		if err != nil {
+			t.Fatal(err)
+		}
+		controllerRole := "controller-" + strings.Repeat("c", 30_000)
+		graphPath := filepath.Join(root, "graph.json")
+		graph := fmt.Sprintf(`{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"bounded-transfer"},"spec":{"roles":[{"id":%q,"capabilities":["role.control"]},{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"work","kind":"task","role":"worker","title":"work","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`, controllerRole)
+		if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.ImportGraph(graphPath, "graph", "controller"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.BindRole(controllerRole, "codex", "controller-session", time.Hour, false, "bind/controller"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.BindRole("worker", "codex", "old-session", time.Hour, false, "bind/worker"); err != nil {
+			t.Fatal(err)
+		}
+		output, err := run("role", "transfer", "--root", root, "--actor-role", controllerRole, "--actor-session", "controller-session", "--role", "worker", "--expected-session", "old-session", "--harness", "codex", "--session", "new-session", "--ttl", "30m", "--reason", "replace unavailable executor", "--idempotency-key", "transfer")
+		if err != nil || len(output) > 24*1024 || strings.Contains(output, controllerRole) || !strings.Contains(output, `"actorRoleRef"`) || !strings.Contains(output, `"receiptDetailRef"`) {
+			t.Fatalf("large controller transfer receipt was not bounded and recoverable: bytes=%d err=%v output=%s", len(output), err, output)
+		}
+		var transferSummary map[string]any
+		if err := json.Unmarshal([]byte(output), &transferSummary); err != nil {
+			t.Fatal(err)
+		}
+		if detail, err := run("inspect", "--root", root, "--ref", transferSummary["receiptDetailRef"].(string)); err != nil || !strings.Contains(detail, `"chunk"`) {
+			t.Fatalf("large transfer receipt detail was not recoverable: %s %v", detail, err)
+		}
+	})
+}
+
+func TestRoleControlTransferCLIRequiresTruthfulControllerAndExpectedSession(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(t.TempDir(), "runtime"))
+	svc, err := service.Init(root, "controller role transfer CLI")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graphPath := filepath.Join(root, "graph.json")
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"controller-role-transfer-cli"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]},{"id":"controller","capabilities":["role.control"]}],"nodes":[{"id":"work","kind":"task","role":"worker","title":"work","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
+	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "graph", "controller"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.BindRole("worker", "codex", "old-session", time.Hour, false, "bind-worker"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.BindRole("controller", "codex", "controller-session", time.Hour, false, "bind-controller"); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	err = cli.Run([]string{"role", "transfer", "--root", root, "--actor-role", "controller", "--actor-session", "controller-session", "--role", "worker", "--expected-session", "old-session", "--harness", "codex", "--session", "new-session", "--ttl", "30m", "--reason", "replace unavailable executor under controller authority", "--idempotency-key", "role-transfer"}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil || !strings.Contains(stdout.String(), `"authority":"role.control"`) || !strings.Contains(stdout.String(), `"actorRole":"controller"`) || !strings.Contains(stdout.String(), `"sessionId":"new-session"`) {
+		t.Fatalf("controller role transfer CLI failed: stdout=%s stderr=%s err=%v", stdout.String(), stderr.String(), err)
+	}
+	state, err := svc.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Leases["worker"].SessionID != "new-session" {
+		t.Fatalf("CLI transfer did not bind the exact successor session: %#v", state.Leases["worker"])
 	}
 }
 

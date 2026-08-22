@@ -1295,7 +1295,7 @@ func runPreWait(ctx context.Context, args []string, stdout, stderr io.Writer) er
 
 func runRole(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: dagrail role <bind|takeover|release|status>")
+		return fmt.Errorf("usage: dagrail role <bind|renew|takeover|transfer|release|status>")
 	}
 	flags := flag.NewFlagSet("role "+args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -1304,6 +1304,11 @@ func runRole(args []string, stdout, stderr io.Writer) error {
 	roleRef := flags.String("role-ref", "", "opaque Role ref")
 	harness := flags.String("harness", "", "harness ID")
 	session := flags.String("session", "", "session audit ID")
+	actorRole := flags.String("actor-role", "", "truthful controller Role with role.control")
+	actorRoleRef := flags.String("actor-role-ref", "", "opaque truthful controller Role ref")
+	actorSession := flags.String("actor-session", "", "controller Role session audit ID")
+	expectedSession := flags.String("expected-session", "", "current target Role session used as a compare-and-swap guard")
+	reason := flags.String("reason", "", "bounded audit reason for controller transfer")
 	ttl := flags.Duration("ttl", 15*time.Minute, "lease TTL")
 	key := flags.String("idempotency-key", "", "idempotency key")
 	if err := flags.Parse(args[1:]); err != nil {
@@ -1326,6 +1331,15 @@ func runRole(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 	}
+	if *actorRoleRef != "" {
+		if *actorRole != "" {
+			return fmt.Errorf("provide --actor-role or --actor-role-ref, not both")
+		}
+		*actorRole, err = s.ResolveEntityRef("role", *actorRoleRef)
+		if err != nil {
+			return err
+		}
+	}
 	switch args[0] {
 	case "status":
 		value, err := s.RoleStatusContext(context.Background(), *role)
@@ -1339,17 +1353,40 @@ func runRole(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		if raw, _ := json.Marshal(lease); len(raw) > 24*1024 {
-			ref, refErr := s.EntityRef("role", *role)
-			if refErr != nil {
-				return refErr
-			}
-			value, inspectErr := s.Inspect(ref)
+			value, inspectErr := s.BoundedRoleLeaseReceipt(*key)
 			if inspectErr != nil {
 				return inspectErr
 			}
 			return writeJSON(stdout, value)
 		}
 		return writeJSON(stdout, lease)
+	case "renew":
+		lease, err := s.RenewRole(*role, *harness, *session, *ttl, *key)
+		if err != nil {
+			return err
+		}
+		if raw, _ := json.Marshal(lease); len(raw) > 24*1024 {
+			value, inspectErr := s.BoundedRoleLeaseReceipt(*key)
+			if inspectErr != nil {
+				return inspectErr
+			}
+			return writeJSON(stdout, value)
+		}
+		return writeJSON(stdout, lease)
+	case "transfer":
+		transfer, err := s.TransferRole(*actorRole, *actorSession, *role, *expectedSession, *harness, *session, *ttl, *reason, *key)
+		if err != nil {
+			return err
+		}
+		raw, _ := json.Marshal(transfer)
+		if len(raw) <= 24*1024 {
+			return writeJSON(stdout, transfer)
+		}
+		value, receiptErr := s.BoundedRoleTransferReceipt(*key)
+		if receiptErr != nil {
+			return receiptErr
+		}
+		return writeJSON(stdout, value)
 	case "release":
 		if err := s.ReleaseRole(*role, *session, *key); err != nil {
 			return err

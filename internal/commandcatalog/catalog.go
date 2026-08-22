@@ -77,7 +77,7 @@ var commands = []Command{
 	{Name: "reconcile", Summary: "Reconcile an uncertain external effect", Effect: "write", Project: "required", Output: "json", Subcommands: []string{}},
 	{Name: "recovery", Summary: "Rehearse recovery or replace, adopt, and relocate authority identities", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"adopt-legacy-authority", "rehearse", "relocate-authority", "rotate-authority"}},
 	{Name: "release", Summary: "Create or verify a closed release manifest", Effect: "mixed", Project: "none", Output: "json", Subcommands: []string{"manifest", "verify"}},
-	{Name: "role", Summary: "Bind, take over, release, or inspect a stable role", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"bind", "release", "status", "takeover"}},
+	{Name: "role", Summary: "Bind, renew, take over, controller-transfer, release, or inspect a stable role", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"bind", "release", "renew", "status", "takeover", "transfer"}},
 	{Name: "security", Summary: "Audit the local project security posture", Effect: "read", Project: "required", Output: "json", Subcommands: []string{"audit"}},
 	{Name: "signature", Summary: "Generate keys or sign and verify detached payloads", Effect: "mixed", Project: "none", Output: "json", Subcommands: []string{"keygen", "sign", "verify"}},
 	{Name: "status", Summary: "Read compact operational status", Effect: "read", Project: "required", Output: "json", Subcommands: []string{}},

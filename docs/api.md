@@ -175,6 +175,12 @@ a terminal failed/cancelled Attempt Incident while preserving its original owner
 signed ref binds the controller Role lease, Incident, source Node, journal head, Graph
 Revision, and expiry. Resource/Effect Incidents and ordinary owner-local
 `incident.manage` transitions are outside this authority.
+An independently gated `role.control-transfer` action is available only to a current
+Role with `role.control`. Its signed ref binds the controller Role/session, target Role,
+exact previous session, head, Graph Revision, and expiry. Applying it records the
+truthful controller and complete previous/new leases without rewriting the target's
+Attempt or checkpoint. Ordinary takeover remains expiry-only, and projects opt in by
+declaring the capability on a reviewed controller Role.
 Effect continuity compares the prepared adapter ID, version, schema hash, and canonical
 request digest separately from unrelated journal-head advancement. A missing legacy
 binding or same-ID adapter upgrade fails reconciliation closed.
@@ -217,6 +223,12 @@ ref with the same RFC 8785 canonical JSON input value and the same idempotency
 key—even after a session replacement. Whitespace and object-key order may differ;
 the semantic JSON value may not. This exception retrieves the committed result only;
 old refs remain invalid for changed input, a new key, or new work.
+MCP `dag_apply` always requires an explicit `input` object; pass `{}` when the returned
+action schema has no fields. Omission is invalid and is never rewritten to JSON null.
+Every mutating action ref is bound to one journal head. If an operations page lists
+several independent writes, applying one makes the others stale by design; it is not a
+transaction batch. Continue from the successful `ActionResult.continuation` or fetch a
+fresh context/page before applying the next mutation.
 Open Incidents use snapshot-bound incident-index pages rather than copying unbounded
 detail into the work package. Status, history, frontier, evidence indexes, individual
 authority objects, and Effect continuity also switch to 24-KiB summaries plus
@@ -235,6 +247,13 @@ required Role-lease seconds. Insufficient lease yields a closed `role.renew` act
 daemon never renews a Role automatically. Renewal is Role-scoped: before a planned Node
 has an Attempt, its Action has no `attemptId`; after an Attempt exists, that optional
 binding is validated as an additional consistency check.
+The CLI fallback is `dagrail role renew --root ROOT --role ROLE --harness HARNESS
+--session SESSION --ttl 15m --idempotency-key FRESH_KEY`; it succeeds only while that
+exact harness/session still owns an unexpired active lease.
+Oversized Role bind, renewal, and controller-transfer results return a compact
+`RoleLeaseReceipt` or `RoleTransferReceipt`. Follow `receiptDetailRef` with
+`dagrail inspect --ref REF` to recover the immutable journal payload in digest-bound
+chunks; the ref is tied to the original sequence, not the latest Role status.
 
 Decision and Gate Nodes produce DecisionRecord v1alpha1 authority. A record binds the
 closed outcome and digest-only evidence to one Graph Revision and Attempt. Provider

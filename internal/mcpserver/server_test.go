@@ -365,6 +365,31 @@ func TestAdvertisedDagContextSchemaMatchesEveryRuntimeBudget(t *testing.T) {
 	<-done
 }
 
+func TestDagApplyRequiresExplicitInputBeforeControllerDispatch(t *testing.T) {
+	executor := &missingProjectExecutor{}
+	server := mcpserver.NewRemote(executor, ".")
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() { _ = server.Run(ctx, serverTransport) }()
+	client := mcp.NewClient(&mcp.Implementation{Name: "apply-input-contract-test", Version: "1.0.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	omitted, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "dag_apply", Arguments: map[string]any{"action_ref": "signed-ref", "idempotency_key": "apply-key"}})
+	if err == nil && (omitted == nil || !omitted.IsError) {
+		t.Fatalf("dag_apply accepted an omitted input object: result=%#v err=%v", omitted, err)
+	}
+	if executor.calls.Load() != 0 {
+		t.Fatal("schema-invalid omitted input reached the controller executor")
+	}
+	_, _ = session.CallTool(ctx, &mcp.CallToolParams{Name: "dag_apply", Arguments: map[string]any{"action_ref": "signed-ref", "idempotency_key": "apply-key", "input": map[string]any{}}})
+	if executor.calls.Load() != 1 {
+		t.Fatal("explicit empty input did not pass MCP schema admission")
+	}
+}
+
 func errString(err error) string {
 	if err == nil {
 		return ""

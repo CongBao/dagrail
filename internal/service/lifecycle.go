@@ -193,7 +193,7 @@ type LifecycleProjection struct {
 }
 
 var migratableEventTypes = map[string]bool{
-	"role.bound": true, "role.released": true,
+	"role.bound": true, "role.transferred": true, "role.released": true,
 	"attempt.started": true, "attempt.leased": true, "attempt.status-changed": true, "attempt.checkpointed": true, "attempt.finished": true,
 	"evidence.package-published": true, "evidence.reuse-assessed": true, "decision.recorded": true,
 	"resource.leased": true, "resource.closure-observed": true, "resource.released": true,
@@ -860,6 +860,8 @@ func validateMigratableEventPayload(event LifecycleMigrationEvent) error {
 	switch event.Type {
 	case "role.bound":
 		target = &domain.RoleLease{}
+	case "role.transferred":
+		target = &domain.RoleTransfer{}
 	case "role.released":
 		target = &struct {
 			RoleID     string `json:"roleId"`

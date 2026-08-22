@@ -630,6 +630,12 @@ func reduceSegmentsFrom(state domain.State, segments []journal.Segment, establis
 					return domain.State{}, err
 				}
 				state.Leases[lease.RoleID] = lease
+			case "role.transferred":
+				var transfer domain.RoleTransfer
+				if err := json.Unmarshal(event.Payload, &transfer); err != nil {
+					return domain.State{}, err
+				}
+				state.Leases[transfer.Next.RoleID] = transfer.Next
 			case "role.released":
 				var payload struct {
 					RoleID string `json:"roleId"`
@@ -949,6 +955,11 @@ func commandObjectRef(segment journal.Segment, state domain.State) string {
 			var value domain.RoleLease
 			if json.Unmarshal(event.Payload, &value) == nil && value.RoleID != "" {
 				return "role:" + value.RoleID
+			}
+		case "role.transferred":
+			var value domain.RoleTransfer
+			if json.Unmarshal(event.Payload, &value) == nil && value.Next.RoleID != "" {
+				return "role:" + value.Next.RoleID
 			}
 		case "role.released":
 			var value struct {

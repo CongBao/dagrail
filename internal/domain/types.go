@@ -108,6 +108,7 @@ const (
 	CapabilityGraphChange     = "graph.change"
 	CapabilityIncidentManage  = "incident.manage"
 	CapabilityIncidentControl = "incident.control"
+	CapabilityRoleControl     = "role.control"
 	CapabilityResourceClose   = "resource.close"
 )
 
@@ -891,6 +892,19 @@ type RoleLease struct {
 	BoundAt   string `json:"boundAt"`
 	ExpiresAt string `json:"expiresAt"`
 	Active    bool   `json:"active"`
+}
+
+// RoleTransfer is the append-only audit record for replacing an unexpired
+// Role lease under a distinct controller authority. Ordinary bind/takeover
+// never emits this event and remains expiry-gated.
+type RoleTransfer struct {
+	Authority      string    `json:"authority"`
+	ActorRole      string    `json:"actorRole"`
+	ActorSessionID string    `json:"actorSessionId"`
+	Previous       RoleLease `json:"previous"`
+	Next           RoleLease `json:"next"`
+	Reason         string    `json:"reason"`
+	TransferredAt  string    `json:"transferredAt"`
 }
 
 type EvidenceRef struct {
