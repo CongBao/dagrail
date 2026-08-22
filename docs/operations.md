@@ -111,6 +111,24 @@ dagrail incident resolve --root . --incident INCIDENT --actor-role ROLE \
   --resolution "fixed by candidate sha256:..." --idempotency-key resolve-1
 ```
 
+When a terminal failed or cancelled Attempt belongs to a sender that must remain
+passive, a separate controller Role may declare the least-privilege `incident.control`
+capability and perform one atomic closed disposition plus resolution:
+
+```sh
+dagrail incident control-resolve --root . --incident INCIDENT \
+  --actor-role CONTROLLER --disposition off-critical-path \
+  --resolution "delivered terminal sender remains passive" \
+  --note "remove the closed failure path from the critical lane" \
+  --idempotency-key incident-control-1
+```
+
+The command retains the Incident's original `ownerRole` and source Attempt, records the
+truthful controller in `dispositionBy` and the nested `control` audit, and requires the
+controller's current Role lease. It cannot operate Resource or Effect Incidents, reopen
+work with `retry`, escalate, or substitute for `incident.supersede`. Add the capability
+through a reviewed `updateRole` GraphPatch; do not bind the controller as the worker.
+
 Two consecutive no-progress reports trip the default circuit breaker. A missed deadline
 also trips on the next progress evaluation. Resource and Effect Incidents resolve only
 when a confirmed observation removes the underlying ambiguity. To authorize another

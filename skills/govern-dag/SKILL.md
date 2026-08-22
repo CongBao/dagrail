@@ -64,11 +64,11 @@ hand-built transition.
 8. Follow `decision:`, `evidence-package:`, and `reuse-decision:` refs. A
    `reuse_execution` result permits policy reevaluation without rerunning the protected
    execution core; it is not approval.
-9. Keep incidents owned and bounded. Record progress, apply one closed recovery
-   disposition (`retry`, `rollback`, `lkg`, `quarantine`, `off-critical-path`, or
-   `escalate`), and respect an open circuit instead of repeating adjacent fixes. When
-   the graph contains a valid repair successor, use the returned `incident.supersede`
-   action so the old alert closes with a typed, auditable handoff.
+9. Keep incidents owned and bounded; use closed dispositions and respect open circuits.
+   Use `incident.supersede` only for a declared repair successor. For a terminal failed
+   or cancelled Attempt whose sender must remain passive, a distinct `incident.control`
+   Role may use returned `incident.control-resolve` without impersonating or rebinding
+   the owner. Never use it for Resource/Effect Incidents or instead of supersession.
 10. Call `dag_pre_wait` before yielding, waiting, or declaring blocked. Do not wait while
    ready Nodes, submitted Attempts, stale/expired leases, incidents, resource closure,
    or unreconciled effects still require a bounded action. Read exact `counts` first;

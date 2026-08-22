@@ -2257,11 +2257,36 @@ func (s *Service) buildRemediationsContext(ctx context.Context, state domain.Sta
 		}
 		add("close_or_reconcile_orphaned_resource", "resource:"+resourceID, resource.RoleID, resource.NodeID, cut, "action.list", map[string]any{"roleId": resource.RoleID, "nodeId": resource.NodeID, "resourceId": resourceID})
 	}
+	controlRoles := make([]string, 0)
+	if state.Graph != nil {
+		for _, role := range state.Graph.Spec.Roles {
+			if domain.RoleHasCapability(state.Graph, role.ID, domain.CapabilityIncidentControl) {
+				controlRoles = append(controlRoles, role.ID)
+			}
+		}
+	}
+	sort.Strings(controlRoles)
+	now := time.Time{}
+	if len(controlRoles) > 0 {
+		now = time.Now().UTC()
+		if s.Now != nil {
+			now = s.Now().UTC()
+		}
+	}
 	for _, incidentID := range inventory.openIncidents {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		incident := state.Incidents[incidentID]
+		for _, roleID := range controlRoles {
+			lease, leaseErr := validLeaseAt(state, roleID, now)
+			expires, expiryErr := time.Parse(time.RFC3339Nano, lease.ExpiresAt)
+			if leaseErr != nil || expiryErr != nil || expires.Sub(now) < 5*time.Second || controlResolvableIncident(state, incident, roleID) != nil {
+				continue
+			}
+			add("control_terminal_attempt_incident", "incident:"+incidentID, roleID, incident.NodeID, incident.DependencyCut, "incident.control-resolve", map[string]any{"incidentId": incidentID, "actorRole": roleID, "allowedDispositions": []string{"rollback", "lkg", "quarantine", "off-critical-path"}})
+			break
+		}
 		if successor := successors[incident.NodeID]; successor != "" && incident.SourceType == "attempt" {
 			add("supersede_incident_with_repair", "incident:"+incidentID, incident.OwnerRole, successor, incident.DependencyCut, "incident.supersede", map[string]any{"incidentId": incidentID, "successorNodeId": successor, "actorRole": incident.OwnerRole})
 			continue
@@ -2304,6 +2329,8 @@ func remediationPriority(code string) int {
 	case "close_or_reconcile_orphaned_resource":
 		return 2
 	case "supersede_incident_with_repair":
+		return 3
+	case "control_terminal_attempt_incident":
 		return 3
 	case "advance_incident":
 		return 4
@@ -2454,6 +2481,28 @@ func (s *Service) projectAllowedActionsContext(ctx context.Context, state domain
 		return nil, err
 	}
 	result := []AllowedAction{}
+	controlIncidentIDs := make([]string, 0)
+	if planning.capabilities[domain.CapabilityIncidentControl] {
+		for incidentID, incident := range state.Incidents {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if controlResolvableIncident(state, incident, roleID) == nil {
+				controlIncidentIDs = append(controlIncidentIDs, incidentID)
+			}
+		}
+	}
+	sort.Strings(controlIncidentIDs)
+	for _, incidentID := range controlIncidentIDs {
+		action, err := s.incidentControlResolveAllowedActionAtWithIndex(state, state.Incidents[incidentID], now, planning)
+		if err != nil {
+			continue
+		}
+		result = append(result, action)
+		if limit > 0 && len(result) == limit {
+			return result, nil
+		}
+	}
 	incidentIDs := make([]string, 0)
 	for incidentID, incident := range state.Incidents {
 		if err := ctx.Err(); err != nil {
@@ -2519,6 +2568,32 @@ func (s *Service) projectAllowedActionsContext(ctx context.Context, state domain
 
 func (s *Service) incidentSupersedeAllowedAction(state domain.State, incident domain.Incident, successorNodeID string) (AllowedAction, error) {
 	return s.incidentSupersedeAllowedActionAt(state, incident, successorNodeID, s.Now().UTC())
+}
+
+func (s *Service) incidentControlResolveAllowedActionAtWithIndex(state domain.State, incident domain.Incident, now time.Time, index actionPlanningIndex) (AllowedAction, error) {
+	if !index.capabilities[domain.CapabilityIncidentControl] {
+		return AllowedAction{}, fmt.Errorf("role %s lacks incident control capability", index.roleID)
+	}
+	if err := controlResolvableIncident(state, incident, index.roleID); err != nil {
+		return AllowedAction{}, err
+	}
+	expires := now.Add(5 * time.Minute)
+	if leaseExpiry, parseErr := time.Parse(time.RFC3339Nano, index.lease.ExpiresAt); parseErr == nil && leaseExpiry.Before(expires) {
+		expires = leaseExpiry
+	}
+	identity := strings.Join([]string{state.ProjectID, state.HeadHash, state.GraphRevision, index.providerSet, index.roleID, index.lease.SessionID, incident.ID, incident.OwnerRole, incident.SourceID, "incident.control-resolve"}, "\x00")
+	sum := sha256.Sum256([]byte(identity))
+	payload := actionRefPayload{ActionID: hex.EncodeToString(sum[:]), ProjectID: state.ProjectID, GraphRevision: state.GraphRevision, ProviderSet: index.providerSet, HeadHash: state.HeadHash, RoleID: index.roleID, SessionID: index.lease.SessionID, NodeID: incident.NodeID, IncidentID: incident.ID, Kind: "incident.control-resolve", ExpiresAt: expires.Format(time.RFC3339Nano)}
+	ref, err := signActionRef(payload, index.secret)
+	if err != nil {
+		return AllowedAction{}, err
+	}
+	remaining := max(0, int(expires.Sub(now).Seconds()))
+	required := s.requiredLeaseSeconds(payload.Kind, domain.NodeDefinition{})
+	if remaining < required {
+		return AllowedAction{}, fmt.Errorf("role %s lease is too short for incident controller action", index.roleID)
+	}
+	return AllowedAction{ID: payload.ActionID, Kind: payload.Kind, Ref: ref, NodeID: incident.NodeID, TargetRef: "incident:" + incident.ID, InputSchema: incidentControlResolveInputSchema(), LeaseRemainingSeconds: remaining, RequiredLeaseSeconds: required}, nil
 }
 
 func (s *Service) incidentSupersedeAllowedActionAt(state domain.State, incident domain.Incident, successorNodeID string, now time.Time) (AllowedAction, error) {

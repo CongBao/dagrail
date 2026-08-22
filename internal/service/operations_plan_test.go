@@ -115,7 +115,7 @@ func TestPreWaitProposesTypedRepairAndIncidentSupersedeClosesOldAlert(t *testing
 	if incident.Status != "resolved" || incident.Resolution != "superseded_by_repair" || incident.RemedyNodeID != "repair" || incident.SupersededAt == "" {
 		t.Fatalf("incident successor was not journaled: %#v", incident)
 	}
-	if !validExplicitIncidentUpdate(openIncident, incident) {
+	if !validExplicitIncidentUpdate(domain.State{}, openIncident, incident) {
 		t.Fatal("migration transition rejected the complete typed repair binding")
 	}
 	if _, err := svc.ApplyAction(actionRef, json.RawMessage(`{"note":"different intent"}`), "supersede"); err == nil || !strings.Contains(err.Error(), "another command") {
@@ -126,12 +126,12 @@ func TestPreWaitProposesTypedRepairAndIncidentSupersedeClosesOldAlert(t *testing
 	forged.Status = "resolved"
 	forged.Resolution = incidentResolutionSupersededByRepair
 	forged.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	if !validExplicitIncidentUpdate(prior, forged) {
+	if !validExplicitIncidentUpdate(domain.State{}, prior, forged) {
 		t.Fatal("migration transition rejected a v0.22 legacy ordinary resolution string")
 	}
 	partial := forged
 	partial.RemedyNodeID = "repair"
-	if validExplicitIncidentUpdate(prior, partial) {
+	if validExplicitIncidentUpdate(domain.State{}, prior, partial) {
 		t.Fatal("migration transition accepted a partial typed repair binding")
 	}
 }

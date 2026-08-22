@@ -788,15 +788,15 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 
 func runIncident(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: dagrail incident <progress|trip|disposition|resolve|supersede>")
+		return fmt.Errorf("usage: dagrail incident <progress|trip|disposition|resolve|control-resolve|supersede>")
 	}
 	flags := flag.NewFlagSet("incident "+args[0], flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	root := flags.String("root", ".", "project root")
 	id := flags.String("incident", "", "incident ID")
 	incidentRef := flags.String("incident-ref", "", "opaque Incident ref")
-	role := flags.String("actor-role", "", "owner role")
-	roleRef := flags.String("actor-role-ref", "", "opaque owner Role ref")
+	role := flags.String("actor-role", "", "acting Role")
+	roleRef := flags.String("actor-role-ref", "", "opaque acting Role ref")
 	key := flags.String("idempotency-key", "", "idempotency key")
 	note := flags.String("note", "", "bounded progress note")
 	madeProgress := flags.Bool("made-progress", false, "reset consecutive no-progress attempts")
@@ -847,6 +847,8 @@ func runIncident(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		incident, err = s.TripIncidentContext(ctx, *id, *role, *reason, *key)
 	case "resolve":
 		incident, err = s.ResolveIncidentContext(ctx, *id, *role, *resolution, *key)
+	case "control-resolve":
+		incident, err = s.ControlResolveIncidentContext(ctx, *id, *role, *disposition, *resolution, *note, *key)
 	case "disposition":
 		incident, err = s.SetIncidentDispositionContext(ctx, *id, *role, *disposition, *note, *key)
 	case "supersede":

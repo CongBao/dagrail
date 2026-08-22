@@ -307,6 +307,12 @@ DAGrail lets an LLM or human drive a development DAG while a small durable contr
     authority objects either fit within 24 KiB or return exact counts plus a
     journal/inventory-bound opaque detail stream. Schema-legal large identities are
     selected by controller-issued refs rather than copied through a smaller API field.
+49. Incident ownership is stable audit identity, not a mandate to reactivate a passive
+    executor. Ordinary `incident.manage` remains owner-local. A distinct
+    `incident.control` Role may close only an already-terminal failed/cancelled Attempt
+    Incident through one typed non-retry disposition plus resolution; the original
+    owner/source remain immutable and the truthful controller authority is journaled.
+    Resource/Effect observation closure and repair supersession remain separate verbs.
 
 ## Bounded contexts
 

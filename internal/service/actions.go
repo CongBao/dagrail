@@ -305,6 +305,108 @@ func (s *Service) applyIncidentSupersedeAction(ctx context.Context, state domain
 	return ActionResult{ActionID: payload.ActionID, Kind: payload.Kind, NodeID: payload.SuccessorNodeID, ObjectRef: "incident:" + payload.IncidentID, Status: state.Incidents[payload.IncidentID].Status, Sequence: segment.Sequence}, nil
 }
 
+type incidentControlResolveInput struct {
+	Disposition string `json:"disposition"`
+	Resolution  string `json:"resolution"`
+	Note        string `json:"note"`
+}
+
+func decodeIncidentControlResolveInput(input json.RawMessage) (incidentControlResolveInput, error) {
+	if err := validateAllowedActionInput(incidentControlResolveInputSchema(), input); err != nil {
+		return incidentControlResolveInput{}, err
+	}
+	var value incidentControlResolveInput
+	decoder := json.NewDecoder(bytes.NewReader(input))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		return incidentControlResolveInput{}, fmt.Errorf("decode incident control input: %w", err)
+	}
+	if err := validateIncidentText("controller incident resolution", value.Resolution, 1024); err != nil {
+		return incidentControlResolveInput{}, err
+	}
+	if err := validateIncidentText("controller incident note", value.Note, 1024); err != nil {
+		return incidentControlResolveInput{}, err
+	}
+	if !domain.ValidIncidentControlDisposition(value.Disposition) {
+		return incidentControlResolveInput{}, fmt.Errorf("invalid controller incident disposition %s", value.Disposition)
+	}
+	if value.Resolution == incidentResolutionSupersededByRepair {
+		return incidentControlResolveInput{}, fmt.Errorf("resolution %s is reserved for incident supersede", value.Resolution)
+	}
+	return value, nil
+}
+
+func incidentControlResolveRequestDigest(value incidentControlResolveInput) (string, error) {
+	return incidentRequestDigest("incident.control-resolve", map[string]any{"disposition": value.Disposition, "resolution": value.Resolution, "note": value.Note})
+}
+
+func (s *Service) applyIncidentControlResolveAction(ctx context.Context, state domain.State, payload actionRefPayload, input json.RawMessage, idempotencyKey string) (ActionResult, error) {
+	if payload.ProjectID != state.ProjectID {
+		return ActionResult{}, fmt.Errorf("incident action reference belongs to another project")
+	}
+	value, err := decodeIncidentControlResolveInput(input)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	requestDigest, err := incidentControlResolveRequestDigest(value)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	if command, ok := state.Commands[idempotencyKey]; ok {
+		incident, exists := state.Incidents[payload.IncidentID]
+		if command.Kind != "incident.control-resolve" || command.ActorRole != payload.RoleID || command.ObjectRef != "incident:"+payload.IncidentID || (command.RequestDigest != "" && command.RequestDigest != requestDigest) || !exists || incident.Control == nil || incident.Status != "resolved" || incident.Control.ActorRole != payload.RoleID || incident.Control.Disposition != value.Disposition || incident.Control.Resolution != value.Resolution || incident.Control.Note != value.Note {
+			return ActionResult{}, fmt.Errorf("idempotency key is already bound to another command")
+		}
+		return ActionResult{ActionID: payload.ActionID, Kind: payload.Kind, NodeID: incident.NodeID, ObjectRef: "incident:" + payload.IncidentID, Status: incident.Status, Sequence: command.Sequence}, nil
+	}
+	if payload.GraphRevision != state.GraphRevision || payload.ProviderSet != providerFingerprint(state.Graph) || payload.HeadHash != state.HeadHash || payload.IncidentID == "" {
+		return ActionResult{}, fmt.Errorf("incident action reference is stale or incomplete")
+	}
+	expires, err := time.Parse(time.RFC3339Nano, payload.ExpiresAt)
+	now := s.Now().UTC()
+	if err != nil || !now.Before(expires) {
+		return ActionResult{}, fmt.Errorf("incident action reference is expired")
+	}
+	lease, err := validLeaseAt(state, payload.RoleID, now)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	if lease.SessionID != payload.SessionID {
+		return ActionResult{}, fmt.Errorf("incident action reference session no longer owns the role")
+	}
+	if _, err := s.requireRoleCapability(state, payload.RoleID, domain.CapabilityIncidentControl); err != nil {
+		return ActionResult{}, err
+	}
+	incident, exists := state.Incidents[payload.IncidentID]
+	if !exists {
+		return ActionResult{}, fmt.Errorf("unknown incident %s", payload.IncidentID)
+	}
+	if payload.NodeID != incident.NodeID {
+		return ActionResult{}, fmt.Errorf("incident action reference target changed")
+	}
+	if err := controlResolveIncidentValue(&incident, state, payload.RoleID, value.Disposition, value.Resolution, value.Note, now); err != nil {
+		return ActionResult{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return ActionResult{}, err
+	}
+	incident.UpdatedAt = now.Format(time.RFC3339Nano)
+	incidentRaw, _ := json.Marshal(incident)
+	expectedHead := payload.HeadHash
+	segment, _, err := s.Journal.AppendOnce(journal.Command{ID: uuid.NewString(), Kind: "incident.control-resolve", ActorRole: payload.RoleID, IdempotencyKey: idempotencyKey, ObjectRef: "incident:" + payload.IncidentID, RequestDigest: requestDigest}, []journal.Event{{Type: "incident.updated", Payload: incidentRaw}}, now, &expectedHead)
+	if err != nil {
+		return ActionResult{}, err
+	}
+	state, segments, err := s.load()
+	if err != nil {
+		return ActionResult{}, err
+	}
+	if err := s.Projection.Sync(state, segments); err != nil {
+		return ActionResult{}, err
+	}
+	return ActionResult{ActionID: payload.ActionID, Kind: payload.Kind, NodeID: incident.NodeID, ObjectRef: "incident:" + payload.IncidentID, Status: "resolved", Sequence: segment.Sequence}, nil
+}
+
 func (s *Service) ReleaseRole(roleID, sessionID, idempotencyKey string) error {
 	if idempotencyKey == "" {
 		return fmt.Errorf("idempotency key is required")
@@ -718,7 +820,31 @@ func (s *Service) applyActionContext(ctx context.Context, ref string, input json
 			return boundedActionResult(state, ActionResult{ActionID: payload.ActionID, Kind: payload.Kind, NodeID: incident.RemedyNodeID, ObjectRef: command.ObjectRef, Status: incident.Status, Sequence: command.Sequence}), nil
 		}
 	}
-	if payload.Kind != "incident.supersede" {
+	if payload.Kind == "incident.control-resolve" {
+		if command, ok := state.Commands[idempotencyKey]; ok {
+			incidentID := strings.TrimPrefix(command.ObjectRef, "incident:")
+			incident, exists := state.Incidents[incidentID]
+			value, decodeErr := decodeIncidentControlResolveInput(input)
+			if decodeErr != nil {
+				return ActionResult{}, decodeErr
+			}
+			controlDigest, digestErr := incidentControlResolveRequestDigest(value)
+			if digestErr != nil {
+				return ActionResult{}, digestErr
+			}
+			roleMatches := payload.RoleID == command.ActorRole
+			incidentMatches := payload.IncidentID == incidentID
+			if payload.Compact {
+				roleMatches = payload.RoleKey == actionBindingKey(state.ProjectID, "role", command.ActorRole)
+				incidentMatches = payload.IncidentKey == actionBindingKey(state.ProjectID, "incident", incidentID)
+			}
+			if command.Kind != "incident.control-resolve" || command.ObjectRef != "incident:"+incidentID || !roleMatches || !incidentMatches || (command.RequestDigest != "" && command.RequestDigest != controlDigest) || !exists || incident.Control == nil || incident.Control.ActorRole != command.ActorRole || incident.Control.Disposition != value.Disposition || incident.Control.Resolution != value.Resolution || incident.Control.Note != value.Note {
+				return ActionResult{}, fmt.Errorf("idempotency key is already bound to another command")
+			}
+			return boundedActionResult(state, ActionResult{ActionID: payload.ActionID, Kind: payload.Kind, NodeID: incident.NodeID, ObjectRef: command.ObjectRef, Status: incident.Status, Sequence: command.Sequence}), nil
+		}
+	}
+	if payload.Kind != "incident.supersede" && payload.Kind != "incident.control-resolve" {
 		if command, ok := state.Commands[idempotencyKey]; ok {
 			result, resultErr := actionResultForSequence(state, command.Sequence)
 			if resultErr != nil || result.ActionID != payload.ActionID || result.Kind != payload.Kind || (command.RequestDigest != "" && command.RequestDigest != requestDigest) {
@@ -733,6 +859,10 @@ func (s *Service) applyActionContext(ctx context.Context, ref string, input json
 	}
 	if payload.Kind == "incident.supersede" {
 		result, applyErr := s.applyIncidentSupersedeAction(ctx, state, payload, input, idempotencyKey)
+		return boundedActionResult(state, result), applyErr
+	}
+	if payload.Kind == "incident.control-resolve" {
+		result, applyErr := s.applyIncidentControlResolveAction(ctx, state, payload, input, idempotencyKey)
 		return boundedActionResult(state, result), applyErr
 	}
 	if payload.ProjectID != state.ProjectID || payload.GraphRevision != state.GraphRevision || payload.ProviderSet != providerFingerprint(state.Graph) || payload.HeadHash != state.HeadHash {
@@ -1607,6 +1737,19 @@ func actionInputSchema(kind string, node domain.NodeDefinition) map[string]any {
 
 func incidentSupersedeInputSchema() map[string]any {
 	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"note"}, "properties": map[string]any{"note": map[string]any{"type": "string", "minLength": 1, "maxLength": 1024}}}
+}
+
+func incidentControlResolveInputSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []string{"disposition", "resolution", "note"},
+		"properties": map[string]any{
+			"disposition": map[string]any{"enum": []string{"rollback", "lkg", "quarantine", "off-critical-path"}},
+			"resolution":  map[string]any{"type": "string", "minLength": 1, "maxLength": 1024},
+			"note":        map[string]any{"type": "string", "minLength": 1, "maxLength": 1024},
+		},
+	}
 }
 
 func validateAllowedActionInput(schemaDocument map[string]any, input json.RawMessage) error {

@@ -96,6 +96,123 @@ func TestRemoteGraphChangeSeparatesPreviewAndApplyCLIContracts(t *testing.T) {
 	<-done
 }
 
+func TestMCPExposesAndAppliesControllerIncidentClosure(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(t.TempDir(), "runtime"))
+	svc, err := service.Init(root, "controller incident MCP")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graphPath := filepath.Join(root, "graph.json")
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"controller-incident-mcp"},"spec":{"roles":[{"id":"worker","capabilities":["node.run","incident.manage"]},{"id":"controller","capabilities":["incident.control"]}],"nodes":[{"id":"work","kind":"task","role":"worker","title":"work","outcomes":[{"id":"returned","class":"failure"}]}],"edges":[]}}`
+	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "graph", "controller"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.BindRole("worker", "codex", "worker-session", time.Hour, false, "bind-worker"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.BindRole("controller", "codex", "controller-session", time.Hour, false, "bind-controller"); err != nil {
+		t.Fatal(err)
+	}
+	started, err := svc.ApplyAction(mcpActionRef(t, svc, "worker", "work", "node.start"), json.RawMessage(`{}`), "start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ApplyAction(mcpActionRef(t, svc, "worker", "work", "task.complete"), json.RawMessage(`{"outcome":"returned"}`), "return"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ReleaseRole("worker", "worker-session", "release-worker"); err != nil {
+		t.Fatal(err)
+	}
+
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	server := mcpserver.New(svc)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- server.Run(ctx, serverTransport) }()
+	client := mcp.NewClient(&mcp.Implementation{Name: "incident-control-test", Version: "1.0.0"}, nil)
+	session, err := client.Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextResult, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "dag_context", Arguments: map[string]any{"view": "orchestrator", "role_id": "controller", "budget_bytes": 12288}})
+	if err != nil || contextResult == nil || contextResult.IsError {
+		t.Fatalf("dag_context failed: result=%+v err=%v", contextResult, err)
+	}
+	contextRaw, _ := json.Marshal(contextResult.StructuredContent)
+	if !strings.Contains(string(contextRaw), `"kind":"incident.control-resolve"`) {
+		t.Fatalf("dag_context omitted controller incident action: %s", contextRaw)
+	}
+	controlRef := mcpActionRefFromContext(t, contextRaw, "incident.control-resolve")
+	applyResult, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "dag_apply", Arguments: map[string]any{"action_ref": controlRef, "idempotency_key": "mcp-control-resolve", "input": map[string]any{"disposition": "off-critical-path", "resolution": "terminal sender remains passive", "note": "controller closes terminal lane"}}})
+	if err != nil || applyResult == nil || applyResult.IsError {
+		t.Fatalf("dag_apply failed: result=%+v err=%v", applyResult, err)
+	}
+	state, err := svc.State()
+	incident := state.Incidents["attempt:"+started.AttemptID]
+	if err != nil || incident.Status != "resolved" || incident.OwnerRole != "worker" || incident.DispositionBy != "controller" {
+		t.Fatalf("MCP controller closure drifted: incident=%#v err=%v", incident, err)
+	}
+	_ = session.Close()
+	cancel()
+	<-done
+}
+
+func mcpActionRef(t *testing.T, svc *service.Service, roleID, nodeID, kind string) string {
+	t.Helper()
+	actions, err := svc.ListActions(roleID, nodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range actions.Actions {
+		if action.Kind == kind {
+			return action.Ref
+		}
+	}
+	t.Fatalf("missing action %s for %s/%s", kind, roleID, nodeID)
+	return ""
+}
+
+func mcpActionRefFromContext(t *testing.T, raw []byte, kind string) string {
+	t.Helper()
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatal(err)
+	}
+	var walk func(any) string
+	walk = func(current any) string {
+		switch typed := current.(type) {
+		case map[string]any:
+			if typed["kind"] == kind {
+				if ref, ok := typed["ref"].(string); ok {
+					return ref
+				}
+			}
+			for _, child := range typed {
+				if ref := walk(child); ref != "" {
+					return ref
+				}
+			}
+		case []any:
+			for _, child := range typed {
+				if ref := walk(child); ref != "" {
+					return ref
+				}
+			}
+		}
+		return ""
+	}
+	if ref := walk(value); ref != "" {
+		return ref
+	}
+	t.Fatalf("missing %s ref in MCP context: %s", kind, raw)
+	return ""
+}
+
 func slicesContain(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {

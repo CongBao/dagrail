@@ -1259,18 +1259,27 @@ func validateLifecycleIncident(incident domain.Incident, state domain.State, eve
 	if eventType == "incident.updated" {
 		observation, automaticResourceUpdate := context.resourceObservations[incident.SourceID]
 		automaticResourceUpdate = automaticResourceUpdate && incident.SourceType == "resource" && oneOf(observation.Status, "failed", "unknown") && observation.UpdatedAt == incident.UpdatedAt
-		capability := domain.CapabilityIncidentManage
-		if automaticResourceUpdate {
-			capability = domain.CapabilityResourceClose
-		} else if incident.OwnerRole == "" || !roleLeaseCovers(state, incident.OwnerRole, incident.UpdatedAt) {
-			return fmt.Errorf("incident update is outside its owner role binding")
-		}
-		if !domain.RoleHasCapability(state.Graph, incident.OwnerRole, capability) {
-			return fmt.Errorf("incident update owner lacks capability %s", capability)
+		if incident.Control != nil {
+			if incident.Control.Authority != incidentControlAuthority || incident.Control.ActorRole == "" || incident.Control.ActorRole == incident.OwnerRole || incident.Control.OriginalOwnerRole != incident.OwnerRole || !roleLeaseCovers(state, incident.Control.ActorRole, incident.UpdatedAt) {
+				return fmt.Errorf("controller incident update is outside its exact authority binding")
+			}
+			if !domain.RoleHasCapability(state.Graph, incident.Control.ActorRole, domain.CapabilityIncidentControl) {
+				return fmt.Errorf("controller incident update actor lacks capability %s", domain.CapabilityIncidentControl)
+			}
+		} else {
+			capability := domain.CapabilityIncidentManage
+			if automaticResourceUpdate {
+				capability = domain.CapabilityResourceClose
+			} else if incident.OwnerRole == "" || !roleLeaseCovers(state, incident.OwnerRole, incident.UpdatedAt) {
+				return fmt.Errorf("incident update is outside its owner role binding")
+			}
+			if !domain.RoleHasCapability(state.Graph, incident.OwnerRole, capability) {
+				return fmt.Errorf("incident update owner lacks capability %s", capability)
+			}
 		}
 		if !automaticResourceUpdate {
 			prior, exists := state.Incidents[incident.ID]
-			if !exists || !validExplicitIncidentUpdate(prior, incident) {
+			if !exists || !validExplicitIncidentUpdate(state, prior, incident) {
 				return fmt.Errorf("incident update is not a current writer transition")
 			}
 		}
@@ -1300,10 +1309,18 @@ func validateLifecycleIncident(incident domain.Incident, state domain.State, eve
 	return nil
 }
 
-func validExplicitIncidentUpdate(prior, next domain.Incident) bool {
+func validExplicitIncidentUpdate(state domain.State, prior, next domain.Incident) bool {
 	base := prior
 	base.UpdatedAt = next.UpdatedAt
 	candidates := []domain.Incident{}
+	if next.Control != nil {
+		candidate := prior
+		updatedAt, err := time.Parse(time.RFC3339Nano, next.UpdatedAt)
+		if err == nil && controlResolveIncidentValue(&candidate, state, next.Control.ActorRole, next.Control.Disposition, next.Control.Resolution, next.Control.Note, updatedAt) == nil {
+			candidate.UpdatedAt = next.UpdatedAt
+			candidates = append(candidates, candidate)
+		}
+	}
 
 	hasRepairBinding := next.RemedyNodeID != "" || next.SupersededAt != ""
 	if prior.Status != "resolved" && prior.SourceType == "attempt" && next.Resolution != "" && (next.Resolution != incidentResolutionSupersededByRepair || !hasRepairBinding) {

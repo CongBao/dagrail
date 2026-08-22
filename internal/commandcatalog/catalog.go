@@ -61,7 +61,7 @@ var commands = []Command{
 	{Name: "harness", Summary: "Probe harness capabilities or emit a manual envelope", Effect: "read", Project: "optional", Output: "json", Subcommands: []string{"envelope", "probe"}},
 	{Name: "history", Summary: "Read bounded journal history", Effect: "read", Project: "required", Output: "json", Subcommands: []string{}},
 	{Name: "hook", Summary: "Handle a bounded harness hook event", Effect: "read", Project: "optional", Output: "json", Subcommands: []string{}},
-	{Name: "incident", Summary: "Classify, progress, disposition, supersede, trip, or resolve a governed incident", Effect: "write", Project: "required", Output: "json", Subcommands: []string{"disposition", "progress", "resolve", "supersede", "trip"}},
+	{Name: "incident", Summary: "Progress or close a governed incident under owner or controller authority", Effect: "write", Project: "required", Output: "json", Subcommands: []string{"control-resolve", "disposition", "progress", "resolve", "supersede", "trip"}},
 	{Name: "init", Summary: "Initialize a DAGrail project", Effect: "write", Project: "optional", Output: "json", Subcommands: []string{}},
 	{Name: "inspect", Summary: "Inspect an object by opaque reference", Effect: "read", Project: "required", Output: "json", Subcommands: []string{}},
 	{Name: "journal", Summary: "Verify, export, replay, or inspect journal compatibility", Effect: "mixed", Project: "required", Output: "json", Subcommands: []string{"compatibility", "export", "replay", "verify"}},

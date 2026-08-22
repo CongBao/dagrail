@@ -107,6 +107,7 @@ const (
 	CapabilityEffectReconcile = "effect.reconcile"
 	CapabilityGraphChange     = "graph.change"
 	CapabilityIncidentManage  = "incident.manage"
+	CapabilityIncidentControl = "incident.control"
 	CapabilityResourceClose   = "resource.close"
 )
 
@@ -975,30 +976,41 @@ type ResourceLease struct {
 }
 
 type Incident struct {
-	ID                 string   `json:"id"`
-	SourceType         string   `json:"sourceType"`
-	SourceID           string   `json:"sourceId"`
-	NodeID             string   `json:"nodeId,omitempty"`
-	OwnerRole          string   `json:"ownerRole,omitempty"`
-	Status             string   `json:"status"`
-	Classification     string   `json:"classification"`
-	Deadline           string   `json:"deadline,omitempty"`
-	AttemptBudget      int      `json:"attemptBudget"`
-	Attempts           int      `json:"attempts"`
-	NoProgressAttempts int      `json:"noProgressAttempts,omitempty"`
-	ProgressMetric     string   `json:"progressMetric,omitempty"`
-	LastProgress       string   `json:"lastProgress,omitempty"`
-	LastProgressAt     string   `json:"lastProgressAt,omitempty"`
-	CircuitReason      string   `json:"circuitReason,omitempty"`
-	Resolution         string   `json:"resolution,omitempty"`
-	Disposition        string   `json:"disposition,omitempty"`
-	DispositionBy      string   `json:"dispositionBy,omitempty"`
-	DispositionAt      string   `json:"dispositionAt,omitempty"`
-	RemedyNodeID       string   `json:"remedyNodeId,omitempty"`
-	SupersededAt       string   `json:"supersededAt,omitempty"`
-	DependencyCut      []string `json:"dependencyCut,omitempty"`
-	OpenedAt           string   `json:"openedAt"`
-	UpdatedAt          string   `json:"updatedAt"`
+	ID                 string           `json:"id"`
+	SourceType         string           `json:"sourceType"`
+	SourceID           string           `json:"sourceId"`
+	NodeID             string           `json:"nodeId,omitempty"`
+	OwnerRole          string           `json:"ownerRole,omitempty"`
+	Status             string           `json:"status"`
+	Classification     string           `json:"classification"`
+	Deadline           string           `json:"deadline,omitempty"`
+	AttemptBudget      int              `json:"attemptBudget"`
+	Attempts           int              `json:"attempts"`
+	NoProgressAttempts int              `json:"noProgressAttempts,omitempty"`
+	ProgressMetric     string           `json:"progressMetric,omitempty"`
+	LastProgress       string           `json:"lastProgress,omitempty"`
+	LastProgressAt     string           `json:"lastProgressAt,omitempty"`
+	CircuitReason      string           `json:"circuitReason,omitempty"`
+	Resolution         string           `json:"resolution,omitempty"`
+	Disposition        string           `json:"disposition,omitempty"`
+	DispositionBy      string           `json:"dispositionBy,omitempty"`
+	DispositionAt      string           `json:"dispositionAt,omitempty"`
+	RemedyNodeID       string           `json:"remedyNodeId,omitempty"`
+	SupersededAt       string           `json:"supersededAt,omitempty"`
+	Control            *IncidentControl `json:"control,omitempty"`
+	DependencyCut      []string         `json:"dependencyCut,omitempty"`
+	OpenedAt           string           `json:"openedAt"`
+	UpdatedAt          string           `json:"updatedAt"`
+}
+
+type IncidentControl struct {
+	Authority         string `json:"authority"`
+	ActorRole         string `json:"actorRole"`
+	OriginalOwnerRole string `json:"originalOwnerRole"`
+	Disposition       string `json:"disposition"`
+	Resolution        string `json:"resolution"`
+	Note              string `json:"note"`
+	AppliedAt         string `json:"appliedAt"`
 }
 
 // LifecycleMigrationReceipt binds one atomic historical import to the
@@ -1031,9 +1043,15 @@ var incidentDispositions = map[string]bool{
 	"off-critical-path": true, "escalate": true,
 }
 
+var incidentControlDispositions = map[string]bool{
+	"rollback": true, "lkg": true, "quarantine": true, "off-critical-path": true,
+}
+
 func ValidIncidentClassification(value string) bool { return incidentClassifications[value] }
 
 func ValidIncidentDisposition(value string) bool { return incidentDispositions[value] }
+
+func ValidIncidentControlDisposition(value string) bool { return incidentControlDispositions[value] }
 
 type State struct {
 	ProjectID           string                               `json:"projectId"`

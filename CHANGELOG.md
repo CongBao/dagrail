@@ -2,6 +2,27 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.26.4 — 2026-08-22
+
+### Added
+
+- a distinct `incident.control` capability and typed `incident.control-resolve`
+  action let an active controller close an already-terminal Attempt Incident without
+  borrowing the passive sender's Role or rewriting the original owner;
+- controller closure records the exact actor, original owner, closed disposition,
+  resolution, note, and application time in append-only, replay-verifiable Incident
+  authority and is available through CLI, bounded context, MCP `dag_apply`, operations,
+  and pre-wait remediation.
+
+### Security
+
+- ordinary `incident.manage` remains owner-local; controller closure excludes Effect
+  and Resource Incidents, non-terminal Attempts, successful/retryable outcomes,
+  retry/escalate dispositions, and repair-supersede semantics;
+- lifecycle import validates the controller lease, exact capability, immutable source
+  Attempt and original owner, while projection rebuild and portable backup preserve the
+  same audit record.
+
 ## 0.26.3 — 2026-08-21
 
 ### Fixed

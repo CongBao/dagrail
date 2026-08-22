@@ -2083,9 +2083,12 @@ func assertLifecycleWriterPrefixes(t *testing.T, svc *Service, initial domain.St
 }
 
 func validateLifecycleRecordsManifest(t *testing.T, svc *Service, initial domain.State, records []LifecycleMigrationRecord) error {
+	return validateLifecycleRecordsManifestVersion(t, svc, initial, records, LifecycleMigrationAPIVersion)
+}
+
+func validateLifecycleRecordsManifestVersion(t *testing.T, svc *Service, initial domain.State, records []LifecycleMigrationRecord, apiVersion string) error {
 	t.Helper()
-	manifest := LifecycleMigrationManifest{APIVersion: LifecycleMigrationAPIVersion, Kind: "LifecycleMigration", ProjectID: initial.ProjectID, GraphRevision: initial.GraphRevision, ExpectedJournalHead: initial.HeadHash, Source: LifecycleMigrationSource{System: "adversarial-source", Project: "effect-admission"}, Records: cloneLifecycleRecords(t, records)}
-	sealLifecycleManifest(t, &manifest)
+	manifest := lifecycleRecordsManifestVersion(t, initial, records, apiVersion)
 	validateLifecycleMigrationSchema(t, manifest)
 	segments, err := svc.Journal.ReadAll()
 	if err != nil {
@@ -2093,6 +2096,39 @@ func validateLifecycleRecordsManifest(t *testing.T, svc *Service, initial domain
 	}
 	_, err = svc.validateLifecycleMigration(initial, segments[:int(initial.HeadSequence)], manifest, manifest.Source.AuthorityHash)
 	return err
+}
+
+func validateLifecycleRecordsManifestAuthorityVersion(t *testing.T, svc *Service, initial domain.State, records []LifecycleMigrationRecord, apiVersion string) error {
+	t.Helper()
+	manifest := lifecycleRecordsManifestVersion(t, initial, records, apiVersion)
+	segments, err := svc.Journal.ReadAll()
+	if err != nil {
+		return err
+	}
+	_, err = svc.validateLifecycleMigration(initial, segments[:int(initial.HeadSequence)], manifest, manifest.Source.AuthorityHash)
+	return err
+}
+
+func lifecycleRecordsManifestVersion(t *testing.T, initial domain.State, records []LifecycleMigrationRecord, apiVersion string) LifecycleMigrationManifest {
+	t.Helper()
+	manifestRecords := cloneLifecycleRecords(t, records)
+	if apiVersion == LifecycleMigrationBundleAPIVersion {
+		betaRecords := make([]LifecycleMigrationRecord, 0, len(manifestRecords))
+		for _, record := range manifestRecords {
+			betaRecords = append(betaRecords, LifecycleMigrationRecord{
+				SourceSequence:     record.SourceSequence,
+				SourceEventID:      record.SourceEventID,
+				SourceEventHash:    record.SourceEventHash,
+				PreviousSourceHash: record.PreviousSourceHash,
+				OccurredAt:         record.OccurredAt,
+				Commands:           []LifecycleMigrationCommand{{CommandIndex: 1, Events: record.Events}},
+			})
+		}
+		manifestRecords = betaRecords
+	}
+	manifest := LifecycleMigrationManifest{APIVersion: apiVersion, Kind: "LifecycleMigration", ProjectID: initial.ProjectID, GraphRevision: initial.GraphRevision, ExpectedJournalHead: initial.HeadHash, Source: LifecycleMigrationSource{System: "adversarial-source", Project: "effect-admission"}, Records: manifestRecords}
+	sealLifecycleManifest(t, &manifest)
+	return manifest
 }
 
 func lifecycleRecordsFromWriter(t *testing.T, svc *Service, initialSequence uint64) []LifecycleMigrationRecord {

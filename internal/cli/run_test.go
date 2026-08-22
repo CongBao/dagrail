@@ -77,6 +77,60 @@ func TestV026CLIConsistencyAndSelectorFallback(t *testing.T) {
 	}
 }
 
+func TestIncidentControlResolveCLIUsesTruthfulControllerAuthority(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("DAGRAIL_HOME", filepath.Join(t.TempDir(), "runtime"))
+	svc, err := service.Init(root, "controller incident CLI")
+	if err != nil {
+		t.Fatal(err)
+	}
+	graphPath := filepath.Join(root, "graph.json")
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"controller-incident-cli"},"spec":{"roles":[{"id":"worker","capabilities":["node.run","incident.manage"]},{"id":"controller","capabilities":["incident.control"]}],"nodes":[{"id":"work","kind":"task","role":"worker","title":"work","outcomes":[{"id":"returned","class":"failure"}]}],"edges":[]}}`
+	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ImportGraph(graphPath, "graph", "controller"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.BindRole("worker", "codex", "worker-session", time.Hour, false, "bind-worker"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.BindRole("controller", "codex", "controller-session", time.Hour, false, "bind-controller"); err != nil {
+		t.Fatal(err)
+	}
+	started, err := svc.ApplyAction(findCLIActionRef(t, svc, "worker", "work", "node.start"), json.RawMessage(`{}`), "start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ApplyAction(findCLIActionRef(t, svc, "worker", "work", "task.complete"), json.RawMessage(`{"outcome":"returned"}`), "return"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ReleaseRole("worker", "worker-session", "release-worker"); err != nil {
+		t.Fatal(err)
+	}
+	incidentID := "attempt:" + started.AttemptID
+	var stdout, stderr bytes.Buffer
+	err = cli.Run([]string{"incident", "control-resolve", "--root", root, "--incident", incidentID, "--actor-role", "controller", "--disposition", "off-critical-path", "--resolution", "delivered terminal sender remains passive", "--note", "controller closes the terminal lane", "--idempotency-key", "control-close"}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil || !strings.Contains(stdout.String(), `"ownerRole":"worker"`) || !strings.Contains(stdout.String(), `"actorRole":"controller"`) || !strings.Contains(stdout.String(), `"status":"resolved"`) {
+		t.Fatalf("controller incident CLI failed: stdout=%s stderr=%s err=%v", stdout.String(), stderr.String(), err)
+	}
+}
+
+func findCLIActionRef(t *testing.T, svc *service.Service, roleID, nodeID, kind string) string {
+	t.Helper()
+	actions, err := svc.ListActions(roleID, nodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range actions.Actions {
+		if action.Kind == kind {
+			return action.Ref
+		}
+	}
+	t.Fatalf("missing %s action for %s/%s", kind, roleID, nodeID)
+	return ""
+}
+
 func TestPluginUpdateDryRunDoesNotMaterializeRuntimeOrBundle(t *testing.T) {
 	stateRoot := filepath.Join(t.TempDir(), "state")
 	harnessRoot := t.TempDir()

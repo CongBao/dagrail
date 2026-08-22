@@ -163,6 +163,12 @@ lease, Node/Attempt, provider set, and expiry. The returned `inputSchema` is enf
 The orchestrator view also exposes project-wide signed actions and deterministic
 remediation proposals. An `incident.supersede` action can close an Attempt incident only
 when a typed edge or `supersedes` declaration identifies an active/planned repair Node.
+An `incident.control-resolve` action is separately gated by `incident.control`: it may
+atomically apply only `rollback`, `lkg`, `quarantine`, or `off-critical-path` and resolve
+a terminal failed/cancelled Attempt Incident while preserving its original owner. The
+signed ref binds the controller Role lease, Incident, source Node, journal head, Graph
+Revision, and expiry. Resource/Effect Incidents and ordinary owner-local
+`incident.manage` transitions are outside this authority.
 Effect continuity compares the prepared adapter ID, version, schema hash, and canonical
 request digest separately from unrelated journal-head advancement. A missing legacy
 binding or same-ID adapter upgrade fails reconciliation closed.
