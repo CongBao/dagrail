@@ -51,6 +51,12 @@ An expired Role lease blocks pre-wait only when the Role still owns a ready Node
 non-terminal Attempt, pending Effect, active Resource, or open Incident. `status` retains
 all expired leases for audit visibility; a terminal, resource-closed, incident-free
 sender is inert and must not be renewed merely to make pre-wait green.
+For a ready Node whose Role is missing, released, or expired, pre-wait returns the
+explicit `bind_ready_node_role` prerequisite with `operation.kind: role.bind`. Supply
+the assigned harness/session through `dagrail role bind`, verify the resulting binding,
+then refresh context to obtain `assign_ready_node` with an exact `node.start` lookup.
+These are two journal commands and two idempotency keys; DAGrail never implies an
+atomic bind-and-start operation.
 For an unusually large declared identifier or input schema, follow the returned detail
 ref and concatenate its base64-decoded chunks, checking the common SHA-256 digest and
 total byte count. The signed action ref itself remains compact and applies the exact

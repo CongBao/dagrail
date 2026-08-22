@@ -2308,21 +2308,39 @@ func (s *Service) buildRemediationsContext(ctx context.Context, state domain.Sta
 		}
 	}
 	sort.Strings(roleControlRoles)
+	controlTransferRemediated := map[string]bool{}
 	for _, nodeID := range inventory.readyNodes {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		node, _ := state.NodeDefinition(nodeID)
-		add("assign_ready_node", "node:"+nodeID, node.Role, nodeID, nil, "role.bind_then_node.start", map[string]any{"roleId": node.Role, "nodeId": nodeID})
-		if lease, leaseErr := validLeaseAt(state, node.Role, now); leaseErr == nil {
+		lease, leaseErr := validLeaseAt(state, node.Role, now)
+		if leaseErr != nil {
+			leaseState := "missing"
+			if previous, exists := state.Leases[node.Role]; exists {
+				leaseState = "released"
+				if previous.Active {
+					leaseState = "expired"
+				}
+			}
+			add("bind_ready_node_role", "node:"+nodeID, node.Role, nodeID, nil, "role.bind", map[string]any{
+				"roleId":         node.Role,
+				"nodeId":         nodeID,
+				"leaseState":     leaseState,
+				"nextOperation":  "action.list",
+				"nextActionKind": "node.start",
+			})
+		} else {
+			add("assign_ready_node", "node:"+nodeID, node.Role, nodeID, nil, "action.list", map[string]any{"roleId": node.Role, "nodeId": nodeID, "actionKind": "node.start"})
 			leaseExpiry, expiryErr := time.Parse(time.RFC3339Nano, lease.ExpiresAt)
-			if expiryErr == nil && now.Before(leaseExpiry) {
+			if expiryErr == nil && now.Before(leaseExpiry) && !controlTransferRemediated[node.Role] {
 				for _, controllerRole := range roleControlRoles {
 					controllerLease := state.Leases[controllerRole]
 					if controllerRole == node.Role || controllerLease.SessionID == lease.SessionID {
 						continue
 					}
-					add("control_transfer_active_role", "role:"+node.Role, controllerRole, nodeID, nil, "action.list", map[string]any{"actorRole": controllerRole, "targetRoleId": node.Role, "previousSessionId": lease.SessionID, "actionKind": "role.control-transfer"})
+					add("control_transfer_active_role", "role:"+node.Role, controllerRole, "", nil, "action.list", map[string]any{"actorRole": controllerRole, "targetRoleId": node.Role, "previousSessionId": lease.SessionID, "actionKind": "role.control-transfer"})
+					controlTransferRemediated[node.Role] = true
 					break
 				}
 			}
@@ -2463,6 +2481,8 @@ func remediationPriority(code string) int {
 	case "renew_or_takeover_role":
 		return 6
 	case "control_transfer_active_role":
+		return 6
+	case "bind_ready_node_role":
 		return 6
 	case "assign_ready_node":
 		return 7

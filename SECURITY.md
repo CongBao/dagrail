@@ -133,7 +133,7 @@ uses inspection-only security and recovery checks. Structural qualification neve
 claims that CI actually ran for a particular tag or that production adoption occurred;
 the tag workflow supplies build evidence and the report leaves adoption gaps explicit.
 
-The historical compatibility job builds exact commit-pinned v0.10.0–v0.26.5 sources in
+The historical compatibility job builds exact commit-pinned v0.10.0–v0.26.6 sources in
 temporary directories. Source archives reject traversal, links, unsupported entry
 types, excessive entries, and excessive expanded bytes. Readiness reports cite the
 manifest digest but cannot turn this CI evidence into production validation.

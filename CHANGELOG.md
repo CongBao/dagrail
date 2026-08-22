@@ -2,6 +2,17 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.26.7 — 2026-08-22
+
+### Fixed
+
+- ready Nodes with a missing, released, or expired Role lease now expose the explicit
+  `bind_ready_node_role` prerequisite and public `role.bind` operation; DAGrail no
+  longer advertises an unimplemented `role.bind_then_node.start` composite;
+- `assign_ready_node` is emitted only after the Role has a valid lease and now points
+  to an exact `action.list` lookup for `node.start`, so every remediation is executable
+  from the state that produced it.
+
 ## 0.26.6 — 2026-08-22
 
 ### Added

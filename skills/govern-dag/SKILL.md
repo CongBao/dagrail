@@ -28,7 +28,7 @@ hand-built transition.
    `node_ref`, `actor_role_ref`, or `effect_ref`; do not reconstruct or paste the ID.
    Use its `authorization`, `remediations`, and `projectAllowedActions` as the bounded
    operations plan. Routine in-scope actions do not need a new conversational approval;
-   the listed escalation boundaries still do.
+   the listed escalation boundaries still do. For `bind_ready_node_role`, bind and verify the executor, then refresh for `assign_ready_node`/`node.start`; no bind-and-start is implicit.
 3. Advance work only through current controller-issued action refs. In a CLI fallback,
    `dagrail action apply --kind <kind> --role <role-or-ref> --node <node-or-ref>` may
    atomically resolve one current action so the session need not copy a long ref; zero or

@@ -20,7 +20,10 @@ as appropriate. Never replace a missing tool with a hand-authored lifecycle enve
    formal Role. Use takeover only after the former lease expires. If the previous
    session is unavailable while its lease is still active, remain passive until a
    distinct `role.control` controller transfers the exact binding. Then verify that the
-   Role lease names this session before resuming the existing Attempt/checkpoint.
+   Role lease names this session before resuming the existing Attempt/checkpoint. A
+   `bind_ready_node_role` remediation is a prerequisite, not an atomic start: call
+   `role bind`, verify exact Role/session equality, refresh context, and only then apply
+   the newly returned `node.start` action.
 2. Call `dag_context` with `view: worker`, an explicit `root` when project discovery is
    ambiguous, and `role_id`/`node_id` for the assigned stable IDs. Use `role_ref` or
    `node_ref` only when DAGrail returned an opaque selector instead of a small ID; there

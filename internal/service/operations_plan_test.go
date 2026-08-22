@@ -290,6 +290,92 @@ func TestOrchestratorContextCarriesAuthorizationProjectActionsAndRemediations(t 
 	}
 }
 
+func TestReadyNodeRemediationSeparatesRoleBindingFromNodeStart(t *testing.T) {
+	svc, _ := governanceService(t, `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"ready-role-prerequisite"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"work","kind":"task","role":"worker","title":"work","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`)
+
+	audit, err := svc.PreWait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bind Remediation
+	for _, remediation := range audit.Remediations {
+		switch remediation.Code {
+		case "bind_ready_node_role":
+			bind = remediation
+		case "assign_ready_node":
+			t.Fatalf("missing Role lease exposed node.start assignment: %#v", remediation)
+		}
+	}
+	if bind.Operation.Kind != "role.bind" || bind.TargetRef != "node:work" || bind.OwnerRole != "worker" || bind.NodeID != "work" {
+		t.Fatalf("missing Role lease did not expose its exact bind prerequisite: %#v", bind)
+	}
+	for key, expected := range map[string]any{"roleId": "worker", "nodeId": "work", "leaseState": "missing", "nextOperation": "action.list", "nextActionKind": "node.start"} {
+		if bind.Operation.Params[key] != expected {
+			t.Fatalf("bind remediation parameter %s=%#v, want %#v: %#v", key, bind.Operation.Params[key], expected, bind)
+		}
+	}
+	if _, err := svc.listActions(mustState(t, svc), "worker", "work"); err == nil || !strings.Contains(err.Error(), "no active lease") {
+		t.Fatalf("missing Role unexpectedly exposed a directly applicable node.start action: %v", err)
+	}
+
+	if _, err := svc.BindRole("worker", "codex", "worker-session", 30*time.Minute, false, "bind/worker"); err != nil {
+		t.Fatal(err)
+	}
+	audit, err = svc.PreWait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var assign Remediation
+	for _, remediation := range audit.Remediations {
+		switch remediation.Code {
+		case "bind_ready_node_role":
+			t.Fatalf("active Role lease retained a bind prerequisite: %#v", remediation)
+		case "assign_ready_node":
+			assign = remediation
+		}
+	}
+	if assign.Operation.Kind != "action.list" || assign.Operation.Params["roleId"] != "worker" || assign.Operation.Params["nodeId"] != "work" || assign.Operation.Params["actionKind"] != "node.start" {
+		t.Fatalf("active Role lease did not expose an executable node.start lookup: %#v", assign)
+	}
+	started, err := svc.ApplyAction(findActionRef(t, svc, "worker", "work", "node.start"), json.RawMessage(`{}`), "start/work")
+	if err != nil || started.Kind != "node.start" || started.AttemptID == "" {
+		t.Fatalf("advertised node.start lookup was not executable: result=%#v err=%v", started, err)
+	}
+}
+
+func TestReadyNodeControlTransferRemediationIsRoleScopedAndUnique(t *testing.T) {
+	svc, _ := governanceService(t, `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"role-scoped-ready-transfer"},"spec":{"roles":[{"id":"controller","capabilities":["role.control"]},{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"one","kind":"task","role":"worker","title":"one","outcomes":[{"id":"done","class":"success"}]},{"id":"two","kind":"task","role":"worker","title":"two","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`)
+	for _, binding := range []struct{ role, session, key string }{{"controller", "controller-session", "bind/controller"}, {"worker", "worker-session", "bind/worker"}} {
+		if _, err := svc.BindRole(binding.role, "codex", binding.session, time.Hour, false, binding.key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	audit, err := svc.PreWait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	assignCount, transferCount := 0, 0
+	for _, remediation := range audit.Remediations {
+		if ids[remediation.ID] {
+			t.Fatalf("duplicate remediation ID %s: %#v", remediation.ID, audit.Remediations)
+		}
+		ids[remediation.ID] = true
+		switch remediation.Code {
+		case "assign_ready_node":
+			assignCount++
+		case "control_transfer_active_role":
+			transferCount++
+			if remediation.TargetRef != "role:worker" || remediation.OwnerRole != "controller" || remediation.NodeID != "" || remediation.Operation.Kind != "action.list" || remediation.Operation.Params["targetRoleId"] != "worker" {
+				t.Fatalf("control transfer remediation is not Role-scoped: %#v", remediation)
+			}
+		}
+	}
+	if assignCount != 2 || transferCount != 1 {
+		t.Fatalf("ready Role emitted duplicate/missing remediations: assign=%d transfer=%d all=%#v", assignCount, transferCount, audit.Remediations)
+	}
+}
+
 func TestOrchestratorOperationsPlanIsDeterministicallyBounded(t *testing.T) {
 	nodes := make([]map[string]any, 0, 20)
 	for index := 0; index < 20; index++ {
