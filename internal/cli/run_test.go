@@ -47,7 +47,7 @@ func TestV026CLIConsistencyAndSelectorFallback(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("DAGRAIL_HOME", filepath.Join(t.TempDir(), "runtime"))
 	graphPath := filepath.Join(root, "graph.json")
-	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"cli-consistency"},"spec":{"roles":[{"id":"worker","capabilities":["node.run"]}],"nodes":[{"id":"task","kind":"task","role":"worker","title":"task","outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
+	graph := `{"apiVersion":"dagrail.io/v1alpha1","kind":"Graph","metadata":{"name":"cli-consistency"},"spec":{"roles":[{"id":"worker","capabilities":["node.run","resource.close"]}],"resourceCapacities":[{"kind":"workspace","capacity":1}],"nodes":[{"id":"task","kind":"task","role":"worker","title":"task","resources":[{"kind":"workspace","quantity":1}],"outcomes":[{"id":"done","class":"success"}]}],"edges":[]}}`
 	if err := os.WriteFile(graphPath, []byte(graph), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -72,13 +72,59 @@ func TestV026CLIConsistencyAndSelectorFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	positionalFirst, _, err := run("inspect", "node:task", "--root", root)
+	if err != nil || positionalFirst != positional {
+		t.Fatalf("positional-first inspect diverged: flags-first=%q positional-first=%q err=%v", positional, positionalFirst, err)
+	}
 	flagged, _, err := run("inspect", "--root", root, "--ref", "node:task")
 	if err != nil || flagged != positional {
 		t.Fatalf("inspect forms diverged: positional=%q flagged=%q err=%v", positional, flagged, err)
 	}
+	shortFlags, _, err := run("inspect", "node:task", "-root", root)
+	if err != nil || shortFlags != positional {
+		t.Fatalf("short flags after positional inspect diverged: positional=%q short=%q err=%v", positional, shortFlags, err)
+	}
+	if _, _, err := run("inspect", "node:task", "--root", root, "--ref", "node:task"); err == nil || !strings.Contains(err.Error(), "usage: dagrail inspect") {
+		t.Fatalf("inspect accepted both positional and --ref: %v", err)
+	}
+	if _, _, err := run("inspect", "node:task", "--root", root, "extra"); err == nil || !strings.Contains(err.Error(), "usage: dagrail inspect") {
+		t.Fatalf("inspect accepted multiple positional references: %v", err)
+	}
+	if _, _, err := run("inspect", "node:task", "--unknown"); err == nil {
+		t.Fatal("inspect accepted an unknown flag after the positional reference")
+	}
+	secondRoot := t.TempDir()
+	if _, _, err := run("init", "--root", secondRoot, "--name", "cli-consistency-second"); err != nil {
+		t.Fatalf("initialize second project: %v", err)
+	}
+	secondProject, _, err := run("inspect", "project", "--root", root, "-root", secondRoot)
+	if err != nil || !strings.Contains(secondProject, `"name":"cli-consistency-second"`) {
+		t.Fatalf("duplicate root did not select the final project: output=%q err=%v", secondProject, err)
+	}
 	started, _, err := run("action", "apply", "--root", root, "--kind", "node.start", "--role", "worker", "--node", "task", "--input", `{}`, "--idempotency-key", "start")
 	if err != nil || !strings.Contains(started, `"kind":"node.start"`) || !strings.Contains(started, `"continuation"`) {
 		t.Fatalf("selector apply failed: %s %v", started, err)
+	}
+	svc, err := service.OpenForInspection(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := svc.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Resources) != 1 {
+		t.Fatalf("node.start created %d resources, want 1", len(state.Resources))
+	}
+	for resourceID := range state.Resources {
+		resourcePositional, _, inspectErr := run("inspect", "resource:"+resourceID, "--root", root)
+		if inspectErr != nil || !strings.Contains(resourcePositional, `"id":"`+resourceID+`"`) {
+			t.Fatalf("positional-first resource inspect failed: output=%q err=%v", resourcePositional, inspectErr)
+		}
+		resourceFlagged, _, inspectErr := run("inspect", "--root", root, "--ref", "resource:"+resourceID)
+		if inspectErr != nil || resourceFlagged != resourcePositional {
+			t.Fatalf("resource inspect forms diverged: positional=%q flagged=%q err=%v", resourcePositional, resourceFlagged, inspectErr)
+		}
 	}
 }
 

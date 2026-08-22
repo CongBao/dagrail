@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -48,7 +47,7 @@ type JournalVerificationReport struct {
 	Events        int                 `json:"events"`
 	HeadSequence  uint64              `json:"headSequence"`
 	HeadHash      string              `json:"headHash,omitempty"`
-	ExportBytes   int                 `json:"canonicalExportBytes"`
+	ExportBytes   int64               `json:"canonicalExportBytes"`
 	ExportSHA256  string              `json:"canonicalExportSha256"`
 	Compatibility CompatibilityStatus `json:"compatibility"`
 }
@@ -74,19 +73,18 @@ func (s *Service) VerifyJournalReportContext(ctx context.Context, progress func(
 		return JournalVerificationReport{}, err
 	}
 	compatibility := CompatibilityStatus{Journal: journalCompatibility, ProjectionSchemaVersion: projectionVersion, CurrentProjectionSchemaVersion: projection.CurrentSchemaVersion}
-	exported, err := exportJournalSegments(ctx, segments)
+	exportBytes, exportDigest, err := digestJournalSegments(ctx, segments)
 	if err != nil {
 		return JournalVerificationReport{}, err
 	}
-	digest := sha256.Sum256(exported)
 	report := JournalVerificationReport{
 		APIVersion:    "dagrail.io/journal-verification/v1alpha1",
 		Kind:          "JournalVerification",
 		Valid:         true,
 		Segments:      len(segments),
 		Events:        compatibility.Journal.EventCount,
-		ExportBytes:   len(exported),
-		ExportSHA256:  "sha256:" + hex.EncodeToString(digest[:]),
+		ExportBytes:   exportBytes,
+		ExportSHA256:  "sha256:" + hex.EncodeToString(exportDigest),
 		Compatibility: compatibility,
 	}
 	if len(segments) > 0 {

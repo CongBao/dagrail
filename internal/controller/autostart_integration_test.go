@@ -129,6 +129,18 @@ func TestTwentyConcurrentCLIStartsConvergeOnOneDaemon(t *testing.T) {
 	runMutation("import graph", "graph", "import", "--root", projectRoot, "--file", graphPath, "--idempotency-key", "graph-import")
 	runMutation("bind role", "role", "bind", "--root", projectRoot, "--role", "developer", "--harness", "codex", "--session", "receipt-session", "--ttl", "15m", "--idempotency-key", "role-bind")
 	runMutation("start node", "action", "apply", "--root", projectRoot, "--kind", "node.start", "--role", "developer", "--node", "implement", "--input", "{}", "--idempotency-key", "node-start")
+	inspect := exec.Command(binary, "inspect", "node:implement", "-root", projectRoot)
+	inspect.Env = environment
+	inspectOutput, err := inspect.CombinedOutput()
+	if err != nil || len(strings.TrimSpace(string(inspectOutput))) == 0 || !json.Valid(inspectOutput) || !strings.Contains(string(inspectOutput), `"id":"implement"`) {
+		t.Fatalf("positional-first inspect through daemon failed: err=%v output=%s", err, inspectOutput)
+	}
+	duplicateRootInspect := exec.Command(binary, "inspect", "project", "--root", filepath.Join(root, "wrong-project"), "-root", projectRoot)
+	duplicateRootInspect.Env = environment
+	duplicateRootOutput, err := duplicateRootInspect.CombinedOutput()
+	if err != nil || !json.Valid(duplicateRootOutput) || !strings.Contains(string(duplicateRootOutput), `"name":"receipt-test"`) {
+		t.Fatalf("daemon did not route duplicate roots through the final project actor: err=%v output=%s", err, duplicateRootOutput)
+	}
 
 	stop := exec.Command(binary, "daemon", "stop")
 	stop.Env = environment

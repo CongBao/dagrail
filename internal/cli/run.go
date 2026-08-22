@@ -1262,28 +1262,66 @@ func runReconcile(ctx context.Context, args []string, stdout, stderr io.Writer) 
 }
 
 func runInspect(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	flags := flag.NewFlagSet("inspect", flag.ContinueOnError)
-	flags.SetOutput(stderr)
-	root := flags.String("root", ".", "project root")
-	ref := flags.String("ref", "", "opaque object reference")
-	if err := flags.Parse(args); err != nil {
-		return err
-	}
-	if flags.NArg() > 1 || (*ref != "" && flags.NArg() != 0) || (*ref == "" && flags.NArg() != 1) {
-		return fmt.Errorf("usage: dagrail inspect [--root path] [--ref opaque-ref | kind:id]")
-	}
-	if *ref == "" {
-		*ref = flags.Arg(0)
-	}
-	s, err := service.OpenForInspection(*root)
+	root, ref, err := parseInspectArgs(args, stderr)
 	if err != nil {
 		return err
 	}
-	value, err := s.InspectContext(ctx, *ref)
+	s, err := service.OpenForInspection(root)
+	if err != nil {
+		return err
+	}
+	value, err := s.InspectContext(ctx, ref)
 	if err != nil {
 		return err
 	}
 	return writeJSON(stdout, value)
+}
+
+func parseInspectArgs(args []string, stderr io.Writer) (string, string, error) {
+	// The standard flag package stops at the first positional operand. Inspect
+	// promises a positional kind:id form, so separate that single operand from
+	// the closed flag set before parsing. This keeps both of these equivalent:
+	//
+	//   dagrail inspect --root PROJECT resource:ID
+	//   dagrail inspect resource:ID --root PROJECT
+	flagArgs := make([]string, 0, len(args))
+	positional := make([]string, 0, 1)
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--" {
+			positional = append(positional, args[index+1:]...)
+			break
+		}
+		switch arg {
+		case "-root", "--root", "-ref", "--ref":
+			flagArgs = append(flagArgs, arg)
+			if index+1 < len(args) {
+				index++
+				flagArgs = append(flagArgs, args[index])
+			}
+		default:
+			if strings.HasPrefix(arg, "-") {
+				flagArgs = append(flagArgs, arg)
+			} else {
+				positional = append(positional, arg)
+			}
+		}
+	}
+
+	flags := flag.NewFlagSet("inspect", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	root := flags.String("root", ".", "project root")
+	ref := flags.String("ref", "", "opaque object reference")
+	if err := flags.Parse(flagArgs); err != nil {
+		return "", "", err
+	}
+	if flags.NArg() != 0 || len(positional) > 1 || (*ref != "" && len(positional) != 0) || (*ref == "" && len(positional) != 1) {
+		return "", "", fmt.Errorf("usage: dagrail inspect [--root path] [--ref opaque-ref | kind:id]")
+	}
+	if *ref == "" {
+		*ref = positional[0]
+	}
+	return *root, *ref, nil
 }
 
 func runPreWait(ctx context.Context, args []string, stdout, stderr io.Writer) error {

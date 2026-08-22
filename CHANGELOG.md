@@ -2,6 +2,17 @@
 
 All notable changes to DAGrail are documented here. The project follows Semantic Versioning while pre-1.0 APIs remain explicitly scoped by their stability labels.
 
+## 0.26.8 — 2026-08-22
+
+### Fixed
+
+- `dagrail inspect` now accepts its documented positional `kind:id` operand before
+  or after `--root`; resource and node inspection use the same parsing contract through
+  direct and daemon-proxied CLI execution.
+- `journal verify` now streams its canonical digest instead of materializing the entire
+  portable export, so verified journals larger than the 256 MiB export-file boundary
+  remain inspectable without weakening the bounded `journal export` contract.
+
 ## 0.26.7 — 2026-08-22
 
 ### Fixed

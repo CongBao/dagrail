@@ -189,17 +189,30 @@ func TestResolveCallerRootPreservesClientWorkingDirectory(t *testing.T) {
 	}{
 		{[]string{"status"}, cwd},
 		{[]string{"status", "--root", "nested"}, filepath.Join(cwd, "nested")},
+		{[]string{"inspect", "node:task", "-root", "nested"}, filepath.Join(cwd, "nested")},
+		{[]string{"inspect", "node:task", "-root=nested"}, filepath.Join(cwd, "nested")},
+		{[]string{"inspect", "node:task", "--root", "first", "-root", "second"}, filepath.Join(cwd, "second")},
+		{[]string{"inspect", "node:task", "-root=first", "--root=second"}, filepath.Join(cwd, "second")},
 		{[]string{"graph", "validate", "--file", "graph.json"}, ""},
 	} {
 		resolved := resolveCallerRoot(test.args, cwd)
 		root := ""
 		for index := range resolved {
-			if resolved[index] == "--root" && index+1 < len(resolved) {
+			if (resolved[index] == "--root" || resolved[index] == "-root") && index+1 < len(resolved) {
 				root = resolved[index+1]
+			}
+			if strings.HasPrefix(resolved[index], "-root=") {
+				root = strings.TrimPrefix(resolved[index], "-root=")
+			}
+			if strings.HasPrefix(resolved[index], "--root=") {
+				root = strings.TrimPrefix(resolved[index], "--root=")
 			}
 		}
 		if root != test.want {
 			t.Fatalf("resolve %v root = %q, want %q", test.args, root, test.want)
+		}
+		if test.want != "" && commandRoot(resolved) != test.want {
+			t.Fatalf("command root for %v = %q, want %q", resolved, commandRoot(resolved), test.want)
 		}
 	}
 }

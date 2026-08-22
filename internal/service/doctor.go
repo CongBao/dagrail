@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -123,4 +124,30 @@ func exportJournalSegments(ctx context.Context, segments []journal.Segment) ([]b
 		result = append(result, '\n')
 	}
 	return result, nil
+}
+
+func digestJournalSegments(ctx context.Context, segments []journal.Segment) (int64, []byte, error) {
+	digest := sha256.New()
+	var total int64
+	for _, segment := range segments {
+		if err := ctx.Err(); err != nil {
+			return 0, nil, err
+		}
+		raw, err := json.Marshal(segment)
+		if err != nil {
+			return 0, nil, err
+		}
+		canonical, err := jcs.Transform(raw)
+		if err != nil {
+			return 0, nil, err
+		}
+		if _, err := digest.Write(canonical); err != nil {
+			return 0, nil, err
+		}
+		if _, err := digest.Write([]byte{'\n'}); err != nil {
+			return 0, nil, err
+		}
+		total += int64(len(canonical)) + 1
+	}
+	return total, digest.Sum(nil), nil
 }

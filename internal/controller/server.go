@@ -371,13 +371,13 @@ func logControllerOperation(id uint64, command string, elapsed time.Duration, co
 func commandRoot(args []string) string {
 	root := "."
 	for index := 0; index < len(args); index++ {
-		if args[index] == "--root" && index+1 < len(args) {
+		if (args[index] == "--root" || args[index] == "-root") && index+1 < len(args) {
 			root = args[index+1]
-			break
+			index++
+			continue
 		}
-		if strings.HasPrefix(args[index], "--root=") {
-			root = strings.TrimPrefix(args[index], "--root=")
-			break
+		if strings.HasPrefix(args[index], "--root=") || strings.HasPrefix(args[index], "-root=") {
+			root = strings.TrimPrefix(strings.TrimPrefix(args[index], "--root="), "-root=")
 		}
 	}
 	absolute, err := filepath.Abs(root)
@@ -389,24 +389,31 @@ func commandRoot(args []string) string {
 
 func resolveCallerRoot(args []string, cwd string) []string {
 	resolved := append([]string(nil), args...)
+	foundRoot := false
 	for index := 0; index < len(resolved); index++ {
-		if resolved[index] == "--root" && index+1 < len(resolved) {
+		if (resolved[index] == "--root" || resolved[index] == "-root") && index+1 < len(resolved) {
+			foundRoot = true
 			if !filepath.IsAbs(resolved[index+1]) {
 				resolved[index+1] = filepath.Join(cwd, resolved[index+1])
 			}
 			resolved[index+1] = filepath.Clean(resolved[index+1])
-			return resolved
+			index++
+			continue
 		}
-		if strings.HasPrefix(resolved[index], "--root=") {
-			root := strings.TrimPrefix(resolved[index], "--root=")
+		if strings.HasPrefix(resolved[index], "--root=") || strings.HasPrefix(resolved[index], "-root=") {
+			foundRoot = true
+			prefix := "--root="
+			if strings.HasPrefix(resolved[index], "-root=") {
+				prefix = "-root="
+			}
+			root := strings.TrimPrefix(resolved[index], prefix)
 			if !filepath.IsAbs(root) {
 				root = filepath.Join(cwd, root)
 			}
-			resolved[index] = "--root=" + filepath.Clean(root)
-			return resolved
+			resolved[index] = prefix + filepath.Clean(root)
 		}
 	}
-	if commandcatalog.UsesProjectRoot(resolved) {
+	if !foundRoot && commandcatalog.UsesProjectRoot(resolved) {
 		resolved = append(resolved, "--root", filepath.Clean(cwd))
 	}
 	return resolved
