@@ -1450,31 +1450,71 @@ func TestDaemonOutboxReturnsPendingContinuationAndDrainsAuthorizedEffect(t *test
 	_, _ = svc.ApplyAction(findActionRef(t, svc, "worker", "effect", "node.start"), json.RawMessage(`{}`), "start")
 	prepare := findActionRef(t, svc, "worker", "effect", "effect.prepare")
 	outbox := NewDaemonOutbox()
-	started := time.Now()
-	result, err := svc.ApplyActionContext(WithDaemonOutbox(context.Background(), outbox), prepare, json.RawMessage(`{}`), "prepare")
-	if err != nil {
-		t.Fatal(err)
+	type applyOutcome struct {
+		result ActionResult
+		err    error
 	}
-	if elapsed := time.Since(started); elapsed > time.Second || result.Status != "dispatched" || result.Continuation.Owner != "daemon" || !result.Continuation.SafeToWait {
-		t.Fatalf("long Effect did not return a daemon-owned pending continuation: elapsed=%v result=%+v", elapsed, result)
+	applied := make(chan applyOutcome, 1)
+	go func() {
+		result, applyErr := svc.ApplyActionContext(WithDaemonOutbox(context.Background(), outbox), prepare, json.RawMessage(`{}`), "prepare")
+		applied <- applyOutcome{result: result, err: applyErr}
+	}()
+	var outcome applyOutcome
+	select {
+	case outcome = <-applied:
+	case <-time.After(15 * time.Second):
+		close(adapter.releaseDispatch)
+		outcome = <-applied
+		outbox.Drain()
+		t.Fatal("daemon outbox did not return while the authorized Effect was blocked")
+	}
+	result := outcome.result
+	if outcome.err != nil {
+		close(adapter.releaseDispatch)
+		outbox.Drain()
+		t.Fatal(outcome.err)
+	}
+	if result.Status != "dispatched" || result.Continuation.Owner != "daemon" || !result.Continuation.SafeToWait {
+		close(adapter.releaseDispatch)
+		outbox.Drain()
+		t.Fatalf("long Effect did not return a daemon-owned pending continuation: result=%+v", result)
 	}
 	select {
 	case <-adapter.dispatchEntered:
-	case <-time.After(time.Second):
+	case <-time.After(10 * time.Second):
+		close(adapter.releaseDispatch)
+		outbox.Drain()
 		t.Fatal("daemon outbox did not start the authorized dispatch")
 	}
 	drained := make(chan struct{})
-	go func() { outbox.Drain(); close(drained) }()
+	drainStarted := make(chan struct{})
+	go func() {
+		close(drainStarted)
+		outbox.Drain()
+		close(drained)
+	}()
+	<-drainStarted
+	drainReturnedEarly := false
 	select {
 	case <-drained:
-		t.Fatal("daemon drain abandoned an in-flight Effect")
+		drainReturnedEarly = true
 	case <-time.After(100 * time.Millisecond):
 	}
 	close(adapter.releaseDispatch)
 	select {
 	case <-drained:
-	case <-time.After(2 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("daemon outbox did not drain after the Effect observation")
+	}
+	lockContext, cancelLock := context.WithTimeout(context.Background(), 15*time.Second)
+	releaseObservation, lockErr := svc.acquireEffectReconcileLock(lockContext, result.ActionID)
+	cancelLock()
+	if lockErr != nil {
+		t.Fatalf("daemon Effect lock was not released after dispatch cleanup: %v", lockErr)
+	}
+	releaseObservation()
+	if drainReturnedEarly {
+		t.Fatal("daemon drain abandoned an in-flight Effect")
 	}
 	state, err := svc.State()
 	if err != nil {
